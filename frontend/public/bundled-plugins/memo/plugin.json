@@ -48,7 +48,18 @@
         "markdown",
         "scratchpad",
         "tags"
+      ],
+      "screenshots": [
+        {
+          "file": "screenshots/en-US/01.png",
+          "title": "Main View"
+        }
       ]
     }
-  }
+  },
+  "screenshots": [
+    {
+      "path": "screenshots/02-action-panel.png"
+    }
+  ]
 }

@@ -18,8 +18,8 @@ export interface PathWriteObservation {
 export type RecoveryAdapter = Pick<PathAccessAdapter, 'platform' | 'pin' | 'release' | 'stop'> & {
   observeWrite(object: AnchoredPathObject, proof: Buffer, signal: AbortSignal): Promise<PathWriteObservation>
 }
-const denied = () => new ZToolsError(errorCodes.permissionDenied, '写入恢复只允许当前主窗口访问')
-const unavailable = () => new ZToolsError(errorCodes.fileError, '写入恢复身份尚未确认')
+const denied = () => new ZToolsError(errorCodes.permissionDenied, 'Write recovery is only accessible to the main window')
+const unavailable = () => new ZToolsError(errorCodes.fileError, 'Write recovery identity could not be confirmed')
 
 /** Main-window diagnostics only. Object matching never acknowledges business success or mutates the journal. */
 export class PathWriteRecoveryService {
@@ -97,7 +97,7 @@ export class PathWriteRecoveryService {
   }
   #active(caller: CallerIdentity, signal: AbortSignal): void {
     this.#assertCaller(caller)
-    if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '写入恢复查询已取消')
+    if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Write recovery query cancelled')
   }
   async #bounded(pending: Promise<unknown>): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined

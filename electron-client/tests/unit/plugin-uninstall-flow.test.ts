@@ -59,8 +59,8 @@ test('插件已卸载后清理快捷键或快捷方式失败：仍报告卸载�
   assert.deepEqual(result, { success: true })
   assert.ok(calls.includes('uninstall:demo'))
   assert.equal(warnings.length, 2)
-  assert.match(warnings[0] ?? '', /清理快捷键失败/)
-  assert.match(warnings[1] ?? '', /删除桌面快捷方式失败/)
+  assert.match(warnings[0] ?? '', /failed to clean up triggers/)
+  assert.match(warnings[1] ?? '', /failed to remove desktop shortcut/)
 })
 
 test('停止运行失败：不进入卸载，不清理任何东西', async () => {

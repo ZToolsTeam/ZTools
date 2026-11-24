@@ -355,7 +355,7 @@ export class DefaultApplicationUninstaller implements ApplicationUninstaller {
     record?: InstalledApplicationRecord
   ): Promise<{ success: boolean; error?: string; removedPaths?: string[] }> {
     const trimmed = command?.trim()
-    if (!trimmed) throw new Error('卸载指令为空')
+    if (!trimmed) throw new Error('Uninstall command is empty')
 
     // macOS `.app` 包与残留文件安全移入废纸篓
     if (process.platform === 'darwin' || trimmed.toLowerCase().endsWith('.app')) {
@@ -364,14 +364,14 @@ export class DefaultApplicationUninstaller implements ApplicationUninstaller {
         trimmed.startsWith('/System/Applications') ||
         record?.installLocation?.startsWith('/System/Applications')
       ) {
-        return { success: false, error: `系统应用 [${record?.name ?? trimmed}] 受系统保护，禁止卸载` }
+        return { success: false, error: `System application [${record?.name ?? trimmed}] is protected and cannot be uninstalled` }
       }
       try {
         const removedPaths: string[] = []
         if (fs.existsSync(trimmed)) {
           const trashed = await movePathToTrash(trimmed)
           if (!trashed) {
-            return { success: false, error: `无法将应用移入废纸篓: ${trimmed}` }
+            return { success: false, error: `Failed to move application to Trash: ${trimmed}` }
           }
           removedPaths.push(trimmed)
         }
@@ -398,7 +398,7 @@ export class DefaultApplicationUninstaller implements ApplicationUninstaller {
     try {
       const { executable, args } = splitCommandArgs(trimmed)
       if (!executable) {
-        return { success: false, error: '无效的卸载程序路径' }
+        return { success: false, error: 'Invalid uninstaller executable path' }
       }
       const child = spawn(executable, args, { shell: false, detached: true, stdio: 'ignore', windowsHide: false })
       child.unref()
@@ -471,14 +471,14 @@ export class ApplicationsService {
     const matched = all.find(a => a.id === appIdOrName || a.name.toLowerCase() === appIdOrName.toLowerCase())
 
     if (!matched) {
-      throw new Error(`未找到应用程序: ${appIdOrName}`)
+      throw new Error(`Application not found: ${appIdOrName}`)
     }
 
     if (
       matched.installLocation.startsWith('/System/Applications') ||
       matched.uninstallString.startsWith('/System/Applications')
     ) {
-      throw new Error(`系统核心应用 [${matched.name}] 受系统保护，禁止卸载`)
+      throw new Error(`System core application [${matched.name}] is protected and cannot be uninstalled`)
     }
 
     const uninstallCmd = (quiet && matched.quietUninstallString)
@@ -486,17 +486,17 @@ export class ApplicationsService {
       : matched.uninstallString
 
     if (!uninstallCmd) {
-      throw new Error(`应用 [${matched.name}] 未提供有效卸载命令`)
+      throw new Error(`Application [${matched.name}] does not provide a valid uninstall command`)
     }
 
     const res = await this.uninstaller.uninstall(uninstallCmd, matched)
     if (!res.success) {
-      throw new Error(res.error || `启动卸载程序失败: ${matched.name}`)
+      throw new Error(res.error || `Failed to launch uninstaller: ${matched.name}`)
     }
 
     return {
       success: true,
-      message: `已启动 [${matched.name}] 卸载程序`
+      message: `Launched uninstaller for [${matched.name}]`
     }
   }
 

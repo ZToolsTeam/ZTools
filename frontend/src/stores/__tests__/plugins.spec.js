@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { usePluginsStore, sanitizeRecentUsedAt } from '../plugins'
+import { HIDDEN_BUNDLED_CONFIG_KEY, usePluginsStore, sanitizeRecentUsedAt } from '../plugins'
+import { BUNDLED_PLUGIN_IDS } from '@/utils/bundledPlugins'
+import { getLocalizedPluginDescription, getLocalizedPluginName } from '@/utils/pluginI18n'
 import PluginAPI from '../../../public/js/cef-ipc/src/api/plugin.js'
 
 // mock API
@@ -397,6 +399,41 @@ describe('usePluginsStore', () => {
 
   // ── fetchInstalledPlugins ─────────────────────────────────────
   describe('fetchInstalledPlugins', () => {
+    it('隐藏配置暂不可读时仍加载普通插件并保留收藏，恢复后按已存选择重建完整列表', async () => {
+      const store = usePluginsStore()
+      let canReadVisibility = false
+      window.ztools.config.get.mockImplementation((key, fallback) => {
+        if (key === 'favorite_plugins') return ['local-tool']
+        if (key !== HIDDEN_BUNDLED_CONFIG_KEY) return fallback
+        if (!canReadVisibility) throw new Error('读取失败')
+        return ['memo']
+      })
+      apiMocks.getLocalPlugins.mockResolvedValue([{ pluginId: 'local-tool' }, { pluginId: 'memo' }])
+
+      await store.init()
+      expect(store.installedPlugins.map(plugin => plugin.pluginId)).toEqual(['local-tool'])
+      expect(store.installedSet.has('local-tool')).toBe(true)
+      expect(store.favorites.has('local-tool')).toBe(true)
+      await expect(store.getCatalogInstalledPluginIds()).resolves.toBeNull()
+
+      canReadVisibility = true
+      await store.fetchInstalledPlugins()
+      expect(store.installedListLoaded).toBe(true)
+      expect(store.installedSet.has('memo')).toBe(false)
+      expect(store.installedSet.has('calculator')).toBe(true)
+      expect(store.installedSet.has('local-tool')).toBe(true)
+      expect(window.ztools.config.set).not.toHaveBeenCalled()
+    })
+
+    it('配置服务整体不可用时仍从宿主加载普通插件', async () => {
+      const store = usePluginsStore()
+      window.ztools.config.get.mockRejectedValue(new Error('配置服务不可用'))
+      apiMocks.getLocalPlugins.mockResolvedValue([{ pluginId: 'local-tool' }])
+      await store.init()
+      expect(store.installedPlugins.map(plugin => plugin.pluginId)).toEqual(['local-tool'])
+      expect(store.installedListLoaded).toBe(false)
+    })
+
     it('正确更新 installedSet 和 installedPlugins', async () => {
       const store = usePluginsStore()
       apiMocks.getLocalPlugins.mockResolvedValue([
@@ -412,13 +449,14 @@ describe('usePluginsStore', () => {
       expect(store.installedPlugins[0].pluginId).toBe('p1')
     })
 
-    it('API 失败时优雅降级返回官方内置插件不崩溃', async () => {
+    it('API 失败时优雅降级返回内置插件不崩溃', async () => {
       const store = usePluginsStore()
       apiMocks.getLocalPlugins.mockRejectedValue(new Error('网络错误'))
 
       const result = await store.fetchInstalledPlugins()
       expect(Array.isArray(result)).toBe(true)
-      expect(result.length).toBeGreaterThanOrEqual(10)
+      expect(result.length).toBeGreaterThan(0)
+      expect(result.length).toBe(BUNDLED_PLUGIN_IDS.length)
     })
 
     it('最新宿主快照移除陈旧市场安装记录，同时保留未隐藏的内置插件', async () => {
@@ -446,6 +484,20 @@ describe('usePluginsStore', () => {
       expect(apiMocks.getLocalPlugins).toHaveBeenCalledOnce()
       expect(store.installedSet.has('memo')).toBe(false)
       expect(store.installedPlugins.some(item => item.pluginId === 'memo')).toBe(false)
+    })
+
+    it('跨窗通知重新读取配置，早发的磁盘快照晚返回也不能覆盖新选择', async () => {
+      const store = usePluginsStore()
+      let resolveOldRead
+      window.ztools.config.get.mockImplementationOnce(() => new Promise(resolve => { resolveOldRead = resolve }))
+      window.ztools.config.get.mockResolvedValueOnce(['qr-code'])
+      const older = store.fetchInstalledPlugins()
+      await store.fetchInstalledPlugins(true)
+      resolveOldRead([])
+      await older
+      expect(store.isBundledHidden('qr-code')).toBe(true)
+      expect(store.installedSet.has('qr-code')).toBe(false)
+      expect(store.installedPlugins.some(plugin => plugin.pluginId === 'qr-code')).toBe(false)
     })
 
     it.each(['success', 'failure'])('后发列表先返回时，早发请求的%s不能覆盖最新快照', async outcome => {
@@ -651,6 +703,206 @@ describe('usePluginsStore', () => {
       await Promise.resolve()
       expect(refreshIcon).toHaveBeenCalledTimes(1)
     })
+
+    it('[回归] 本地旧版插件缺少 i18n 与分类时，通过市场查询兜底补齐并在英文模式生效', async () => {
+      apiMocks.getMarketPlugins.mockResolvedValueOnce({
+        list: [
+          {
+            pluginId: 'archive-manager',
+            icon: 'https://cdn.example.com/archive.svg',
+            categoryId: ['files', 'productivity'],
+            i18n: {
+              'en-US': {
+                name: 'ZIP Archive Manager',
+                description: 'Inspect and extract ZIP archives locally.'
+              }
+            }
+          },
+          {
+            pluginId: 'md-to-office',
+            icon: 'https://cdn.example.com/md.svg',
+            categoryId: 'productivity',
+            i18n: {
+              'en-US': {
+                name: 'Markdown to Word',
+                description: 'Convert Markdown into formatted Word files.'
+              }
+            }
+          }
+        ]
+      })
+      const store = usePluginsStore()
+      store.installedPlugins = [
+        {
+          pluginId: 'archive-manager',
+          name: '解压与压缩',
+          description: '本地查看与解压 ZIP',
+          category: '文件管理',
+          icon: ''
+        },
+        {
+          pluginId: 'md-to-office',
+          name: 'AI文档转Word',
+          description: '将 Markdown 转为 Word',
+          category: '',
+          icon: ''
+        }
+      ]
+
+      store._patchInstalledIcons()
+      await vi.waitFor(() => {
+        const md = store.installedPlugins.find((p) => p.pluginId === 'md-to-office')
+        expect(md?.i18n?.['en-US']?.name).toBe('Markdown to Word')
+      })
+
+      const archive = store.installedPlugins.find((p) => p.pluginId === 'archive-manager')
+      const md = store.installedPlugins.find((p) => p.pluginId === 'md-to-office')
+      expect(getLocalizedPluginName(archive, 'en-US')).toBe('ZIP Archive Manager')
+      expect(getLocalizedPluginDescription(archive, 'en-US')).toBe('Inspect and extract ZIP archives locally.')
+      // 本地已有分类时不被市场覆盖
+      expect(archive.category).toBe('文件管理')
+      expect(archive.categoryId).toBeUndefined()
+
+      // 本地旧版缺失分类时自动由市场目录补齐
+      expect(getLocalizedPluginName(md, 'en-US')).toBe('Markdown to Word')
+      expect(md.categoryId).toBe('productivity')
+      expect(md.category).toBe('办公效率')
+    })
+
+    it('[回归] 本地已有 i18n 字段优先于市场数据，市场只补齐缺失字段；重复补齐幂等不重建数组引用', () => {
+      const store = usePluginsStore()
+      store.installedPlugins = [
+        {
+          pluginId: 'custom-tool',
+          name: '本地插件',
+          description: '本地中文简介',
+          category: '开发工具',
+          i18n: {
+            'en-US': {
+              name: 'Local Override Name'
+            }
+          }
+        }
+      ]
+      const patchMap = {
+        'custom-tool': {
+          icon: 'https://cdn.example.com/custom.svg',
+          categoryId: 'productivity',
+          i18n: {
+            'en-US': {
+              name: 'Market Name Should Not Override',
+              description: 'Market English Description'
+            }
+          }
+        }
+      }
+
+      store._applyIconPatch(patchMap)
+      const patched = store.installedPlugins[0]
+      expect(getLocalizedPluginName(patched, 'en-US')).toBe('Local Override Name')
+      expect(getLocalizedPluginDescription(patched, 'en-US')).toBe('Market English Description')
+      expect(patched.category).toBe('开发工具')
+
+      // 再次应用相同补丁必须幂等，不无故替换 installedPlugins 数组引用
+      const snapshotRef = store.installedPlugins
+      store._applyIconPatch(patchMap)
+      expect(store.installedPlugins).toBe(snapshotRef)
+    })
+
+    it('[回归] 内置插件的 i18n 与分类同样不被市场旧数据覆盖', () => {
+      const store = usePluginsStore()
+      store.installedPlugins = [
+        {
+          pluginId: 'memo',
+          builtin: true,
+          name: '便签',
+          categoryId: 'productivity',
+          i18n: {
+            'en-US': {
+              name: 'Quick Notes'
+            }
+          }
+        }
+      ]
+      const originalRef = store.installedPlugins
+      store._applyIconPatch({
+        memo: {
+          icon: 'https://cdn.example.com/old-memo.svg',
+          categoryId: 'system',
+          i18n: {
+            'en-US': {
+              name: 'Stale Market Memo',
+              description: 'Old description'
+            }
+          }
+        }
+      })
+      expect(store.installedPlugins).toBe(originalRef)
+      expect(getLocalizedPluginName(store.installedPlugins[0], 'en-US')).toBe('Quick Notes')
+      expect(store.installedPlugins[0].categoryId).toBe('productivity')
+    })
+
+    it('[集成/时序] 已安装插件早于市场目录加载完成时，refreshCategoryCounts 拿到目录后自动补齐 i18n 且不发多余查询', async () => {
+      apiMocks.getMarketPlugins.mockClear()
+      catalogMocks.load.mockResolvedValueOnce([
+        {
+          id: 'office-slim',
+          pluginId: 'office-slim',
+          name: '办公文档瘦身',
+          categoryId: 'productivity',
+          icon: 'https://cdn.example.com/office-slim.svg',
+          i18n: {
+            'en-US': {
+              name: 'Office Document Slimmer',
+              description: 'Recompress Word, PowerPoint, and Excel locally.'
+            }
+          }
+        }
+      ])
+
+      const store = usePluginsStore()
+      store.installedPlugins = [
+        {
+          pluginId: 'office-slim',
+          name: '办公文档瘦身',
+          description: '本地重新压缩文档',
+          category: ''
+        }
+      ]
+
+      await store.refreshCategoryCounts()
+
+      const patched = store.installedPlugins.find((p) => p.pluginId === 'office-slim')
+      expect(getLocalizedPluginName(patched, 'en-US')).toBe('Office Document Slimmer')
+      expect(patched.categoryId).toBe('productivity')
+      expect(apiMocks.getMarketPlugins).not.toHaveBeenCalled()
+    })
+
+    it('[破坏性] 市场补丁含畸形 i18n、数组与原型污染键时安全忽略且不污染原型', () => {
+      const store = usePluginsStore()
+      store.installedPlugins = [
+        {
+          pluginId: 'safe-plugin',
+          name: '安全插件',
+          description: '原始描述'
+        }
+      ]
+      const maliciousPayload = JSON.parse('{"__proto__":{"polluted":"yes"},"en-US":{"name":"Safe Plugin","__proto__":{"bad":1}}}')
+      expect(() =>
+        store._applyIconPatch({
+          'safe-plugin': {
+            icon: 'not-a-http-url',
+            categoryId: ['', null],
+            i18n: maliciousPayload
+          }
+        })
+      ).not.toThrow()
+
+      expect(({}).polluted).toBeUndefined()
+      expect(({}).bad).toBeUndefined()
+      expect(store.installedPlugins[0].icon).toBeUndefined()
+      expect(getLocalizedPluginName(store.installedPlugins[0], 'en-US')).toBe('Safe Plugin')
+    })
   })
 
   // ── 最近使用时间 ───────────────────────────────────────────────
@@ -701,7 +953,7 @@ describe('usePluginsStore', () => {
           query: async () => ({ list: [{ pluginId: 'visible' }], total: 2 })
         })
         await store.loadWithCache({ page: 1, per_page: 1 })
-        expect(store.categoryCounts).toEqual({ 系统工具: 1 })
+        expect(store.categoryCounts).toEqual({ system: 1 })
       } else {
         await store.setUpdateInfo({ 'gone-tool': { ...gone, hasUpdate: false } })
       }

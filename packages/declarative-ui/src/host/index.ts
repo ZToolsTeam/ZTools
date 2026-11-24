@@ -7,4 +7,3 @@
  */
 export { createCacheScope } from "../utils/hooks.js";
 export type { CacheScope } from "../utils/hooks.js";
-export { configureTranslationService, getTranslationEndpoint } from "../examples/google-translate/translation-config.js";

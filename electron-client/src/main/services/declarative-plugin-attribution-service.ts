@@ -105,16 +105,16 @@ export function createBundledManifestReader(webRoot: string | (() => string)) {
     let raw: string
     try {
       const stat = await fs.stat(file)
-      if (stat.size > 256 * 1024) throw new ZToolsError(errorCodes.pluginPackageInvalid, '内置插件清单过大')
+      if (stat.size > 256 * 1024) throw new ZToolsError(errorCodes.pluginPackageInvalid, 'Bundled plugin manifest exceeds size limit')
       raw = await fs.readFile(file, 'utf8')
     } catch (error) {
       if (error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.pluginPackageInvalid, '内置插件清单无法读取')
+      throw new ZToolsError(errorCodes.pluginPackageInvalid, 'Failed to read bundled plugin manifest')
     }
     try {
       return JSON.parse(raw)
     } catch {
-      throw new ZToolsError(errorCodes.pluginPackageInvalid, `内置插件清单损坏: ${path.basename(path.dirname(file))}`)
+      throw new ZToolsError(errorCodes.pluginPackageInvalid, `Corrupted bundled plugin manifest: ${path.basename(path.dirname(file))}`)
     }
   }
 }
@@ -153,16 +153,16 @@ export class DeclarativePluginAttributionService {
   ): Promise<{ success: true; data: { sessionId: string; token: string; pluginId: string; permissions: string[] } }> {
     this.#requireRunning()
     if (caller.type !== 'main' || caller.attributedPlugin) {
-      throw new ZToolsError(errorCodes.permissionDenied, '只有宿主窗口可以申请插件会话')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Only host windows can request a plugin session')
     }
     const requested = typeof params.pluginId === 'string' ? params.pluginId.trim().toLowerCase() : ''
     if (!PLUGIN_ID_PATTERN.test(requested) || requested.includes('..') || requested.endsWith('.')) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'pluginId 格式无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid pluginId format')
     }
     const webContentsId = caller.webContentsId
     // 先挂上刷新 / 崩溃监听，读清单途中发生的导航也能让本次结果作废
     const watched = this.registry.getWebContents(webContentsId)
-    if (!watched) throw new ZToolsError(errorCodes.callerDestroyed, '申请会话的窗口已关闭')
+    if (!watched) throw new ZToolsError(errorCodes.callerDestroyed, 'Requesting window has been closed')
     this.#watchWindow(webContentsId, watched)
     const generation = this.#generation.get(webContentsId) ?? 0
     const pluginGeneration = this.#pluginGeneration.get(requested) ?? 0
@@ -172,14 +172,14 @@ export class DeclarativePluginAttributionService {
     if (manifest !== undefined) {
       const revoked = await this.manifests.isRevoked(requested)
       if (revoked.revoked) {
-        throw new ZToolsError(errorCodes.permissionDenied, `该插件已被官方下架禁用: ${revoked.reason || '存在安全合规风险'}`)
+        throw new ZToolsError(errorCodes.permissionDenied, `Plugin has been revoked: ${revoked.reason || 'security or compliance policy violation'}`)
       }
     } else {
       source = 'installed'
       manifest = await this.manifests.readInstalled(requested)
     }
     if (!isRecord(manifest) || typeof manifest.id !== 'string' || manifest.id.trim().toLowerCase() !== requested) {
-      throw new ZToolsError(errorCodes.pluginPackageInvalid, '插件清单 id 与请求的插件不一致')
+      throw new ZToolsError(errorCodes.pluginPackageInvalid, 'Plugin manifest id does not match requested plugin')
     }
     const pluginId = manifest.id.trim()
     const permissions = readPermissions(manifest.permissions, pluginId, this.#log)
@@ -188,13 +188,13 @@ export class DeclarativePluginAttributionService {
     // 读清单是异步的：期间窗口刷新 / 销毁 / 服务停止则结果作废
     this.#requireRunning()
     if ((this.#pluginGeneration.get(requested) ?? 0) !== pluginGeneration) {
-      throw new ZToolsError(errorCodes.cancelled, '插件会话申请已被撤销')
+      throw new ZToolsError(errorCodes.cancelled, 'Plugin session request was revoked')
     }
     const contents = this.registry.getWebContents(webContentsId)
     const current = this.registry.get(webContentsId)
     if (!contents || !current || current.type !== 'main' ||
         (this.#generation.get(webContentsId) ?? 0) !== generation) {
-      throw new ZToolsError(errorCodes.callerDestroyed, '申请会话的窗口已刷新或关闭')
+      throw new ZToolsError(errorCodes.callerDestroyed, 'Requesting window was refreshed or closed')
     }
     this.#watchWindow(webContentsId, contents)
 
@@ -226,7 +226,7 @@ export class DeclarativePluginAttributionService {
         .filter((item): item is AttributionSession => item !== undefined)
         .sort((left, right) => left.openedAt - right.openedAt)[0]
       if (!oldest) break
-      this.#log.error('[attribution] 窗口插件会话数达到上限，淘汰最旧会话（渲染层可能未释放会话）', {
+      this.#log.error('[attribution] Window plugin session limit reached; evicting oldest session (renderer may have leaked sessions)', {
         webContentsId, evictedSessionId: oldest.sessionId, evictedPluginId: oldest.pluginId
       })
       this.#delete(oldest)
@@ -242,7 +242,7 @@ export class DeclarativePluginAttributionService {
   /** 只能关闭本窗口的会话；不存在时幂等成功 */
   close(caller: CallerIdentity, params: DeclarativeSessionCloseParams): { success: true } {
     if (caller.type !== 'main') {
-      throw new ZToolsError(errorCodes.permissionDenied, '只有宿主窗口可以关闭插件会话')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Only host windows can close a plugin session')
     }
     const session = this.#bySession.get(params.sessionId)
     if (session && session.webContentsId === caller.webContentsId) {
@@ -269,7 +269,7 @@ export class DeclarativePluginAttributionService {
   attributeCaller(caller: CallerIdentity, request: Pick<ZToolsRequest, 'pluginSession' | 'method'>): CallerIdentity {
     if (request.pluginSession === undefined) return caller
     if (caller.type !== 'main') {
-      throw new ZToolsError(errorCodes.invalidRequest, '插件窗口调用不能携带声明式插件会话')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Plugin window calls cannot carry a declarative plugin session')
     }
     const attributedPlugin = this.resolve(caller.webContentsId, request.pluginSession)
     if (!attributedPlugin) {
@@ -277,7 +277,7 @@ export class DeclarativePluginAttributionService {
       const last = this.#lastInvalidTokenWarn.get(caller.webContentsId)
       if (last === undefined || now - last >= INVALID_TOKEN_WARN_INTERVAL_MS) {
         this.#lastInvalidTokenWarn.set(caller.webContentsId, now)
-        this.#log.warn('[attribution] 插件会话令牌已失效，按未归属调用处理', {
+        this.#log.warn('[attribution] Plugin session token is invalid or expired; treating as unattributed call', {
           webContentsId: caller.webContentsId, method: request.method
         })
       }
@@ -323,7 +323,7 @@ export class DeclarativePluginAttributionService {
   }
 
   #requireRunning(): void {
-    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'Application is stopping')
   }
 
   #watchWindow(webContentsId: number, contents: unknown): void {

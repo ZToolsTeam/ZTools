@@ -1,12 +1,14 @@
 import { ref } from 'vue'
-import { getHotkey } from '@/api/apiserver'
-import { DEFAULT_GLOBAL_WAKE_HOTKEY } from '@/api/native'
+import { getHotkey, getLauncherHotkey } from '@/api/apiserver'
+import { DEFAULT_GLOBAL_WAKE_HOTKEY, DEFAULT_GLOBAL_LAUNCHER_HOTKEY } from '@/api/native'
 import { isDoubleModifierHotkey } from '@/utils/hotkeyRecorder'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 import { t } from '@/i18n'
 
-export { DEFAULT_GLOBAL_WAKE_HOTKEY }
+export { DEFAULT_GLOBAL_WAKE_HOTKEY, DEFAULT_GLOBAL_LAUNCHER_HOTKEY }
 
 export const GLOBAL_WAKE_TRIGGER_ID = 'global_wake_hotkey'
+export const GLOBAL_LAUNCHER_TRIGGER_ID = 'global_launcher_hotkey'
 export const MOUSE_WAKE_TRIGGER_ID = 'mouse_wake_hook'
 export const DEFAULT_MOUSE_LONG_PRESS_MS = 300
 export const MIN_MOUSE_LONG_PRESS_MS = 200
@@ -109,6 +111,9 @@ export function buildMouseWakeTrigger({
  */
 export const currentGlobalWakeHotkey = ref(DEFAULT_GLOBAL_WAKE_HOTKEY)
 
+/** 当前生效的独立悬浮条全局快捷键（空字符串表示用户已关闭） */
+export const currentGlobalLauncherHotkey = ref(DEFAULT_GLOBAL_LAUNCHER_HOTKEY)
+
 /** 从配置读取当前唤醒快捷键；未设置时 getHotkey 已返回默认值，空串表示用户已关闭 */
 export async function refreshCurrentGlobalWakeHotkey() {
   try {
@@ -117,6 +122,16 @@ export async function refreshCurrentGlobalWakeHotkey() {
     console.warn('[globalWakeHotkey] 读取当前唤醒快捷键失败:', err)
   }
   return currentGlobalWakeHotkey.value
+}
+
+/** 从配置读取当前独立悬浮条快捷键；未设置时返回默认值，空串表示用户已关闭 */
+export async function refreshCurrentGlobalLauncherHotkey() {
+  try {
+    currentGlobalLauncherHotkey.value = normalizeHotkey(await getLauncherHotkey())
+  } catch (err) {
+    console.warn('[globalWakeHotkey] 读取当前悬浮条快捷键失败:', err)
+  }
+  return currentGlobalLauncherHotkey.value
 }
 
 function normalizeHotkey(value) {
@@ -143,16 +158,20 @@ function isSuccessfulResponse(result) {
     typeof result.data?.triggerId === 'string'
 }
 
+function resolveOptionalErrorText(source) {
+  if (!source) return ''
+  const resolved = resolveErrorMessage(source, 'common.unknownError')
+  return resolved === t('common.unknownError') ? '' : resolved
+}
+
 function responseErrorMessage(result) {
   const error = result?.error || result?.data?.error
-  if (typeof error === 'string') return error
-  if (typeof error?.message === 'string') return error.message
-  return ''
+  if (!error) return ''
+  return resolveOptionalErrorText(error)
 }
 
 function errorMessage(error) {
-  if (typeof error?.message === 'string') return error.message
-  return typeof error === 'string' ? error : ''
+  return resolveOptionalErrorText(error)
 }
 
 function getTriggerList(result) {
@@ -164,25 +183,25 @@ function getTriggerList(result) {
   throw new Error(t('hotkey.wakeErrors.invalidListResponse'))
 }
 
-function buildGlobalWakeTrigger(hotkey, fullscreenDnd) {
+function buildSystemHotkeyTrigger({ triggerId, actionTarget, hotkey, fullscreenDnd }) {
   const config =
     typeof fullscreenDnd === 'boolean' && isDoubleModifierHotkey(hotkey)
       ? { key: hotkey, fullscreenDnd }
       : { key: hotkey }
 
   return {
-    id: GLOBAL_WAKE_TRIGGER_ID,
+    id: triggerId,
     pluginId: 'system',
     type: 'hotkey',
     enabled: true,
     config,
     actionMode: 'builtin',
-    actionTarget: 'toggle_main_window',
+    actionTarget,
     actionParams: {}
   }
 }
 
-function buildRestoreTrigger(existing) {
+function buildRestoreTrigger(existing, fallbackTriggerId, fallbackActionTarget) {
   const key = normalizeHotkey(existing?.config?.key)
   if (!key) return null
 
@@ -199,7 +218,7 @@ function buildRestoreTrigger(existing) {
       : { key }
 
   return {
-    id: GLOBAL_WAKE_TRIGGER_ID,
+    id: fallbackTriggerId,
     pluginId: typeof existing.pluginId === 'string' && existing.pluginId
       ? existing.pluginId
       : 'system',
@@ -216,15 +235,15 @@ function buildRestoreTrigger(existing) {
         ? action.target
         : typeof existing.actionTarget === 'string'
           ? existing.actionTarget
-          : 'toggle_main_window',
+          : fallbackActionTarget,
       params: actionParams
     },
     ...(Number.isInteger(existing.priority) ? { priority: existing.priority } : {})
   }
 }
 
-async function restoreExistingTrigger(triggerApi, existing) {
-  const previous = buildRestoreTrigger(existing)
+async function restoreExistingTrigger(triggerApi, existing, fallbackTriggerId, fallbackActionTarget) {
+  const previous = buildRestoreTrigger(existing, fallbackTriggerId, fallbackActionTarget)
   if (!previous) return true
 
   try {
@@ -244,11 +263,18 @@ function failureResult(reason, hotkey, message = '', rollbackFailed = false) {
   }
 }
 
-export async function syncGlobalWakeHotkey({ hotkey, fullscreenDnd } = {}) {
+async function syncSystemHotkeyTrigger({
+  triggerId,
+  actionTarget,
+  hotkeyRef,
+  readConfiguredHotkey,
+  hotkey,
+  fullscreenDnd
+}) {
   // 不传 hotkey 时按配置同步：未设置得到默认值，用户关闭得到空串（注销），读取失败抛错且不改动现有注册
   const targetHotkey = typeof hotkey === 'string'
     ? normalizeHotkey(hotkey)
-    : normalizeHotkey(await getHotkey())
+    : normalizeHotkey(await readConfiguredHotkey())
 
   const triggerApi = window.ztools?.trigger
   if (
@@ -262,14 +288,14 @@ export async function syncGlobalWakeHotkey({ hotkey, fullscreenDnd } = {}) {
   let existing
   try {
     const triggers = getTriggerList(await triggerApi.list())
-    existing = triggers.find((trigger) => trigger?.id === GLOBAL_WAKE_TRIGGER_ID)
+    existing = triggers.find((trigger) => trigger?.id === triggerId)
   } catch (error) {
     return failureResult('trigger_list_failed', targetHotkey, errorMessage(error))
   }
 
   if (!targetHotkey) {
     if (!existing) {
-      currentGlobalWakeHotkey.value = ''
+      hotkeyRef.value = ''
       return { success: true, hotkey: '' }
     }
     if (typeof triggerApi.unregister !== 'function') {
@@ -277,12 +303,12 @@ export async function syncGlobalWakeHotkey({ hotkey, fullscreenDnd } = {}) {
     }
 
     try {
-      const result = await triggerApi.unregister(GLOBAL_WAKE_TRIGGER_ID)
+      const result = await triggerApi.unregister(triggerId)
       if (isSuccessfulResponse(result)) {
-        currentGlobalWakeHotkey.value = ''
+        hotkeyRef.value = ''
         return { success: true, hotkey: '' }
       }
-      const restored = await restoreExistingTrigger(triggerApi, existing)
+      const restored = await restoreExistingTrigger(triggerApi, existing, triggerId, actionTarget)
       return failureResult(
         'trigger_unregister_failed',
         '',
@@ -290,7 +316,7 @@ export async function syncGlobalWakeHotkey({ hotkey, fullscreenDnd } = {}) {
         !restored
       )
     } catch (error) {
-      const restored = await restoreExistingTrigger(triggerApi, existing)
+      const restored = await restoreExistingTrigger(triggerApi, existing, triggerId, actionTarget)
       return failureResult(
         'trigger_unregister_failed',
         '',
@@ -321,16 +347,23 @@ export async function syncGlobalWakeHotkey({ hotkey, fullscreenDnd } = {}) {
     dndMatches
 
   if (alreadyActive && existingKey === targetHotkey) {
-    currentGlobalWakeHotkey.value = targetHotkey
+    hotkeyRef.value = targetHotkey
     return { success: true, hotkey: targetHotkey }
   }
 
   let result
   try {
     // 固定 ID 在宿主端执行 upsert：先注册新配置，失败时不提前删掉现有触发器
-    result = await triggerApi.register(buildGlobalWakeTrigger(targetHotkey, effectiveFullscreenDnd))
+    result = await triggerApi.register(
+      buildSystemHotkeyTrigger({
+        triggerId,
+        actionTarget,
+        hotkey: targetHotkey,
+        fullscreenDnd: effectiveFullscreenDnd
+      })
+    )
   } catch (error) {
-    const restored = await restoreExistingTrigger(triggerApi, existing)
+    const restored = await restoreExistingTrigger(triggerApi, existing, triggerId, actionTarget)
     return failureResult(
       'trigger_register_failed',
       targetHotkey,
@@ -340,7 +373,7 @@ export async function syncGlobalWakeHotkey({ hotkey, fullscreenDnd } = {}) {
   }
 
   if (!isSuccessfulResponse(result)) {
-    const restored = await restoreExistingTrigger(triggerApi, existing)
+    const restored = await restoreExistingTrigger(triggerApi, existing, triggerId, actionTarget)
     return failureResult(
       'trigger_register_failed',
       targetHotkey,
@@ -349,8 +382,30 @@ export async function syncGlobalWakeHotkey({ hotkey, fullscreenDnd } = {}) {
     )
   }
 
-  currentGlobalWakeHotkey.value = targetHotkey
+  hotkeyRef.value = targetHotkey
   return { success: true, hotkey: targetHotkey }
+}
+
+export async function syncGlobalWakeHotkey({ hotkey, fullscreenDnd } = {}) {
+  return syncSystemHotkeyTrigger({
+    triggerId: GLOBAL_WAKE_TRIGGER_ID,
+    actionTarget: 'toggle_main_window',
+    hotkeyRef: currentGlobalWakeHotkey,
+    readConfiguredHotkey: getHotkey,
+    hotkey,
+    fullscreenDnd
+  })
+}
+
+export async function syncGlobalLauncherHotkey({ hotkey, fullscreenDnd } = {}) {
+  return syncSystemHotkeyTrigger({
+    triggerId: GLOBAL_LAUNCHER_TRIGGER_ID,
+    actionTarget: 'toggle_launcher',
+    hotkeyRef: currentGlobalLauncherHotkey,
+    readConfiguredHotkey: getLauncherHotkey,
+    hotkey,
+    fullscreenDnd
+  })
 }
 
 /**

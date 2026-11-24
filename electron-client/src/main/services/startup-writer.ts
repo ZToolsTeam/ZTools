@@ -19,9 +19,9 @@ export class MacStartupWriter implements StartupWriter {
   constructor(private readonly helper: string, private readonly run = runStartupProcess) {}
   async apply(input: StartupWrite, signal: AbortSignal) {
     signal.throwIfAborted()
-    if (process.platform !== 'darwin') throw new Error('启动项安全组件仅支持 macOS')
+    if (process.platform !== 'darwin') throw new Error('Startup security helper is only supported on macOS')
     const stat = await fs.lstat(this.helper)
-    if (!path.isAbsolute(this.helper) || !stat.isFile() || stat.isSymbolicLink()) throw new Error('启动项安全组件不可用，请更新客户端')
+    if (!path.isAbsolute(this.helper) || !stat.isFile() || stat.isSymbolicLink()) throw new Error('Startup security helper is unavailable; please update the client')
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-startup-request-'))
     const requestFile = path.join(directory, 'request.json'), cancelled = path.join(directory, 'cancel')
     let cancelError: unknown
@@ -48,10 +48,10 @@ export class MacStartupWriter implements StartupWriter {
       // 取消标记由组件在提交前检查。提交一旦开始就等结果，不能杀掉一半的文件移动。
       const output = startupCommandOutput(await this.run(executable, args, AbortSignal.timeout(110000), undefined, 100000, 10000))
       const result: unknown = JSON.parse(output)
-      if (!startupRecord(result) || result.version !== 1 || typeof result.success !== 'boolean' || typeof result.code !== 'string' || typeof result.recoveryPath !== 'string') throw new Error('安全组件响应不完整')
-      if (!result.success) throw new Error(`系统未确认修改：${result.code}${result.recoveryPath ? `；恢复目录 ${result.recoveryPath}` : ''}${cancelError ? '；取消请求写入失败' : ''}`)
+      if (!startupRecord(result) || result.version !== 1 || typeof result.success !== 'boolean' || typeof result.code !== 'string' || typeof result.recoveryPath !== 'string') throw new Error('Incomplete response from security helper')
+      if (!result.success) throw new Error(`System did not confirm modification: ${result.code}${result.recoveryPath ? `; recovery directory ${result.recoveryPath}` : ''}${cancelError ? '; failed to write cancellation marker' : ''}`)
       const expectedRecovery = input.action === 'toggle' ? '' : path.join(path.dirname(input.file), '.ztools-startup-recovery', input.backupId)
-      if (result.code !== 'APPLIED' || result.recoveryPath !== expectedRecovery) throw new Error('系统写入结果无法验证')
+      if (result.code !== 'APPLIED' || result.recoveryPath !== expectedRecovery) throw new Error('Unable to verify system write result')
       return { recoveryPath: result.recoveryPath }
     } finally {
       signal.removeEventListener('abort', cancel)

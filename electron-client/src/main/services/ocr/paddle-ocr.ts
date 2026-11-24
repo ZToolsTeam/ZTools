@@ -24,7 +24,7 @@ export class PaddleOcrEngine extends OcrWorkerEngine<string[]> {
   constructor(options: PaddleOcrEngineOptions) {
     super({
       ...options,
-      label: '文字识别',
+      label: 'Text OCR',
       parseResult: response => Array.isArray(response.lines) && response.lines.every(line => typeof line === 'string')
         ? response.lines as string[]
         : undefined
@@ -80,7 +80,7 @@ export function createLocalOcr(dependencies: {
   forkUtilityProcess(modulePath: string, args: string[], options: { serviceName: string }): UtilityProcessLike
 }): LocalOcrPort | undefined {
   if (!paddleOcrModelsPresent(dependencies.modelDirectory)) {
-    console.warn(`[PaddleOcr] 识别模型不完整，改用系统文字识别: ${dependencies.modelDirectory}`)
+    console.warn(`[PaddleOcr] OCR model files are incomplete; falling back to system OCR: ${dependencies.modelDirectory}`)
     return undefined
   }
   const engine = new PaddleOcrEngine({
@@ -90,7 +90,7 @@ export function createLocalOcr(dependencies: {
   return {
     async recognizeImage(imagePath, signal) {
       const image = decodeImage(dependencies.createImageFromPath(imagePath))
-      if (!image) throw new ZToolsError(errorCodes.fileError, '无法读取图片，请确认文件未损坏且格式受支持')
+      if (!image) throw new ZToolsError(errorCodes.fileError, 'Unable to read image; ensure the file is intact and in a supported format')
       return engine.recognize(image, signal)
     },
     stop: () => engine.stop()

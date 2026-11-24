@@ -71,7 +71,7 @@ test('自签名与名称不匹配仍可诊断，但绝不标记可信', async t 
 })
 test('TCP 不完成 TLS 时整体超时；取消和启动失败不会遗留调用', async t => {
   const f = await server(t, true), start = Date.now()
-  await assert.rejects(inspectTls(request(f.port), signal(), trusted), /超时/)
+  await assert.rejects(inspectTls(request(f.port), signal(), trusted), /timed out/i)
   assert.ok(Date.now() - start < 2500)
   const controller = new AbortController(); controller.abort()
   assert.throws(() => inspectTls(request(f.port), controller.signal, trusted))
@@ -80,9 +80,9 @@ test('TCP 不完成 TLS 时整体超时；取消和启动失败不会遗留调�
 test('真实服务取消只作用于调用窗口，取消后可再次执行', async t => {
   const f = await server(t, true), service = new TlsInspectService(trusted), req = request(f.port)
   t.after(() => service.stop())
-  const active = service.handle(req, caller, signal()), rejected = assert.rejects(active, /取消/)
+  const active = service.handle(req, caller, signal()), rejected = assert.rejects(active, /cancelled/i)
   assert.deepEqual(await service.handle({ action: 'cancel', operationId: req.operationId }, { ...caller, webContentsId: 702 }, signal()), { success: true, cancelled: false })
-  await assert.rejects(service.handle(req, caller, signal()), /请求过多/)
+  await assert.rejects(service.handle(req, caller, signal()), /Too many TLS/i)
   assert.deepEqual(await service.handle({ action: 'cancel', operationId: req.operationId }, caller, signal()), { success: true, cancelled: true })
   await rejected
   const live = await server(t)
@@ -94,8 +94,8 @@ test('窗口关闭、停止与并发上限结束真实连接；停止后不接�
   t.after(() => service.stop())
   const jobs = Array.from({ length: 8 }, () => service.handle(request(f.port), caller, signal()))
   const settled = Promise.allSettled(jobs)
-  await assert.rejects(service.handle(request(f.port), caller, signal()), /请求过多/)
+  await assert.rejects(service.handle(request(f.port), caller, signal()), /Too many TLS/i)
   service.closeOwner(caller.webContentsId); await service.stop()
   assert.ok((await settled).every(result => result.status === 'rejected'))
-  await assert.rejects(service.handle(request(f.port), caller, signal()), /已停止/)
+  await assert.rejects(service.handle(request(f.port), caller, signal()), /stopped/i)
 })

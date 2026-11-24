@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 const id = 'a'.repeat(43), directoryId = 'b'.repeat(43), reference = { grantId: id, kind: 'file', displayName: 'clipboard.png', operations: ['read'] }
 function fixture() {
   const methods = Object.fromEntries(['clipboard_copy_text', 'clipboard_copy_image', 'clipboard_read_text', 'clipboard_clear', 'clipboard_read_image', 'clipboard_read_files', 'filesystem_read_file', 'filesystem_revoke'].map(name => [name, () => {}]))
-  const source = ['fs-reference', 'clipboard'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join(String.fromCharCode(10))
+  const source = loadCefIpcSources(['api/fs-reference', 'api/clipboard'])
   const Constructor = vm.runInNewContext(source + String.fromCharCode(10) + 'ClipboardAPI', { window: { __ztoolsElectron: { contractVersion: 2, transport: { methods, cancellations: methods } }, _writeFileArrayBuffer() { throw new Error('raw path must not run') } }, TextEncoder, Uint8Array, atob, btoa }) as new (transport: unknown, events: unknown) => {
     copyText(value: unknown, options?: unknown): Promise<boolean>; copyImage(value: unknown, options?: unknown): Promise<boolean>; readImage(options?: unknown): Promise<string>; readImageReference(options?: unknown): Promise<string | { toDataURL(options?: unknown): Promise<string>; release(): Promise<unknown> }>; readFilesDetailed(options?: unknown): Promise<{ files: unknown[]; errors: unknown[] }>; readText(): Promise<string>; clear(): Promise<boolean>
   }

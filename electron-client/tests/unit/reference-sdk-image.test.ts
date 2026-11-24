@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 
 const file = { grantId: 'a'.repeat(43), kind: 'file', displayName: 'input.png', operations: ['read'] }
 const save = { grantId: 'b'.repeat(43), kind: 'save', displayName: 'output.jpg', operations: ['write'] }
@@ -14,7 +14,7 @@ interface API {
   compress(input: unknown, output: unknown, quality?: number): Promise<unknown>
 }
 function fixture() {
-  const source = ['fs-reference', 'image-reference'].map(file => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + file + '.js', 'utf8').replace(/^export .+$/mg, '')).join('\n')
+  const source = loadCefIpcSources(['api/fs-reference', 'api/image-reference'])
   const calls: { method: string; params: unknown }[] = []
   let result: unknown = { success: true, status: 'committed', width: 20, height: 10, format: 'jpg', size: 200 }
   const Constructor = vm.runInNewContext(source + '\nReferenceImageAPI', { window: { __ztoolsElectron: { contractVersion: 2,
@@ -51,8 +51,7 @@ test('image SDK refuses raw paths, malformed dimensions and invalid save receipt
 
 
 test('existing public ImageAPI dispatches implemented contract2 functions through the shared provider', async () => {
-  const files = ['fs-reference', 'image-reference', 'image']
-  const source = files.map(file => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + file + '.js', 'utf8').replace(/^export .+$/mg, '')).join('\n')
+  const source = loadCefIpcSources(['api/fs-reference', 'api/image-reference', 'api/image'])
   const calls: string[] = []
   const result = { success: true, status: 'committed', width: 20, height: 10, format: 'jpg', size: 100 }
   const Constructor = vm.runInNewContext(source + '\nImageAPI', { window: { __ztoolsElectron: { contractVersion: 2,
@@ -67,7 +66,7 @@ test('existing public ImageAPI dispatches implemented contract2 functions throug
 
 
 test('public Base64 and image info SDK methods carry cancellation and return references without old paths', async () => {
-  const source = ['fs-reference', 'image-reference', 'image'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join('\n')
+  const source = loadCefIpcSources(['api/fs-reference', 'api/image-reference', 'api/image'])
   const calls: { method: string; params: unknown; signal: unknown }[] = []
   const cached = { ...file, grantId: 'c'.repeat(43), displayName: 'encoded.b64' }
   const port = () => {}
@@ -94,7 +93,7 @@ test('public Base64 and image info SDK methods carry cancellation and return ref
 
 
 test('public image transforms forward real cancellation and resolve one-axis resize before saving', async () => {
-  const source = ['fs-reference', 'image-reference', 'image'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join('\n')
+  const source = loadCefIpcSources(['api/fs-reference', 'api/image-reference', 'api/image'])
   const calls: { method: string; params: Record<string, unknown>; signal: unknown }[] = [], port = () => {}
   const Constructor = vm.runInNewContext(source + '\nImageAPI', { window: { __ztoolsElectron: { contractVersion: 2,
     transport: { methods: { image_get_info: port, image_transform: port }, cancellations: { image_get_info: port, image_transform: port } } } }, TextEncoder }) as new (transport: unknown) => Record<string, (...args: unknown[]) => Promise<unknown>>
@@ -116,7 +115,7 @@ test('public image transforms forward real cancellation and resolve one-axis res
 })
 
 test('public image preview forwards cancellation and accepts only a controlled read-only cache result', async () => {
-  const source = ['fs-reference', 'image-reference', 'image'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join('\n')
+  const source = loadCefIpcSources(['api/fs-reference', 'api/image-reference', 'api/image'])
   const port = () => {}, calls: { method: string; params: unknown; signal: unknown }[] = [], cached = { ...file, grantId: 'c'.repeat(43) }
   let result: unknown = { success: true, reference: cached, fileUrl: 'ztools://file/' + cached.grantId + '/' + encodeURIComponent(cached.displayName), size: 100, width: 10, height: 20, format: 'png' }
   const Constructor = vm.runInNewContext(source + '\nImageAPI', { window: { __ztoolsElectron: { contractVersion: 2,
@@ -133,7 +132,7 @@ test('public image preview forwards cancellation and accepts only a controlled r
 })
 
 test('public image PDF API sends only file grant lists and SaveRef with real cancellation', async () => {
-  const source = ['fs-reference', 'image-reference', 'image'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join('\n')
+  const source = loadCefIpcSources(['api/fs-reference', 'api/image-reference', 'api/image'])
   const port = () => {}, signal = new AbortController().signal, calls: unknown[] = []
   let result = { success: true, status: 'committed', size: 100, pageCount: 2 }
   const Constructor = vm.runInNewContext(source + '\nImageAPI', { window: { __ztoolsElectron: { contractVersion: 2,

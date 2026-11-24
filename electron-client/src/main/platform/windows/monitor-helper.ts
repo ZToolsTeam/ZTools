@@ -31,7 +31,7 @@ try {
   [Console]::Out.Write([ZToolsWinDisplay.Helper]::Run([string]$r.action, [string]$r.topology, [string[]]$ids, [string[]]$controls, [double[]]$values, [double[]]$expected))
   exit 0
 } catch {
-  # 详细原因写到标准错误，便于手动运行排查；标准输出只给协议错误码
+  # Write detailed error to stderr for debugging; keep stdout strictly protocol error JSON
   [Console]::Error.Write(($_ | Out-String))
   $code = $_.Exception.GetBaseException().Message
   if ($code -notmatch '^DISPLAY_[A-Z_]+$') { $code = 'DISPLAY_HELPER_FAILED' }
@@ -75,7 +75,7 @@ namespace ZToolsWinDisplay {
     class Display {
       public string Id, Name, Device, WmiInstance;
       public bool Primary, Mirror;
-      public int Width, Height, WmiStep;
+      public int Width, Height, WmiStep, FallbackIndex;
       public IntPtr Physical;
     }
     class Change { public Display Target; public string Control; public byte Code; public double Expected, Value, Tolerance; public int Maximum; }
@@ -98,7 +98,7 @@ namespace ZToolsWinDisplay {
       Require(GetMonitorInfo(h, ref info), "DISPLAY_READ_FAILED");
       return info;
     }
-    // 该显示输出上处于活动状态的显示器（接口路径）；多于一台即复制模式
+    // Active displays (device interface paths) on this output; more than one indicates mirror mode
     static List<DISPLAY_DEVICE> Attached(string device) {
       var result = new List<DISPLAY_DEVICE>();
       for (uint i = 0; i < 16; i++) {
@@ -122,7 +122,7 @@ namespace ZToolsWinDisplay {
       return Sha(string.Join("\n", parts.ToArray()));
     }
 
-    // \\?\DISPLAY#DEL41A6#5&1d8f&0&UID4357#{guid} 与 WMI 实例名 DISPLAY\DEL41A6\5&1d8f&0&UID4357_0 指向同一台显示器
+    // \\?\DISPLAY#DEL41A6#5&1d8f&0&UID4357#{guid} and WMI instance DISPLAY\DEL41A6\5&1d8f&0&UID4357_0 refer to the same display
     static string DeviceKey(string interfacePath) {
       var p = interfacePath.ToUpperInvariant();
       if (p.StartsWith("\\\\?\\")) p = p.Substring(4);
@@ -136,12 +136,12 @@ namespace ZToolsWinDisplay {
       if (cut > 0) { var digits = true; for (var i = cut + 1; i < s.Length; i++) if (!char.IsDigit(s[i])) digits = false; if (digits && cut < s.Length - 1) s = s.Substring(0, cut); }
       return s;
     }
-    // 没有该 WMI 类（台式机无内置背光）时系统报“不支持”，按没有内置屏处理；其他错误照常报告
+    // Treat missing WMI class (desktop without internal backlight) as no built-in display; propagate other errors
     static ManagementObjectCollection Wmi(string query) {
       try { var c = new ManagementObjectSearcher("root\\WMI", query).Get(); return c.Count >= 0 ? c : null; }
       catch (ManagementException e) { if (e.ErrorCode == ManagementStatus.NotSupported || e.ErrorCode == ManagementStatus.InvalidClass || e.ErrorCode == ManagementStatus.NotFound) return null; throw; }
     }
-    // 背光档位必须是 0..100 的等距档位，才能把百分比换算成可读回核验的档位
+    // Backlight levels must be evenly spaced across 0..100 for reliable readback verification
     static int WmiStep(byte[] levels) {
       if (levels == null || levels.Length < 2) return 0;
       var sorted = new List<int>();
@@ -182,7 +182,9 @@ namespace ZToolsWinDisplay {
         d.Mirror = attached.Count > 1 || physical > 1;
         var key = path.Length > 0 ? DeviceKey(path) : "";
         string name;
-        d.Name = key.Length > 0 && names.TryGetValue(key, out name) ? name : (attached.Count > 0 && attached[0].DeviceString.Trim().Length > 0 ? attached[0].DeviceString.Trim() : "显示器 " + index);
+        if (key.Length > 0 && names.TryGetValue(key, out name)) { d.Name = name; }
+        else if (attached.Count > 0 && attached[0].DeviceString.Trim().Length > 0) { d.Name = attached[0].DeviceString.Trim(); }
+        else { d.Name = "Display " + index; d.FallbackIndex = index; }
         KeyValuePair<string, int> wmi;
         if (key.Length > 0 && backlight.TryGetValue(key, out wmi)) { d.WmiInstance = wmi.Key; d.WmiStep = wmi.Value; }
         if (!d.Mirror && d.WmiInstance == null && physical == 1) {
@@ -197,7 +199,7 @@ namespace ZToolsWinDisplay {
     static bool Vcp(IntPtr monitor, byte code, out uint current, out uint maximum) {
       current = 0; maximum = 0;
       if (monitor == IntPtr.Zero) return false;
-      // DDC/CI 偶发无应答，短暂重试后仍失败才判定不可读
+      // Retry transient DDC/CI misses before treating the value as unreadable
       for (var attempt = 0; attempt < 3; attempt++) {
         if (GetVCPFeatureAndVCPFeatureReply(monitor, code, IntPtr.Zero, out current, out maximum) && maximum > 0 && maximum <= 65535 && current <= maximum) return true;
         Thread.Sleep(50);
@@ -229,7 +231,7 @@ namespace ZToolsWinDisplay {
       } else {
         Require(SetVCPFeature(c.Target.Physical, c.Code, (uint)Math.Round(percent * c.Maximum / 100)), "DISPLAY_WRITE_FAILED");
       }
-      // 显示器需要时间应用新值：最多等 1.5 秒，读回一致即返回，仍不一致交给调用方判定
+      // Wait up to 1.5s for the display to apply the new value; let caller handle remaining mismatch
       for (var i = 0; i < 15; i++) {
         Thread.Sleep(100);
         try { if (Math.Abs(Read(c) - percent) <= c.Tolerance) return; } catch (Exception) { }
@@ -239,20 +241,31 @@ namespace ZToolsWinDisplay {
     static Dictionary<string, object> Describe(Display d) {
       var o = new Dictionary<string, object>();
       o["id"] = d.Id; o["name"] = d.Name; o["isPrimary"] = d.Primary; o["builtIn"] = d.WmiInstance != null;
+      if (d.FallbackIndex > 0) o["fallbackDisplayIndex"] = d.FallbackIndex;
       o["width"] = d.Width; o["height"] = d.Height;
-      var canBrightness = false; var canContrast = false; string reason = null;
-      if (d.Mirror) { reason = "复制模式下无法确认独立控制目标，请改为扩展模式后重新扫描"; }
+      var canBrightness = false; var canContrast = false; string reason = null; string reasonCode = null;
+      if (d.Mirror) {
+        reasonCode = "MIRROR_UNSUPPORTED";
+        reason = "Cannot confirm an independent control target in mirror mode; switch to extended mode and scan again";
+      }
       else if (d.WmiInstance != null) {
         if (d.WmiStep > 0) { o["brightness"] = (double)WmiCurrent(d.WmiInstance); canBrightness = true; }
-        else reason = "系统背光档位不规则，无法核验调节结果";
+        else {
+          reasonCode = "BRIGHTNESS_UNREADABLE";
+          reason = "System backlight levels are irregular; unable to verify brightness adjustments";
+        }
       } else {
         uint current, maximum;
         if (Vcp(d.Physical, 0x10, out current, out maximum)) { o["brightness"] = 100.0 * current / maximum; canBrightness = true; }
         if (Vcp(d.Physical, 0x12, out current, out maximum)) { o["contrast"] = 100.0 * current / maximum; canContrast = true; }
-        if (!canBrightness) reason = "未能读取硬件亮度；显示器可能未开启 DDC/CI，或转接线、扩展坞不支持";
+        if (!canBrightness) {
+          reasonCode = "BRIGHTNESS_UNREADABLE";
+          reason = "Unable to read hardware brightness; DDC/CI may be disabled or unsupported by the adapter or dock";
+        }
       }
       o["protocol"] = canBrightness || canContrast ? (d.WmiInstance != null ? "wmi" : "ddcci") : "unsupported";
       o["canBrightness"] = canBrightness; o["canContrast"] = canContrast;
+      if (reasonCode != null) o["reasonCode"] = reasonCode;
       if (reason != null) o["reason"] = reason;
       return o;
     }
@@ -265,7 +278,7 @@ namespace ZToolsWinDisplay {
         for (var i = 0; i < changes.Count; i++) {
           Require(Topology() == topology, "DISPLAY_STATE_CHANGED");
           Require(Math.Abs(Read(changes[i]) - before[i]) <= changes[i].Tolerance, "DISPLAY_STATE_CHANGED");
-          touched = i + 1; // 写入失败也可能已经生效，仍须尝试恢复这一台
+          touched = i + 1; // A failed write may still have taken effect, so attempt rollback for this display
           Write(changes[i], changes[i].Value);
           var v = Read(changes[i]);
           Require(Math.Abs(v - changes[i].Value) <= changes[i].Tolerance, "DISPLAY_READBACK_MISMATCH");
@@ -280,7 +293,7 @@ namespace ZToolsWinDisplay {
           try {
             var current = Read(c);
             if (Math.Abs(current - before[i]) <= c.Tolerance) continue;
-            // 已被用户、系统自动亮度或其他程序改动时不覆盖，交给重新扫描确认
+            // Do not overwrite if modified externally by the user, auto-brightness, or another app
             if (Math.Abs(current - c.Value) > c.Tolerance) { restored = false; continue; }
             Write(c, before[i]);
             restored = restored && Math.Abs(Read(c) - before[i]) <= c.Tolerance;
@@ -294,7 +307,7 @@ namespace ZToolsWinDisplay {
       var json = new JavaScriptSerializer();
       var output = new Dictionary<string, object>(); output["version"] = 1; output["success"] = true;
       if (action == "sleep") {
-        // SC_MONITORPOWER=2 关闭显示器；系统只回报是否接受了请求，不能确认屏幕已熄灭
+        // SC_MONITORPOWER=2 turns displays off; the OS only reports acceptance of the request
         Require(PostMessage(new IntPtr(0xffff), 0x0112, new IntPtr(0xF170), new IntPtr(2)), "DISPLAY_SLEEP_REJECTED");
         output["requested"] = true;
         return json.Serialize(output);

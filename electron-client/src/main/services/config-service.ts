@@ -16,7 +16,7 @@ function toStoredString(value: unknown): string {
   } catch {
     // Structured clone normally rejects this before IPC; keep a stable public error.
   }
-  throw new ZToolsError(errorCodes.invalidRequest, '设置值必须可序列化')
+  throw new ZToolsError(errorCodes.invalidRequest, 'Setting value must be serializable')
 }
 
 function toResponseString(value: unknown, defaultValue: unknown): string {
@@ -61,8 +61,19 @@ export class ConfigService {
   ])
 
   #cachedWakePreference: 'dashboard' | 'launcher' = 'dashboard'
+  readonly #localeChangeListeners = new Set<(rawLocale: unknown) => void>()
 
   constructor(private readonly store: JsonFileStore) {}
+
+  /**
+   * 订阅 user_settings.json 中 ui.locale（含 config_set、settings_set 与整组写 ui）落盘后的变更通知。
+   */
+  onLocaleSettingChanged(listener: (rawLocale: unknown) => void): () => void {
+    this.#localeChangeListeners.add(listener)
+    return () => {
+      this.#localeChangeListeners.delete(listener)
+    }
+  }
 
   getCachedWakePreference(): 'dashboard' | 'launcher' {
     return this.#cachedWakePreference
@@ -100,7 +111,7 @@ export class ConfigService {
 
   async setFeature(key: FeatureFlagKey | string, enabled: boolean): Promise<boolean> {
     if (!Object.prototype.hasOwnProperty.call(DEFAULT_FEATURE_FLAGS, key)) {
-      throw new ZToolsError(errorCodes.invalidRequest, `未知的 feature flag: ${key}`)
+      throw new ZToolsError(errorCodes.invalidRequest, `Unknown feature flag: ${key}`)
     }
     await this.set(USER_SETTINGS_FILE, `features.${key}`, String(Boolean(enabled)), true)
     return Boolean(enabled)
@@ -108,7 +119,7 @@ export class ConfigService {
 
   async setFeatures(features: Partial<FeatureFlags>): Promise<FeatureFlags> {
     if (typeof features !== 'object' || features === null || Array.isArray(features)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'features 必须是对象')
+      throw new ZToolsError(errorCodes.invalidRequest, 'features must be an object')
     }
     for (const [key, value] of Object.entries(features)) {
       if (Object.prototype.hasOwnProperty.call(DEFAULT_FEATURE_FLAGS, key) && typeof value === 'boolean') {
@@ -116,6 +127,13 @@ export class ConfigService {
       }
     }
     return this.getFeatures()
+  }
+
+  /** 检查指定配置文件中是否真实存在某个键（用于区分键缺失与显式保存的默认值，如 ui.locale='system'） */
+  async has(fileName: string, pathValue: string): Promise<boolean> {
+    this.#requireConfigFile(fileName)
+    const document = await this.store.read(fileName)
+    return getByPath(document, pathValue) !== undefined
   }
 
   async get(fileName: string, pathValue: string, defaultValue: unknown): Promise<string> {
@@ -158,17 +176,46 @@ export class ConfigService {
   async set(fileName: string, pathValue: string, value: string, syncEnabled: boolean): Promise<void> {
     this.#requireConfigFile(fileName)
     const [group, ...remaining] = pathValue.split('.')
-    if (group === undefined) throw new ZToolsError(errorCodes.invalidRequest, '配置路径无效')
+    if (group === undefined) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid config path')
     if (fileName === USER_SETTINGS_FILE && pathValue === 'ui.wake_preference') {
       const normalized = String(parseStoredValue(value)).trim()
       this.#cachedWakePreference = normalized === 'launcher' ? 'launcher' : 'dashboard'
     }
+    let nextLocaleUpdate: { changed: true; value: unknown } | undefined
     await this.store.update(fileName, (document) => {
+      const parsed = parseStoredValue(value)
       if (remaining.length === 0) {
-        const parsed = parseStoredValue(value)
+        const previousGroup = document[group]
+        const previousLocale =
+          fileName === USER_SETTINGS_FILE &&
+          group === 'ui' &&
+          typeof previousGroup === 'object' &&
+          previousGroup !== null &&
+          !Array.isArray(previousGroup) &&
+          Object.prototype.hasOwnProperty.call(previousGroup, 'locale')
+            ? (previousGroup as Record<string, unknown>).locale
+            : undefined
         document[group] = typeof parsed === 'object' && parsed !== null
           ? parsed
           : { value: parsed }
+        if (fileName === USER_SETTINGS_FILE && group === 'ui') {
+          if (
+            typeof parsed === 'object' &&
+            parsed !== null &&
+            !Array.isArray(parsed) &&
+            Object.prototype.hasOwnProperty.call(parsed, 'locale')
+          ) {
+            nextLocaleUpdate = { changed: true, value: (parsed as Record<string, unknown>).locale }
+          } else if (
+            previousLocale !== undefined &&
+            previousLocale !== null &&
+            String(previousLocale).trim().toLowerCase() !== '' &&
+            String(previousLocale).trim().toLowerCase() !== 'system'
+          ) {
+            // 原先存在非 system 的显式 ui.locale，清空或整体覆盖 ui 后不再包含该键时，复位为跟随系统语言
+            nextLocaleUpdate = { changed: true, value: 'system' }
+          }
+        }
       } else {
         const existing = document[group]
         const groupDocument: JsonObject =
@@ -176,7 +223,10 @@ export class ConfigService {
             ? existing as JsonObject
             : {}
         document[group] = groupDocument
-        setByPath(groupDocument, remaining.join('.'), parseStoredValue(value))
+        setByPath(groupDocument, remaining.join('.'), parsed)
+        if (fileName === USER_SETTINGS_FILE && pathValue === 'ui.locale') {
+          nextLocaleUpdate = { changed: true, value: parsed }
+        }
       }
       const sync = document._sync
       const syncDocument: JsonObject =
@@ -186,6 +236,15 @@ export class ConfigService {
       syncDocument[group] = syncEnabled
       document._sync = syncDocument
     })
+    if (nextLocaleUpdate) {
+      for (const listener of [...this.#localeChangeListeners]) {
+        try {
+          listener(nextLocaleUpdate.value)
+        } catch (error) {
+          console.warn('处理 ui.locale 变更钩子失败:', error)
+        }
+      }
+    }
   }
 
   async getSetting(key: string): Promise<string> {
@@ -227,7 +286,7 @@ export class ConfigService {
   setMainWindowSize(width: number, height: number): Promise<void> {
     if (!Number.isInteger(width) || !Number.isInteger(height) ||
         width < 320 || height < 240 || width > 8192 || height > 8192) {
-      throw new ZToolsError(errorCodes.invalidRequest, '主窗口尺寸无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid main window size')
     }
     return this.store.update(APP_CONFIG_FILE, (document) => {
       setByPath(document, 'cef.windowWidth', width)
@@ -237,7 +296,7 @@ export class ConfigService {
 
   #requireConfigFile(fileName: string): void {
     if (!ALLOWED_CONFIG_FILES.has(fileName)) {
-      throw new ZToolsError(errorCodes.permissionDenied, 'config API 不允许访问该文件')
+      throw new ZToolsError(errorCodes.permissionDenied, 'File is not accessible via config API')
     }
   }
 }

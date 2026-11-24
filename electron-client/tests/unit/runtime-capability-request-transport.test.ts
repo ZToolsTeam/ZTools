@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import test from 'node:test'
 import vm from 'node:vm'
 import { RUNTIME_CAPABILITY_REQUEST_CANCEL_CHANNEL } from '../../src/contracts/runtime-capability-request-cancel.js'
 import { RuntimeCapabilityRequestCancellationService } from '../../src/main/services/runtime-capability-request-cancellation-service.js'
 import { createRuntimeCapabilityRequestCancellationBridge } from '../../src/preload/runtime-capability-request-cancellation.js'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 
 const handshake1 = { hostMaximumSdkContractVersion: 2, windowSdkApiLane: 1 }
 const handshake2 = { hostMaximumSdkContractVersion: 2, windowSdkApiLane: 2 }
@@ -37,7 +37,7 @@ function createTransport(bridge: unknown) {
     showEnvironmentWarning: () => undefined,
     getInfo: () => ({ type: 'electron' })
   }
-  const source = fs.readFileSync('../frontend/public/js/cef-ipc/src/core/transport.js', 'utf8').replace(/^export default Transport\s*$/m, '')
+  const source = loadCefIpcSources(['core/transport'])
   const Transport = vm.runInNewContext(source + '\nTransport', {
     MockProvider: class {}, environment, window: { localStorage: undefined }, setTimeout, clearTimeout, console, Date, Promise, Map, Error
   }) as new (options: { timeout: number }) => { call(method: string, params: unknown, options: unknown): Promise<unknown> }

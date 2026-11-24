@@ -11,10 +11,11 @@ import { resolveKeywordGlyph, resolvePluginGlyph } from '@/utils/brandIcons'
 import { ref, computed, nextTick, onBeforeUnmount } from 'vue'
 import { usePluginsStore } from '@/stores/plugins'
 import { useAppI18n } from '@/i18n'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 import { getLocalizedPluginName, getLocalizedPluginAltNames } from '@/utils/pluginI18n'
 import { storeToRefs } from 'pinia'
 import { message } from 'ant-design-vue'
-import { getHotkey } from '@/api/apiserver'
+import { getHotkey, getLauncherHotkey } from '@/api/apiserver'
 import { getPluginFeatureHotkeyItemByTrigger } from '@/utils/pluginFeatureHotkeys'
 import {
   buildLaunchHotkeyMap,
@@ -29,7 +30,7 @@ import {
   resetHotkeyRecorderState
 } from '@/utils/hotkeyRecorder'
 
-const emit = defineEmits(['update:count'])
+const emit = defineEmits(['update:count', 'closed'])
 const { t } = useAppI18n()
 
 const visible = ref(false)
@@ -267,10 +268,16 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
   loadingPluginId.value = target.id
 
   try {
-    // 1. 本地检测：与全局唤醒快捷键冲突
+    // 1. 本地检测：与全局唤醒快捷键 / 独立悬浮条快捷键冲突
     const globalHotkey = await getGlobalWakeHotkey()
     if (globalHotkey && globalHotkey.toLowerCase() === hotkeyStr.toLowerCase()) {
       message.warning(t('hotkey.featureModal.conflictGlobalWake'))
+      cancelRecording()
+      return
+    }
+    const launcherHotkey = await getGlobalLauncherHotkey()
+    if (launcherHotkey && launcherHotkey.toLowerCase() === hotkeyStr.toLowerCase()) {
+      message.warning(t('hotkey.featureModal.conflictGlobalLauncher'))
       cancelRecording()
       return
     }
@@ -328,7 +335,7 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
     cancelRecording(true)
   } catch (e) {
     console.error('快捷键设置失败:', e)
-    message.error(t('hotkey.launchModal.setFailed', { reason: e.message || t('common.unknownError') }))
+    message.error(t('hotkey.launchModal.setFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
     cancelRecording(true)
   } finally {
     loadingPluginId.value = null
@@ -341,6 +348,15 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
 async function getGlobalWakeHotkey() {
   try {
     return await getHotkey() || ''
+  } catch {
+    return ''
+  }
+}
+
+/** 获取独立悬浮条全局快捷键 */
+async function getGlobalLauncherHotkey() {
+  try {
+    return typeof getLauncherHotkey === 'function' ? (await getLauncherHotkey()) || '' : ''
   } catch {
     return ''
   }
@@ -362,10 +378,11 @@ async function doRegister(target, hotkeyStr) {
 
   // 检查注册是否成功
   if (result === false || data.success === false || data.error) {
-    const detail = typeof data.error === 'string' ? data.error : ''
+    const resolved = data.error ? resolveErrorMessage(data, 'hotkey.launchModal.registerOccupied') : ''
+    const hasDetail = Boolean(resolved && resolved !== t('hotkey.launchModal.registerOccupied'))
     throw new Error(
-      detail
-        ? t('hotkey.launchModal.registerOccupiedWithDetail', { detail })
+      hasDetail
+        ? t('hotkey.launchModal.registerOccupiedWithDetail', { detail: resolved })
         : t('hotkey.launchModal.registerOccupied')
     )
   }
@@ -398,10 +415,11 @@ async function doUnregister(triggerId) {
   const result = await window.ztools.trigger.unregister(triggerId)
   const data = result?.data || result || {}
   if (result === false || data.success === false || data.error) {
-    const detail = typeof data.error === 'string' ? data.error : ''
+    const resolved = data.error ? resolveErrorMessage(data, 'hotkey.launchModal.unregisterFailed') : ''
+    const hasDetail = Boolean(resolved && resolved !== t('hotkey.launchModal.unregisterFailed'))
     throw new Error(
-      detail
-        ? t('hotkey.launchModal.unregisterFailedWithDetail', { detail })
+      hasDetail
+        ? t('hotkey.launchModal.unregisterFailedWithDetail', { detail: resolved })
         : t('hotkey.launchModal.unregisterFailed')
     )
   }
@@ -468,6 +486,7 @@ defineExpose({ show, hide, updateMap, configuredCount })
 <template>
   <RcDialog
     v-model:open="visible"
+    :after-close="() => emit('closed')"
     :title="t('hotkey.launchModal.title')"
     :width="560"
     @cancel="handleCancel"

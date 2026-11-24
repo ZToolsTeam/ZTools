@@ -80,6 +80,7 @@ import {
   type LaunchIntent
 } from './runtime/launch-intent.js'
 import { setLocale, t } from './i18n/index.js'
+import { parseCommandLineLocale, resolveStartupLocale } from './i18n/install-locale.js'
 
 function commandLineValue(prefix: string): string | undefined {
   const argument = process.argv.find((item) => item.startsWith(prefix))
@@ -558,6 +559,20 @@ function openLauncherWindow(): void {
   showMainWindow()
 }
 
+/** 独立悬浮条全局快捷键动作：仅切换悬浮条显示/隐藏，不改写 lastActiveSurface 也不影响主唤醒热键逻辑 */
+function toggleLauncherWindow(): void {
+  if (applicationLifecycle.cancellationRequested) return
+  if (!launchIntentReady) {
+    pendingWakeTarget = 'launcher'
+    return
+  }
+  if (launcher) {
+    launcher.toggle({ updateLastActiveSurface: false })
+    return
+  }
+  showMainWindow()
+}
+
 async function readTrayState(): Promise<{ wakeAccelerator: string; showTrayIcon: boolean }> {
   if (!services) {
     return { wakeAccelerator: 'Alt+Space', showTrayIcon: true }
@@ -977,7 +992,8 @@ if (!app.requestSingleInstanceLock()) {
       return
     }
     if (!applicationLifecycle.canContinueStartup()) return
-    setLocale('system', app.getLocale())
+    const earlyCliLocale = parseCommandLineLocale(process.argv)
+    setLocale(earlyCliLocale ?? 'system', app.getLocale())
     if (process.platform === 'darwin') {
       installMacosApplicationMenu({ onOpenPreferences: () => openMainWindowAt('/advanced-settings') })
     } else {
@@ -1039,7 +1055,7 @@ if (!app.requestSingleInstanceLock()) {
         autoUpdater,
         requestQuit: () => app.quit(),
         reportRestartError: (error) => {
-          lifecycleLog('ERROR', 'macOS 更新重启失败', undefined, error)
+          lifecycleLog('ERROR', 'macOS update restart failed', undefined, error)
           dialog.showErrorBox(
             t('dialog.updateRestartFailed.title'),
             t('dialog.updateRestartFailed.message', { detail: error.message })
@@ -1066,6 +1082,17 @@ if (!app.requestSingleInstanceLock()) {
     ))
     services = createdServices
     createdServices.focus.setNotificationHandler(showDesktopNotification)
+    // 冷启动语言必须在 nativeRuntime.start() 之前确定并写入 ZTOOLS_LOCALE / globalThis.__ztoolsLocale
+    const startupLocale = await resolveStartupLocale({
+      config: createdServices.config,
+      argv: process.argv,
+      systemLocale: app.getLocale(),
+      onWarn: (message, error) => console.warn(message, error)
+    })
+    setLocale(startupLocale.setting, app.getLocale())
+    if (process.platform === 'darwin') {
+      installMacosApplicationMenu({ onOpenPreferences: () => openMainWindowAt('/advanced-settings') })
+    }
     await runLifecyclePhase('native-runtime.start', () => nativeRuntime.start(signal))
     if (!applicationLifecycle.canContinueStartup()) return
 
@@ -1097,18 +1124,12 @@ if (!app.requestSingleInstanceLock()) {
     })
     let persistedTheme = ''
     let persistedAccent: unknown = 'ember'
-    let persistedLocale: unknown = 'system'
     try {
       persistedTheme = await createdServices.config.get('user_settings.json', 'ui.theme', '')
       persistedAccent = await createdServices.config.get('user_settings.json', 'ui.accent', 'ember')
-      persistedLocale = await createdServices.config.get('user_settings.json', 'ui.locale', 'system')
       await createdServices.config.get('user_settings.json', 'ui.wake_preference', 'dashboard').catch(() => 'dashboard')
     } catch (error) {
       console.warn('读取主题设置失败，将跟随系统:', error)
-    }
-    setLocale(persistedLocale, app.getLocale())
-    if (process.platform === 'darwin') {
-      installMacosApplicationMenu({ onOpenPreferences: () => openMainWindowAt('/advanced-settings') })
     }
     currentAccent = normalizeAccentTheme(persistedAccent)
     nativeTheme.themeSource = persistedTheme === 'dark' || persistedTheme === 'light'
@@ -1128,17 +1149,17 @@ if (!app.requestSingleInstanceLock()) {
       config: createdServices.config,
       pluginState,
       getInstalledPlugins: async () => {
-        if (!router) throw new Error('IPC Router 尚未初始化')
+        if (!router) throw new Error('IPC Router is not initialized')
         return router.listInstalledPlugins()
       },
       openPlugin: async (pluginId) => {
-        if (!router) throw new Error('IPC Router 尚未初始化')
+        if (!router) throw new Error('IPC Router is not initialized')
         return router.openPlugin({ pluginId })
       },
       systemTools: new SystemToolsService(),
       resolveAuthorizedReadPath: async (rawPath, caller) => {
-        if (!router) throw new Error('IPC Router 尚未初始化')
-        if (!caller) throw new Error('调用方身份不可用')
+        if (!router) throw new Error('IPC Router is not initialized')
+        if (!caller) throw new Error('Caller identity is unavailable')
         return router.fileService.resolveAuthorizedPath(rawPath, caller, 'read', false)
       },
       revealPath: (fullPath) => {
@@ -1154,6 +1175,12 @@ if (!app.requestSingleInstanceLock()) {
     const initialWakeHotkey = initialWakeRaw === '__UNSET__'
       ? 'Alt+Space'
       : String(initialWakeRaw ?? '').trim()
+    const initialLauncherRaw = await createdServices.config
+      .get('user_settings.json', 'hotkey.launcher', '__UNSET__')
+      .catch(() => '__UNSET__')
+    const initialLauncherHotkey = initialLauncherRaw === '__UNSET__'
+      ? 'Alt+Shift+Space'
+      : String(initialLauncherRaw ?? '').trim()
     router = await runLifecyclePhase('ipc-router.create', () => IpcRouter.create(registry, createdServices, {
       pluginResources: { webRoot: () => activeWebRoot(), pluginRoot },
       pluginState, onDarkModeChanged: applyDarkMode, onAccentChanged: applyAccentTheme,
@@ -1165,11 +1192,13 @@ if (!app.requestSingleInstanceLock()) {
       },
       onTrayStatePossiblyChanged: syncTrayState,
       initialWakeHotkey,
+      initialLauncherHotkey,
       reloadMainWindow: async () => {
-        if (!mainWindow || mainWindow.isDestroyed()) throw new Error('主窗口不可用')
+        if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Main window is unavailable')
         await mainWindow.loadURL('ztools://web/index.html')
       },
       toggleMainWindow,
+      toggleLauncher: toggleLauncherWindow,
       forwardHotkeyToRecorder: (accelerator) => {
         if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused()) {
           return false
@@ -1188,6 +1217,16 @@ if (!app.requestSingleInstanceLock()) {
       } : {})
     }))
     if (!applicationLifecycle.canContinueStartup()) return
+    // 首次升级或全新启动时若未显式写过 hotkey.launcher，按触发器真实播种结果回写配置，避免默认避让后界面出现假快捷键
+    if (initialLauncherRaw === '__UNSET__') {
+      const seededLauncher = router.getGlobalLauncherHotkey()
+      const syncedLauncherKey = seededLauncher.exists && seededLauncher.enabled ? seededLauncher.key : ''
+      await createdServices.config
+        .set('user_settings.json', 'hotkey.launcher', syncedLauncherKey, true)
+        .catch((error: unknown) => {
+          console.warn('初始化同步悬浮条快捷键配置失败:', error)
+        })
+    }
     const protocolRoots = await router.fileService.prepareMainProtocolRoots()
     if (!applicationLifecycle.canContinueStartup()) return
     const activeRouter = router
@@ -1272,10 +1311,10 @@ if (!app.requestSingleInstanceLock()) {
           togglePin: (id, itemType) => superPanel ? superPanel.togglePin(id, itemType) : Promise.resolve({ success: false }),
           setPin: (entry, pinned, caller) => superPanel
             ? superPanel.setPin(entry, pinned, caller)
-            : Promise.resolve({ success: false, error: '悬浮条服务不可用' }),
+            : Promise.resolve({ success: false, error: t('superPanel.error.serviceUnavailable') }),
           reorderPins: (order) => superPanel
             ? superPanel.reorderPins(order)
-            : Promise.resolve({ success: false, error: '悬浮条服务不可用' }),
+            : Promise.resolve({ success: false, error: t('superPanel.error.serviceUnavailable') }),
           openItem: (id, itemType, query, action) => superPanel
             ? superPanel.openPanelItem(id, itemType, query, action)
             : Promise.resolve({ success: false })

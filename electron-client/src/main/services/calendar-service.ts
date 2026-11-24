@@ -119,10 +119,10 @@ function normalizeExplicitConferenceUrl(raw: string): { url: string; type: NonNu
   try {
     parsed = new URL(raw)
   } catch {
-    throw new ZToolsError(errorCodes.invalidRequest, '会议链接必须是以 http:// 或 https:// 开头的网址')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Conference URL must start with http:// or https://')
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new ZToolsError(errorCodes.invalidRequest, '会议链接必须是以 http:// 或 https:// 开头的网址')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Conference URL must start with http:// or https://')
   }
   return { url: raw, type: matchConferencePlatform(raw) ?? 'other' }
 }
@@ -130,11 +130,11 @@ function normalizeExplicitConferenceUrl(raw: string): { url: string; type: NonNu
 function normalizeCalendarName(raw: unknown): string {
   if (raw === undefined || raw === null) return DEFAULT_CALENDAR_NAME
   if (typeof raw !== 'string') {
-    throw new ZToolsError(errorCodes.invalidRequest, 'calendarName 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid calendarName')
   }
   const name = raw.trim()
   if (name.length > MAX_CALENDAR_NAME_LENGTH) {
-    throw new ZToolsError(errorCodes.invalidRequest, `日历名称不能超过 ${MAX_CALENDAR_NAME_LENGTH} 个字符`)
+    throw new ZToolsError(errorCodes.invalidRequest, `Calendar name cannot exceed ${MAX_CALENDAR_NAME_LENGTH} characters`)
   }
   return name || DEFAULT_CALENDAR_NAME
 }
@@ -398,14 +398,14 @@ export class CalendarService {
    */
   public getEventsByIds(ids: readonly string[]): CalendarEvent[] {
     if (!Array.isArray(ids)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'eventIds 必须是数组')
+      throw new ZToolsError(errorCodes.invalidRequest, 'eventIds must be an array')
     }
     const unique = [...new Set(ids)]
     if (unique.length > MAX_EXPORT_EVENT_IDS) {
-      throw new ZToolsError(errorCodes.invalidRequest, `一次最多导出 ${MAX_EXPORT_EVENT_IDS} 个日程`)
+      throw new ZToolsError(errorCodes.invalidRequest, `Cannot export more than ${MAX_EXPORT_EVENT_IDS} events at once`)
     }
     if (unique.some((id) => typeof id !== 'string' || id.length === 0 || id.length > 128)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'eventIds 包含无效的日程 ID')
+      throw new ZToolsError(errorCodes.invalidRequest, 'eventIds contains an invalid event ID')
     }
     if (unique.length === 0) return []
     const placeholders = unique.map(() => '?').join(', ')
@@ -421,7 +421,7 @@ export class CalendarService {
   public deleteEvent(id: string): boolean {
     const res = this.db.prepare('DELETE FROM calendar_events WHERE id = ?').run(id)
     if (Number(res.changes) === 0) {
-      throw new ZToolsError(errorCodes.invalidRequest, '日程不存在或已被删除，请刷新列表后重试')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Calendar event does not exist or has been deleted; please refresh and retry')
     }
     return true
   }

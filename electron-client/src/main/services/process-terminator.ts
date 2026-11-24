@@ -75,9 +75,9 @@ function errnoCode(error: unknown): string | undefined {
 }
 
 function abortFailure(signal: AbortSignal): ZToolsError {
-  if (signal.reason === errorCodes.requestTimeout) return new ZToolsError(errorCodes.requestTimeout, '调用超时')
-  if (signal.reason === errorCodes.appStopping) return new ZToolsError(errorCodes.appStopping, '应用正在退出')
-  return new ZToolsError(errorCodes.cancelled, '结束进程已取消（信号已发出则不撤销）')
+  if (signal.reason === errorCodes.requestTimeout) return new ZToolsError(errorCodes.requestTimeout, 'Request timed out')
+  if (signal.reason === errorCodes.appStopping) return new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
+  return new ZToolsError(errorCodes.cancelled, 'Process termination cancelled (signals already sent cannot be undone)')
 }
 
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -132,17 +132,17 @@ export class ProcessTerminator {
     const { pid, mode } = params
     const tree = params.tree === true
     if (!Number.isInteger(pid) || pid < 2 || pid > 0xffff_ffff) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'pid 无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid pid')
     }
-    if (mode !== 'graceful' && mode !== 'force') throw new ZToolsError(errorCodes.invalidRequest, 'mode 无效')
+    if (mode !== 'graceful' && mode !== 'force') throw new ZToolsError(errorCodes.invalidRequest, 'Invalid mode')
     const timeoutMs = params.timeoutMs ?? (mode === 'graceful' ? 3_000 : 2_000)
     if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 10_000) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'timeoutMs 无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid timeoutMs')
     }
     if (signal.aborted) throw abortFailure(signal)
     const platform = this.deps.platform
     // Darwin pid_t 是有符号 32 位；更大的 pid 不可能存在
-    if (platform !== 'win32' && pid > 0x7fff_ffff) throw new ZToolsError(errorCodes.processNotFound, '进程不存在')
+    if (platform !== 'win32' && pid > 0x7fff_ffff) throw new ZToolsError(errorCodes.processNotFound, 'Process not found')
 
     // 1. 系统进程与宿主自身：不需要快照即可判定
     if (platform === 'win32' && pid === 4) this.#protected('system', pid)
@@ -151,9 +151,9 @@ export class ProcessTerminator {
 
     // 2. 存在性 / 权限预检
     const initial = this.#probe(pid)
-    if (initial === 'exited') throw new ZToolsError(errorCodes.processNotFound, '进程已不存在')
+    if (initial === 'exited') throw new ZToolsError(errorCodes.processNotFound, 'Process no longer exists')
     if (initial === 'denied') {
-      throw new ZToolsError(errorCodes.processAccessDenied, '没有结束该进程的权限（通常需要管理员权限）')
+      throw new ZToolsError(errorCodes.processAccessDenied, 'Insufficient permissions to terminate this process (administrator privileges may be required)')
     }
 
     // 3. 快照：父子关系与名称；失败时绝不盲目发信号
@@ -163,25 +163,25 @@ export class ProcessTerminator {
     } catch (error) {
       if (signal.aborted) throw abortFailure(signal)
       if (error instanceof ZToolsError && error.code !== errorCodes.processError) throw error
-      throw new ZToolsError(errorCodes.processError, '读取进程快照失败，未执行结束')
+      throw new ZToolsError(errorCodes.processError, 'Failed to read process snapshot; termination aborted')
     }
-    if (!Array.isArray(snapshot)) throw new ZToolsError(errorCodes.processError, '进程快照无效，未执行结束')
+    if (!Array.isArray(snapshot)) throw new ZToolsError(errorCodes.processError, 'Invalid process snapshot; termination aborted')
     const byPid = new Map<number, ProcessTreeEntry>()
     for (const entry of snapshot) {
       if (entry && Number.isInteger(entry.pid) && entry.pid > 0 && !byPid.has(entry.pid)) byPid.set(entry.pid, entry)
     }
     const target = byPid.get(pid)
     if (!target) {
-      if (this.#probe(pid) === 'exited') throw new ZToolsError(errorCodes.processNotFound, '进程已不存在')
-      throw new ZToolsError(errorCodes.processError, '进程快照中找不到目标进程，未执行结束')
+      if (this.#probe(pid) === 'exited') throw new ZToolsError(errorCodes.processNotFound, 'Process no longer exists')
+      throw new ZToolsError(errorCodes.processError, 'Target process not found in snapshot; termination aborted')
     }
-    if (target.zombie) throw new ZToolsError(errorCodes.processNotFound, '进程已退出')
+    if (target.zombie) throw new ZToolsError(errorCodes.processNotFound, 'Process has already exited')
 
     let hostChildren: Set<number>
     try {
       hostChildren = new Set([...(await (this.deps.protectedPids?.() ?? []))].filter(Number.isInteger))
     } catch {
-      throw new ZToolsError(errorCodes.processError, '读取宿主进程保护名单失败，未执行结束')
+      throw new ZToolsError(errorCodes.processError, 'Failed to read host protected process list; termination aborted')
     }
     const ancestors = this.#ancestors(byPid)
     const protectionOf = (entry: ProcessTreeEntry): string | undefined => {
@@ -199,7 +199,7 @@ export class ProcessTerminator {
     // 4. pid 复用：调用方看到的进程名与当前不一致
     if (params.expectedName !== undefined &&
         normalizeProcessName(params.expectedName, platform) !== normalizeProcessName(target.name, platform)) {
-      throw new ZToolsError(errorCodes.processIdentityMismatch, '进程已变化（pid 可能被复用），未执行结束')
+      throw new ZToolsError(errorCodes.processIdentityMismatch, 'Process identity changed (PID may have been reused); termination aborted')
     }
 
     // 5. 目标集合：先子后父
@@ -237,8 +237,8 @@ export class ProcessTerminator {
           if (code === 'ESRCH') {
             exited.push(item)
           } else if (item === pid) {
-            if (code === 'EPERM') throw new ZToolsError(errorCodes.processAccessDenied, '没有结束该进程的权限（通常需要管理员权限）')
-            throw new ZToolsError(errorCodes.processError, '向进程发送结束信号失败')
+            if (code === 'EPERM') throw new ZToolsError(errorCodes.processAccessDenied, 'Insufficient permissions to terminate this process (administrator privileges may be required)')
+            throw new ZToolsError(errorCodes.processError, 'Failed to send termination signal to process')
           }
           // 子孙无权限 / 失败：不计入结果，也不等待
         }
@@ -260,9 +260,9 @@ export class ProcessTerminator {
       if (platform === 'win32' && taskkillRejected && round === 0 && waiting.has(pid)) {
         // taskkill 立即失败且目标仍在：force ⇒ 无权限；graceful ⇒ 程序拒绝关闭（如控制台程序）
         if (mode === 'force') {
-          throw new ZToolsError(errorCodes.processAccessDenied, '没有结束该进程的权限（通常需要管理员权限）')
+          throw new ZToolsError(errorCodes.processAccessDenied, 'Insufficient permissions to terminate this process (administrator privileges may be required)')
         }
-        throw new ZToolsError(errorCodes.processTerminateTimeout, '进程拒绝正常关闭', {
+        throw new ZToolsError(errorCodes.processTerminateTimeout, 'Process refused graceful shutdown', {
           public: { reason: 'graceful-rejected', stillRunning: [...waiting] }
         })
       }
@@ -274,7 +274,7 @@ export class ProcessTerminator {
     }
     if (waiting.size > 0 && platform !== 'win32') await this.#dropZombies(waiting, exited, signal)
     if (waiting.has(pid) || waiting.size > 0) {
-      throw new ZToolsError(errorCodes.processTerminateTimeout, '信号已发出，但进程在超时前仍未退出', {
+      throw new ZToolsError(errorCodes.processTerminateTimeout, 'Signal was sent, but process did not exit before timeout', {
         public: { stillRunning: [...waiting].sort((left, right) => left - right) }
       })
     }
@@ -283,12 +283,12 @@ export class ProcessTerminator {
 
   #protected(reason: string, pid: number): never {
     const messages: Record<string, string> = {
-      system: '系统关键进程受保护，禁止结束',
-      'host-self': 'ZTools 自身进程受保护，禁止结束',
-      'host-ancestor': 'ZTools 的父进程受保护，禁止结束',
-      'host-child': 'ZTools 的关键子进程受保护，禁止结束'
+      system: 'Critical system process is protected and cannot be terminated',
+      'host-self': 'ZTools host process is protected and cannot be terminated',
+      'host-ancestor': 'ZTools parent process is protected and cannot be terminated',
+      'host-child': 'ZTools critical child process is protected and cannot be terminated'
     }
-    throw new ZToolsError(errorCodes.processProtected, messages[reason] ?? '进程受保护，禁止结束', {
+    throw new ZToolsError(errorCodes.processProtected, messages[reason] ?? 'Process is protected and cannot be terminated', {
       public: { reason, pid }
     })
   }
@@ -342,7 +342,7 @@ export class ProcessTerminator {
       if (!entry || protectionOf(entry)) continue
       bfs.push(next)
       if (bfs.length > MAX_TERMINATE_TREE_SIZE) {
-        throw new ZToolsError(errorCodes.invalidRequest, `子进程过多（超过 ${MAX_TERMINATE_TREE_SIZE} 个），请先结束部分子进程`)
+        throw new ZToolsError(errorCodes.invalidRequest, `Too many descendant processes (exceeds ${MAX_TERMINATE_TREE_SIZE}); terminate some child processes first`)
       }
       queue.push(...(children.get(next) ?? []))
     }

@@ -207,21 +207,21 @@ export class BuiltinPluginHostService {
   ): Promise<string> {
     const trimmed = (rawPath ?? '').trim()
     if (!trimmed) {
-      throw new Error('文件路径不能为空')
+      throw new Error('File path cannot be empty')
     }
     if (trimmed.includes('\0')) {
-      throw new Error('文件路径包含非法空字节')
+      throw new Error('File path contains invalid null byte')
     }
     if (this.#pathAuthority && caller) {
       return this.#pathAuthority.resolveAuthorizedPath(trimmed, caller, access, false)
     }
     // 没有路径授权时的兜底：只接受绝对路径，不按进程工作目录解析相对路径
     if (!isFullyQualifiedPath(trimmed, this.#platform)) {
-      throw new Error(`文件路径必须是绝对路径: ${trimmed}`)
+      throw new Error(`File path must be an absolute path: ${trimmed}`)
     }
     const resolved = path.resolve(trimmed)
     if (access === 'write' && isProtectedSystemPath(resolved)) {
-      throw new Error(`系统核心受保护路径禁止修改或移除: ${resolved}`)
+      throw new Error(`Protected system path cannot be modified or removed: ${resolved}`)
     }
     return resolved
   }
@@ -232,21 +232,21 @@ export class BuiltinPluginHostService {
   ): Promise<string> {
     const trimmed = (rawPath ?? '').trim()
     if (!trimmed) {
-      throw new Error('输出路径不能为空')
+      throw new Error('Output path cannot be empty')
     }
     if (trimmed.includes('\0')) {
-      throw new Error('输出路径包含非法空字节')
+      throw new Error('Output path contains invalid null byte')
     }
     if (this.#pathAuthority && caller) {
       return this.#pathAuthority.resolveAuthorizedPath(trimmed, caller, 'write', true)
     }
     // 没有路径授权时的兜底：只接受绝对路径，不按进程工作目录解析相对路径（否则会在工作目录下建出同名目录）
     if (!isFullyQualifiedPath(trimmed, this.#platform)) {
-      throw new Error(`输出路径必须是绝对路径: ${trimmed}`)
+      throw new Error(`Output path must be an absolute path: ${trimmed}`)
     }
     const resolved = path.resolve(trimmed)
     if (isProtectedSystemPath(resolved)) {
-      throw new Error(`系统核心受保护路径禁止作为输出目录: ${resolved}`)
+      throw new Error(`Protected system path cannot be used as output directory: ${resolved}`)
     }
     return resolved
   }

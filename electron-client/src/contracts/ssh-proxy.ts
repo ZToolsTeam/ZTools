@@ -15,7 +15,7 @@ export function validSshTunnel(value: unknown): value is SshTunnel {
     typeof value.remoteHost === 'string' && /^(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,252}|\[[A-Fa-f0-9:]{2,45}\])$/.test(value.remoteHost)
 }
 export function validateSshProxyRequest(value: unknown): asserts value is SshProxyRequest {
-  const invalid = () => { throw new ZToolsError(errorCodes.invalidRequest, '主机与代理请求参数无效') }
+  const invalid = () => { throw new ZToolsError(errorCodes.invalidRequest, 'Invalid SSH/proxy request parameters') }
   if (!record(value) || typeof value.action !== 'string') return invalid()
   if (value.action === 'scan' || value.action === 'cancel') { if (!keys(value, ['action'])) invalid(); return }
   if (value.action === 'terminal-proxy') { if (!keys(value, ['action', 'port']) || !port(value.port)) invalid(); return }

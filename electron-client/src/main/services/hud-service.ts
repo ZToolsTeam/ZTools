@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { t } from '../i18n/index.js'
 
 export const DEFAULT_HUD_DURATION_MS = 1500
 export const MAX_HUD_MESSAGE_LENGTH = 1000
@@ -180,7 +181,7 @@ export class NoViewCommandDispatcher {
     hudDispatched: boolean
   }> {
     if (!command || typeof command.action !== 'function') {
-      return { success: false, error: '无效命令', hudDispatched: false }
+      return { success: false, error: t('hud.error.invalidCommand'), hudDispatched: false }
     }
 
     const isNoView = command.mode === 'no-view'
@@ -234,7 +235,7 @@ export class NoViewCommandDispatcher {
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err)
       if (isNoView) {
-        await this.hudService.showHUD(`执行失败: ${errMsg}`, 'error')
+        await this.hudService.showHUD(t('hud.error.executionFailed', { detail: errMsg }), 'error')
       }
       return { success: false, error: errMsg, hudDispatched: isNoView }
     }

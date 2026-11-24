@@ -238,7 +238,7 @@ test('程序图标缓存：同一程序只读一次、并发共用、程序升�
   assert.equal(runs, 4, '失败的读取不进缓存')
 
   for (const invalid of ['relative.app', '/Applications/file.png', '/bad\0.app']) {
-    await assert.rejects(cache.read(invalid), /无效/)
+    await assert.rejects(cache.read(invalid), /Invalid macOS application path/)
   }
 })
 

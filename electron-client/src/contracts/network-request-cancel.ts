@@ -10,13 +10,13 @@ export interface NetworkRequestCancellation {
 /** The channel is bound to network_http_request; callers cannot select another method. */
 export function parseNetworkRequestCancellation(value: unknown): NetworkRequestCancellation {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ZToolsError(errorCodes.invalidRequest, '网络请求取消参数无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid network request cancel parameters')
   }
   const source = value as Record<string, unknown>
   if (Object.keys(source).some(key => key !== 'messageId' && key !== 'reason') ||
       typeof source.messageId !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(source.messageId) ||
       (source.reason !== 'cancel' && source.reason !== 'timeout')) {
-    throw new ZToolsError(errorCodes.invalidRequest, '网络请求取消参数无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid network request cancel parameters')
   }
   return { messageId: source.messageId, reason: source.reason }
 }

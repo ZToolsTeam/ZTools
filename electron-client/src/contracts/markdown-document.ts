@@ -8,11 +8,11 @@ export type MarkdownDocumentParams =
   | { action: 'inspect' | 'copy' | 'export'; operationId: string; markdown: string; options: MarkdownOptions; outputPath?: string }
 export function validateMarkdownText(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value, 'utf8') > MAX_MARKDOWN_BYTES || /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/u.test(value) || Buffer.from(value, 'utf8').toString('utf8') !== value) {
-    throw new ZToolsError(errorCodes.invalidRequest, '请输入有效的 Markdown 文本（最多 256 KiB，不含无效字符）')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Provide valid Markdown text (max 256 KiB, without invalid characters)')
   }
 }
 export function validateMarkdownParams(value: unknown): asserts value is MarkdownDocumentParams {
-  const fail = (): never => { throw new ZToolsError(errorCodes.invalidRequest, 'Markdown 文档参数无效') }
+  const fail = (): never => { throw new ZToolsError(errorCodes.invalidRequest, 'Invalid Markdown document parameters') }
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) fail()
   const p = value as Record<string, unknown>, action = p.action
   if (typeof action !== 'string') fail()

@@ -60,7 +60,7 @@ export class FormulaModelStore {
     this.#stallTimeoutMs = options.stallTimeoutMs ?? 30_000
     this.#model = options.model ?? FORMULA_MODEL
     this.#totalBytes = this.#model.files.reduce((sum, file) => sum + file.size, 0)
-    if (!options.model && this.#totalBytes !== FORMULA_MODEL_TOTAL_BYTES) throw new Error('公式识别模型清单无效')
+    if (!options.model && this.#totalBytes !== FORMULA_MODEL_TOTAL_BYTES) throw new Error('Invalid formula recognition model manifest')
   }
 
   async status(): Promise<FormulaModelStatus> {
@@ -90,7 +90,7 @@ export class FormulaModelStore {
         (error: unknown) => {
           // 取消不算失败：回到“没有模型”，下次重新开始（已校验的文件会保留）
           this.#lastError = controller.signal.aborted ? undefined : (error instanceof Error ? error.message : String(error))
-          if (this.#lastError) console.warn('[FormulaModel] 下载失败:', this.#lastError)
+          if (this.#lastError) console.warn('[FormulaModel] Download failed:', this.#lastError)
         }
       ).finally(() => { if (this.#download === run) this.#download = undefined })
     }
@@ -155,19 +155,19 @@ export class FormulaModelStore {
       // 全部地址都失败过时仍逐个重试一遍，不因为前面的文件失败就直接放弃
       const sources = this.#model.sources.filter(source => !failedSources.has(source))
       for (const source of sources.length ? sources : this.#model.sources) {
-        if (run.controller.signal.aborted) throw new ZToolsError(errorCodes.cancelled, '下载已取消')
+        if (run.controller.signal.aborted) throw new ZToolsError(errorCodes.cancelled, 'Download cancelled')
         try {
           await this.#downloadFile(source + file.name, file, target, run.controller.signal, bytes => { run.receivedBytes = base + bytes })
           done = true
           break
         } catch (error) {
-          if (run.controller.signal.aborted) throw new ZToolsError(errorCodes.cancelled, '下载已取消')
-          issues.push(`${new URL(source).host}：${error instanceof Error ? error.message : String(error)}`)
+          if (run.controller.signal.aborted) throw new ZToolsError(errorCodes.cancelled, 'Download cancelled')
+          issues.push(`${new URL(source).host}: ${error instanceof Error ? error.message : String(error)}`)
           failedSources.add(source)
           run.receivedBytes = base
         }
       }
-      if (!done) throw new ZToolsError(errorCodes.networkError, `下载 ${file.name} 失败（${issues.join('；')}）`)
+      if (!done) throw new ZToolsError(errorCodes.networkError, `Failed to download ${file.name} (${issues.join('; ')})`)
       run.receivedBytes = base + file.size
     }
     const marker = { id: this.#model.id, files: this.#model.files.map(file => ({ name: file.name, sha256: file.sha256 })) }
@@ -191,7 +191,7 @@ export class FormulaModelStore {
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`)
       const declared = response.headers.get('content-length')
       if (declared !== null && Number(declared) !== file.size && (response.headers.get('content-encoding') ?? 'identity') === 'identity') {
-        throw new Error('文件大小与清单不一致')
+        throw new Error('File size does not match manifest')
       }
       const hash = createHash('sha256')
       const output = createWriteStream(temporary)
@@ -212,7 +212,7 @@ export class FormulaModelStore {
           if (part.done) break
           armStall()
           bytes += part.value.byteLength
-          if (bytes > file.size) throw new Error('文件大小与清单不一致')
+          if (bytes > file.size) throw new Error('File size does not match manifest')
           hash.update(part.value)
           if (!output.write(part.value)) await drained()
           progress(bytes)
@@ -221,14 +221,14 @@ export class FormulaModelStore {
         output.end()
         await closed
       }
-      if (bytes !== file.size) throw new Error('文件不完整')
-      if (hash.digest('hex') !== file.sha256) throw new Error('校验值不一致')
+      if (bytes !== file.size) throw new Error('Incomplete file download')
+      if (hash.digest('hex') !== file.sha256) throw new Error('Checksum mismatch')
       await fs.rename(temporary, target)
     } catch (error) {
       // 校验失败等提前结束时取消请求，不让连接在后台继续下载
       controller.abort()
       await fs.rm(temporary, { force: true }).catch(() => undefined)
-      if (stalled) throw new Error(`${Math.round(this.#stallTimeoutMs / 1000)} 秒没有收到数据`)
+      if (stalled) throw new Error(`No data received for ${Math.round(this.#stallTimeoutMs / 1000)} seconds`)
       throw error
     } finally {
       clearTimeout(stallTimer)

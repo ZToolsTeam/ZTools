@@ -14,15 +14,15 @@ export class ReferenceRegionCaptureService {
     private readonly afterSelection: (signal: AbortSignal) => Promise<void> = signal => delay(100, undefined, { signal })
   ) {}
   async capture(value: unknown, caller: CallerIdentity, signal: AbortSignal) {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length) throw new ZToolsError(errorCodes.invalidRequest, '区域选择不接受路径或预设参数')
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length) throw new ZToolsError(errorCodes.invalidRequest, 'Region selection does not accept path or preset parameters')
     if (this.#stopped || signal.aborted) throw cancelled()
-    if (this.#pending.size) throw new ZToolsError(errorCodes.pluginBusy, '区域选择正在处理中')
+    if (this.#pending.size) throw new ZToolsError(errorCodes.pluginBusy, 'Region selection is already in progress')
     if (caller.type === 'plugin' && !this.screen.beginCaptureAuthorization) {
-      throw new ZToolsError(errorCodes.notSupported, '屏幕采集授权服务未接线，已停止截图')
+      throw new ZToolsError(errorCodes.notSupported, 'Screen capture authorization service is not wired; capture aborted')
     }
     const lease = this.screen.beginCaptureAuthorization?.(caller)
     if (caller.type === 'plugin' && !lease) {
-      throw new ZToolsError(errorCodes.permissionDenied, '当前插件实例未获得屏幕采集授权')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Current plugin instance is not authorized for screen capture')
     }
     const controller = new AbortController(), combined = lease
       ? AbortSignal.any([controller.signal, signal, lease.signal])
@@ -33,7 +33,7 @@ export class ReferenceRegionCaptureService {
       if (this.#stopped || signal.aborted || controller.signal.aborted) throw cancelled()
       if (lease?.signal.aborted) {
         lease.assertCurrent()
-        throw new ZToolsError(errorCodes.permissionDenied, '屏幕采集授权已撤销')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Screen capture authorization has been revoked')
       }
       if (combined.aborted) throw cancelled()
       lease?.assertCurrent()
@@ -43,11 +43,11 @@ export class ReferenceRegionCaptureService {
       const fingerprint = (items: typeof displays) => JSON.stringify(items.map(item => ({ id: item.id, bounds: item.bounds, scaleFactor: item.scaleFactor, rotation: item.rotation })))
       const before = fingerprint(displays), rect = await this.selection.select(displays.map(display => ({ ...display.bounds })), combined)
       active(); if (!rect) return { success: true as const, cancelled: true as const }
-      try { await this.afterSelection(combined) } catch { active(); throw new ZToolsError(errorCodes.screenError, '选择窗口退出后的等待失败') }
+      try { await this.afterSelection(combined) } catch { active(); throw new ZToolsError(errorCodes.screenError, 'Failed waiting after selection overlay closed') }
       active()
-      if (fingerprint(this.screen.getAllDisplays().displays) !== before) throw new ZToolsError(errorCodes.screenError, '显示器布局已改变，请重新选择')
+      if (fingerprint(this.screen.getAllDisplays().displays) !== before) throw new ZToolsError(errorCodes.screenError, 'Display layout changed; please select again')
       // Selection is one display at a time; negative desktop origins remain valid.
-      if (!displays.some(display => rect.x >= display.bounds.x && rect.y >= display.bounds.y && rect.x + rect.width <= display.bounds.x + display.bounds.width && rect.y + rect.height <= display.bounds.y + display.bounds.height) || !['x', 'y', 'width', 'height'].every(key => Number.isSafeInteger(rect[key as keyof typeof rect])) || rect.width < 1 || rect.height < 1) throw new ZToolsError(errorCodes.screenError, '选区已失效')
+      if (!displays.some(display => rect.x >= display.bounds.x && rect.y >= display.bounds.y && rect.x + rect.width <= display.bounds.x + display.bounds.width && rect.y + rect.height <= display.bounds.y + display.bounds.height) || !['x', 'y', 'width', 'height'].every(key => Number.isSafeInteger(rect[key as keyof typeof rect])) || rect.width < 1 || rect.height < 1) throw new ZToolsError(errorCodes.screenError, 'Selection area is no longer valid')
       return await this.screen.captureReference({ rect }, caller, combined, lease)
     } finally { this.#pending.delete(caller.webContentsId); drain(); lease?.release() }
   }
@@ -56,4 +56,4 @@ export class ReferenceRegionCaptureService {
     await Promise.all(tasks.map(task => task.drained)); await this.selection.stop()
   }
 }
-function cancelled() { return new ZToolsError(errorCodes.callerDestroyed, '区域截图已取消') }
+function cancelled() { return new ZToolsError(errorCodes.callerDestroyed, 'Region capture cancelled') }

@@ -103,7 +103,7 @@ export async function loadApplicationIcon(
   }
 
   if (!icon || icon.isEmpty()) {
-    throw new Error('无法加载 ZTools 应用图标')
+    throw new Error('Failed to load ZTools application icon')
   }
 
   // 开发态 macOS 的 Dock 默认显示 Electron 图标，这里换成 ZTools 品牌图标。

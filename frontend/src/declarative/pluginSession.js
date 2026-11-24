@@ -15,7 +15,40 @@
  * 释放时先等宽限期（让卸载过程中的保存调用仍带令牌）与在途调用结束（最长 2 秒），再清令牌、发 close。
  */
 import { callHostMethod } from './hostMethods.js'
-import { t } from '@/i18n'
+
+const PLUGIN_SESSION_FALLBACK_MESSAGES = {
+  'zh-CN': {
+    'pluginSession.expired': '插件已更新或停止，请重新打开',
+    'pluginSession.invalidHostSession': '宿主返回的插件会话无效',
+    'pluginSession.notReady': '插件会话尚未就绪，请重新打开插件后重试',
+    'pluginSession.unsupportedHostMethod': '宿主不支持方法: {method}'
+  },
+  'en-US': {
+    'pluginSession.expired': 'Plugin has been updated or stopped; please reopen it',
+    'pluginSession.invalidHostSession': 'Host returned an invalid plugin session',
+    'pluginSession.notReady': 'Plugin session is not ready; please reopen the plugin and retry',
+    'pluginSession.unsupportedHostMethod': 'Host does not support method: {method}'
+  }
+}
+
+/** 兼容纯 Node 沙箱测试（无 Vite @/i18n 别名解析）的翻译辅助函数 */
+function t(key, params) {
+  if (typeof globalThis !== 'undefined' && typeof globalThis.__ztoolsTranslate === 'function') {
+    return globalThis.__ztoolsTranslate(key, params)
+  }
+  const rawLocale =
+    (typeof globalThis !== 'undefined' ? globalThis.__ztoolsLocale : '') ||
+    (typeof document !== 'undefined' ? document.documentElement?.lang : '') ||
+    'en-US'
+  const locale = String(rawLocale).toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US'
+  let text = PLUGIN_SESSION_FALLBACK_MESSAGES[locale]?.[key] ?? PLUGIN_SESSION_FALLBACK_MESSAGES['en-US'][key] ?? key
+  if (params && typeof params === 'object') {
+    for (const [k, v] of Object.entries(params)) {
+      text = text.replaceAll(`{${k}}`, String(v))
+    }
+  }
+  return text
+}
 
 export const SESSION_RELEASE_GRACE_MS = 250
 export const SESSION_INFLIGHT_SETTLE_MAX_MS = 2_000
@@ -102,7 +135,7 @@ export function createPluginSessionHolder(pluginId, options = {}) {
       }
       if (myGeneration !== generation || refs === 0) {
         // 打开途中已全部释放：立即关闭，不留残留
-        void call('declarative_session_close', { sessionId: data.sessionId }).catch((err) => logWarn('[plugin-session] 关闭孤儿会话失败:', err))
+        void call('declarative_session_close', { sessionId: data.sessionId }).catch((err) => logWarn('[plugin-session] Failed to close orphan session:', err))
         return
       }
       token = data.token
@@ -112,7 +145,7 @@ export function createPluginSessionHolder(pluginId, options = {}) {
       lastError = error
       // 宿主过旧（无此方法）属于预期；其余记 warn。插件照常渲染，需要归属的能力会报明确错误
       if (error?.code !== 'HOST_METHOD_UNAVAILABLE') {
-        logWarn(`[plugin-session] 插件 ${pluginId} 会话申请失败：${error?.message || error}`)
+        logWarn(`[plugin-session] Failed to acquire session for plugin ${pluginId}: ${error?.message || error}`)
       }
     } finally {
       if (myGeneration === generation) opening = null
@@ -133,7 +166,7 @@ export function createPluginSessionHolder(pluginId, options = {}) {
       try {
         await call('declarative_session_close', { sessionId: closing })
       } catch (err) {
-        logWarn('[plugin-session] 关闭插件会话失败:', err)
+        logWarn('[plugin-session] Failed to close plugin session:', err)
       }
     }
   }
@@ -192,13 +225,13 @@ export function createPluginSessionHolder(pluginId, options = {}) {
         try {
           listener()
         } catch (error) {
-          logWarn('[plugin-session] 退出旧插件视图失败:', error)
+          logWarn('[plugin-session] Failed to exit previous plugin view:', error)
         }
       }
       invalidationListeners.clear()
       if (closing) {
         void call('declarative_session_close', { sessionId: closing })
-          .catch(error => logWarn('[plugin-session] 关闭失效会话失败:', error))
+          .catch(error => logWarn('[plugin-session] Failed to close invalidated session:', error))
       }
     },
     get token() {
@@ -317,7 +350,7 @@ export function createScopedHostBridge(holder, realBridge) {
     setMessageCallback() {
       if (!warned) {
         warned = true
-        logWarn(`[plugin-session] 插件 ${holder.pluginId} 调用了 setMessageCallback，已忽略（该回调由宿主独占）`)
+        logWarn(`[plugin-session] Ignored setMessageCallback call from plugin ${holder.pluginId} (reserved for host)`)
       }
     }
   })

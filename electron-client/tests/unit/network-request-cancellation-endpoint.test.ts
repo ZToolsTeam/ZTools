@@ -47,7 +47,7 @@ test('Main cancellation endpoint binds plugin identity, real WebContents, main f
   })
   assert.deepEqual(subframeResponse, {
     messageId: 'network-1', success: false,
-    error: { code: 'PERMISSION_DENIED', message: '网络请求取消调用者无效' }
+    error: { code: 'PERMISSION_DENIED', message: 'Invalid caller for network request cancellation' }
   })
 
   release()

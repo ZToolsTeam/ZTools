@@ -17,18 +17,15 @@ import {
   storageGet,
   storageSet,
   storageDelete,
-  getLocalPlugins,
-  openPlugin,
   getDllPluginList,
-  callDllPlugin,
-  installPluginNative,
-  uninstallPluginNative
+  callDllPlugin
 } from '@/api/native'
-import { getMarketPlugins, getPluginDetails, getDownloadSign } from '@/api/apiserver'
+import { t } from '@/i18n'
 
 /** 按 ztools:// 协议地址读取文本（协议读取体检用），请求失败时抛出原始错误由体检项记录 */
 export async function readProtocolText(url) {
   const response = await fetch(url)
+  if (!response.ok) throw new Error(t('diagnostics.batch.httpReadFailed', { status: response.status }))
   return response.text()
 }
 
@@ -49,15 +46,8 @@ export function useDiagnosticsApi() {
     storageGet,
     storageSet,
     storageDelete,
-    getLocalPlugins,
-    openPlugin,
     getDllPluginList,
     callDllPlugin,
-    installPluginNative,
-    uninstallPluginNative,
-    getMarketPlugins,
-    getPluginDetails,
-    getDownloadSign,
     readProtocolText
   }
 }

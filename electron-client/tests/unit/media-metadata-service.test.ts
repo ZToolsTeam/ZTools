@@ -26,10 +26,10 @@ test('真实 ExifTool 隔离无效 locale，读取中文路径且不修改宿主
     const tags = await readMediaTags(file, signal())
     assert.equal(tagValue(tags, 'FileType'), 'JPEG')
     assert.equal(tagValue(tags, 'Artist'), artist)
-    await assert.rejects(runExifTool([file + '\0'], signal()), /空字符/)
+    await assert.rejects(runExifTool([file + '\0'], signal()), /null bytes/i)
     if (process.platform === 'win32') {
       for (const invalid of ['-Artist=x\n-overwrite_original', '-Artist=x\r-ver', '#-ver', ' -ver', '']) {
-        await assert.rejects(runExifTool([invalid, file], signal()), /逐行参数格式/)
+        await assert.rejects(runExifTool([invalid, file], signal()), /line-delimited argument format/i)
       }
     }
     for (const name of names) assert.equal(process.env[name], 'ztools_invalid_locale')
@@ -82,7 +82,7 @@ test('原文件变化、同一路径、错误扩展名和已有目标均不会�
   assert.equal(f.writes(), 0)
   f.failWrite(); await assert.rejects(f.clean(), /不可写/)
 })
-test('写入回执未知时报告未确认，不返回 committed', async () => { const f = fixture(); f.unknownWrite(); await assert.rejects(f.clean(), /未确认/) })
+test('写入回执未知时报告未确认，不返回 committed', async () => { const f = fixture(); f.unknownWrite(); await assert.rejects(f.clean(), /could not be confirmed/i) })
 test('损坏文件和超过大小限制的文件均拒绝，不写出占位副本', async () => {
   const f = fixture(); f.setBytes(Buffer.from('ZTOOLS_EXIF fake metadata'))
   await assert.rejects(f.clean()); assert.equal(f.writes(), 0)
@@ -91,7 +91,7 @@ test('损坏文件和超过大小限制的文件均拒绝，不写出占位副�
 test('真实 WAV 读取原参数，不伪造视频编码，也不允许清理', async () => {
   const wav = Buffer.alloc(46); wav.write('RIFF'); wav.writeUInt32LE(38, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(2, 40)
   const f = fixture(); f.setBytes(wav); const info = await f.inspect(); assert.equal(info.summary?.canClean, false); assert.equal(info.summary?.type, 'WAV')
-  assert.equal(JSON.stringify(info).includes('H264'), false); await assert.rejects(f.clean(), /扩展名|目前只支持/); assert.equal(f.writes(), 0)
+  assert.equal(JSON.stringify(info).includes('H264'), false); await assert.rejects(f.clean(), /extension|Only JPEG, PNG, and HEIC/i); assert.equal(f.writes(), 0)
 })
 test('错误枚举类型不能改变清理模式或触发写入', () => {
   const p = { action: 'clean', path: '/tmp/a.jpg', outputPath: '/tmp/b.jpg', operationId: 'a', digest: 'a'.repeat(64), mode: 'location' }
@@ -104,11 +104,11 @@ test('取消只作用于拥有该操作的窗口与插件，取消后可以再�
   assert.equal(f.service.cancel('clean', { ...caller, webContentsId: 702 }).cancelRequested, false)
   assert.equal(f.service.cancel('clean', { ...caller, pluginId: 'other' }).cancelRequested, false)
   assert.equal(f.service.cancel('clean', caller).cancelRequested, true)
-  await assert.rejects(pending, /取消/); assert.equal(f.writes(), 0); assert.equal((await f.inspect()).success, true)
+  await assert.rejects(pending, /cancelled/i); assert.equal(f.writes(), 0); assert.equal((await f.inspect()).success, true)
 })
 test('重复操作被拒绝，停机取消在途任务并拒绝新请求', async () => {
-  const f = fixture(), pending = f.clean(); await assert.rejects(f.inspect(), /稍后重试/)
-  f.service.stop(); await assert.rejects(pending, /取消/); await assert.rejects(f.inspect(), /稍后重试/); assert.equal(f.writes(), 0)
+  const f = fixture(), pending = f.clean(); await assert.rejects(f.inspect(), /temporarily unavailable/i)
+  f.service.stop(); await assert.rejects(pending, /cancelled/i); await assert.rejects(f.inspect(), /temporarily unavailable/i); assert.equal(f.writes(), 0)
 })
 test('已取消的调用不会启动子进程', async () => { const c = new AbortController(); c.abort(); await assert.rejects(runExifTool(['-ver'], c.signal)) })
 

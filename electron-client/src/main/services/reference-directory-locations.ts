@@ -3,7 +3,7 @@ import { grantId, type PathGrantRef } from '../../contracts/path-reference.js'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import type { PathGrantService, PathGrantOwnerLifecycle } from './path-grant-service.js'
 
-const denied = () => new ZToolsError(errorCodes.permissionDenied, '目录引用无效或已撤销')
+const denied = () => new ZToolsError(errorCodes.permissionDenied, 'Directory reference is invalid or has been revoked')
 
 /** SDK current-directory state is an owner-bound directory reference, never the process cwd or a path. */
 export class ReferenceDirectoryLocations {

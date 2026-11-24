@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { effectScope } from 'vue'
+import { flushPromises } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
+import { BUNDLED_VISIBILITY_SIGNAL, HIDDEN_BUNDLED_CONFIG_KEY, usePluginsStore } from '@/stores/plugins'
 import * as edition from '@edition'
 import {
   useCommandSearch,
@@ -26,6 +28,61 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
     setActivePinia(createPinia())
     localStorage.clear()
     vi.clearAllMocks()
+  })
+
+  it('工作台隐藏或恢复二维码插件，已打开的悬浮条同步更新主入口和两个命令', async () => {
+    const previousHost = window.ztools
+    const disk = new Map()
+    window.ztools = {
+      config: {
+        get: vi.fn(async (key, fallback) => disk.get(key) ?? fallback),
+        set: vi.fn(async (key, value) => {
+          disk.set(key, value)
+          return true
+        })
+      },
+      plugin: { getList: vi.fn().mockResolvedValue({ success: true, data: [] }) }
+    }
+    const workbench = usePluginsStore()
+    setActivePinia(createPinia())
+    const launcher = usePluginsStore()
+    const scope = effectScope()
+    try {
+      await Promise.all([workbench.fetchInstalledPlugins(), launcher.fetchInstalledPlugins()])
+      const search = scope.run(() => useCommandSearch({ enableFileSearch: false }))
+      search.search('二维码')
+      const matchingKeys = () => search.matchedPlugins.value.filter(item => item.pluginId === 'qr-code').map(item => item.key).sort()
+      const expected = ['qr-code', 'qr-code:qr-text', 'qr-code:qr-wifi']
+      expect(matchingKeys()).toEqual(expected)
+
+      // 浏览器只把 storage 事件发给另一窗口，本例的两个 Pinia 共享一个测试文档。
+      const deliverStorageEvent = () => window.dispatchEvent(new StorageEvent('storage', {
+        key: BUNDLED_VISIBILITY_SIGNAL, newValue: localStorage.getItem(BUNDLED_VISIBILITY_SIGNAL)
+      }))
+      await workbench.hideBundledPlugin('qr-code')
+      const firstSignal = localStorage.getItem(BUNDLED_VISIBILITY_SIGNAL)
+      expect(firstSignal).not.toBeNull()
+      deliverStorageEvent()
+      await flushPromises()
+      expect(matchingKeys()).toEqual([])
+      expect(launcher.installedSet.has('qr-code')).toBe(false)
+
+      await workbench.restoreBundledPlugin('qr-code')
+      expect(localStorage.getItem(BUNDLED_VISIBILITY_SIGNAL)).not.toBe(firstSignal)
+      deliverStorageEvent()
+      await flushPromises()
+      expect(matchingKeys()).toEqual(expected)
+      expect(launcher.installedSet.has('qr-code')).toBe(true)
+
+      // 已退出客户端时磁盘选择发生变化，冷启动仍以宿主配置为准。
+      disk.set(HIDDEN_BUNDLED_CONFIG_KEY, ['qr-code'])
+      const fresh = usePluginsStore(createPinia())
+      await fresh.fetchInstalledPlugins()
+      expect(fresh.installedSet.has('qr-code')).toBe(false)
+    } finally {
+      scope.stop()
+      window.ztools = previousHost
+    }
   })
 
   it('1. [Frecency 连续时间衰减与对数频次算法] 1 小时内不同时间点连续区分，近期高频综合加权', () => {
@@ -861,6 +918,141 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
       scope.stop()
       delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
       delete window.ztools
+      delete window.__ztoolsLauncher
+    }
+  })
+
+  it('14. [语言热切换即时刷新] 切换 locale 后 builtinSystemItems、applicationResults、fileResults 与 panelSystemToolItems 均即时刷新', async () => {
+    const { nextTick } = await import('vue')
+    const { setI18nLocale, getCurrentLocale } = await import('@/i18n')
+    const originalLocale = getCurrentLocale()
+
+    const getPanelDataMock = vi.fn().mockImplementation(async () => {
+      const isEn = getCurrentLocale() === 'en-US'
+      return {
+        success: true,
+        data: {
+          items: [
+            {
+              id: 'sys_control_panel',
+              name: isEn ? 'Control Panel' : '控制面板',
+              description: isEn ? 'Open Windows Control Panel' : '打开 Windows 控制面板',
+              type: 'system_tool',
+              keywords: ['control', 'kzmb']
+            }
+          ],
+          pinnedEntries: []
+        }
+      }
+    })
+
+    const searchFilesMock = vi.fn().mockImplementation(async (_q, _limit, opts) => {
+      if (opts?.scope === 'applications') {
+        return {
+          success: true,
+          data: {
+            scope: 'applications',
+            files: [
+              {
+                name: 'Notepad.lnk',
+                display_name: 'Notepad',
+                path: 'C:\\Apps\\Notepad.lnk',
+                kind: 'application',
+                is_dir: false,
+                size: 0,
+                mtime: 0
+              }
+            ]
+          }
+        }
+      }
+      return {
+        success: true,
+        data: {
+          files: [
+            { name: 'report.pdf', path: 'C:\\Docs\\report.pdf', kind: 'file', is_dir: false, size: 100, mtime: 1000 },
+            { name: 'Projects', path: 'C:\\Docs\\Projects', kind: 'file', is_dir: true, size: 0, mtime: 1000 }
+          ]
+        }
+      }
+    })
+
+    window.__ztoolsLauncher = {
+      getPanelData: getPanelDataMock,
+      searchFiles: searchFilesMock
+    }
+
+    const scope = effectScope()
+    try {
+      setI18nLocale('zh-CN')
+      const state = scope.run(() => useCommandSearch({ enableFileSearch: true, enableApplications: true }))
+
+      await state.refreshApplications({ force: true })
+      await state.refreshPanelData({ force: true })
+
+      // 触发一次文件搜索使 fileResults 填充文件与文件夹缓存
+      state.search('report')
+      await new Promise((r) => setTimeout(r, 120))
+      await nextTick()
+
+      // 中文态基线检查
+      expect(state.builtinSystemItems.value.find((i) => i.key === 'system-settings')?.name).toBe('系统设置')
+      expect(state.fileResults.value.find((i) => i.name === 'report.pdf')?.badge).toBe('文件')
+      expect(state.fileResults.value.find((i) => i.name === 'Projects')?.badge).toBe('文件夹')
+      expect(state.fileResults.value.find((i) => i.name === 'report.pdf')?.actionLabel).toBe('打开')
+
+      state.search('Notepad')
+      await nextTick()
+      const zhApp = state.filteredItems.value.find((i) => i.name === 'Notepad')
+      expect(zhApp?.badge).toBe('应用')
+      expect(zhApp?.actionLabel).toBe('打开')
+
+      state.search('control')
+      await nextTick()
+      const zhTool = state.filteredItems.value.find((i) => i.id === 'sys_control_panel')
+      expect(zhTool?.name).toBe('控制面板')
+      expect(zhTool?.badge).toBe('系统工具')
+
+      // 重新填回 fileResults 以便验证热切换
+      state.search('report')
+      await new Promise((r) => setTimeout(r, 120))
+      await nextTick()
+
+      const panelCallsBefore = getPanelDataMock.mock.calls.length
+
+      // 热切换到英文态
+      setI18nLocale('en-US')
+      await nextTick()
+      await Promise.resolve()
+      await nextTick()
+
+      // 1. builtinSystemItems 立即响应
+      expect(state.builtinSystemItems.value.find((i) => i.key === 'system-settings')?.name).toBe('System Settings')
+      expect(state.builtinSystemItems.value.find((i) => i.key === 'system-dashboard')?.name).toBe('Open Plugin Hub')
+
+      // 2. 已缓存的 fileResults 立即更新 badge 与 actionLabel
+      expect(state.fileResults.value.find((i) => i.name === 'report.pdf')?.badge).toBe('File')
+      expect(state.fileResults.value.find((i) => i.name === 'Projects')?.badge).toBe('Folder')
+      expect(state.fileResults.value.find((i) => i.name === 'report.pdf')?.actionLabel).toBe('Open')
+
+      // 3. 已缓存的 applicationResults 立即更新 badge 与 actionLabel
+      state.search('Notepad')
+      await nextTick()
+      const enApp = state.filteredItems.value.find((i) => i.name === 'Notepad')
+      expect(enApp?.badge).toBe('App')
+      expect(enApp?.actionLabel).toBe('Open')
+
+      // 4. panelSystemToolItems 自动向主进程重拉并刷新名称、描述、badge 与 actionLabel
+      expect(getPanelDataMock.mock.calls.length).toBeGreaterThan(panelCallsBefore)
+      state.search('control')
+      await nextTick()
+      const enTool = state.filteredItems.value.find((i) => i.id === 'sys_control_panel')
+      expect(enTool?.name).toBe('Control Panel')
+      expect(enTool?.badge).toBe('System Tool')
+      expect(enTool?.actionLabel).toBe('Open')
+    } finally {
+      scope.stop()
+      setI18nLocale(originalLocale)
       delete window.__ztoolsLauncher
     }
   })

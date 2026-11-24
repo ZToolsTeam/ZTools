@@ -13,7 +13,7 @@ import type { ReferenceHandler } from './reference-endpoint.js'
 
 function empty(value: unknown): void {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).length) {
-    throw new ZToolsError(errorCodes.invalidRequest, '此文件请求不接受参数')
+    throw new ZToolsError(errorCodes.invalidRequest, 'This file request does not accept parameters')
   }
 }
 /** Source composition for reference-producing dialogs/clipboard/capture; no legacy path fallback. */
@@ -26,13 +26,13 @@ export function createReferenceProducerHandlers(services: {
   grants: Pick<PathGrantService, 'revoke'>
 }): Partial<Record<ReferenceMethod, ReferenceHandler>> {
   const disposeUndelivered = async (value: unknown, caller: CallerIdentity) => {
-    if (!value || typeof value !== 'object') throw new ZToolsError(errorCodes.fileError, '未交付响应无效')
+    if (!value || typeof value !== 'object') throw new ZToolsError(errorCodes.fileError, 'Invalid undelivered response')
     const result = value as { reference?: unknown; references?: unknown; files?: unknown }
     const refs = result.reference ? [result.reference] : result.references ?? result.files ?? []
-    if (!Array.isArray(refs) || refs.length > 256) throw new ZToolsError(errorCodes.fileError, '未交付引用超出上限')
+    if (!Array.isArray(refs) || refs.length > 256) throw new ZToolsError(errorCodes.fileError, 'Undelivered references exceed maximum limit')
     const ids = [...new Set(refs.map(ref => grantId((ref as { grantId?: unknown })?.grantId)))]
     const settled = await Promise.allSettled(ids.map(id => services.grants.revoke(caller.webContentsId, id)))
-    if (settled.some(item => item.status === 'rejected')) throw new ZToolsError(errorCodes.fileError, '未交付引用释放未确认')
+    if (settled.some(item => item.status === 'rejected')) throw new ZToolsError(errorCodes.fileError, 'Release of undelivered references was not confirmed')
   }
   const producer = (execute: ReferenceHandler['execute']): ReferenceHandler => ({ execute, disposeUndelivered })
   const dialog = (mode: 'open' | 'save' | 'folder') => producer(async (value, caller, signal) =>

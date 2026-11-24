@@ -1,6 +1,13 @@
+import { resolveSdkText } from '../core/environment.js'
 const CAPABILITY_REQUEST_TIMEOUT_MS = 120_000
 
-function permissionError(message = '屏幕访问未获授权。如需使用，请关闭并重新打开该插件以再次发起授权申请。') {
+
+function permissionError(
+  message = resolveSdkText(
+    '屏幕访问未获授权。如需使用，请关闭并重新打开该插件以再次发起授权申请。',
+    'Screen access is not authorized. Please close and reopen this plugin to request permission again.'
+  )
+) {
   return Object.assign(new Error(message), { code: 'PERMISSION_DENIED' })
 }
 

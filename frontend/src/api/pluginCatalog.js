@@ -1,4 +1,6 @@
 import { getPluginCategories } from '../utils/pluginCategories'
+import { getLocalizedPluginField, mergePluginI18n } from '../utils/pluginI18n'
+import { resolveErrorMessage } from '../utils/errorMessage'
 import { t } from '@/i18n'
 /**
  * 插件目录（CDN 静态索引）公共能力
@@ -100,6 +102,9 @@ export function normalizeCatalogEntry(found, pluginId = '') {
   const localMeta = getBundledPluginEntry(resolvedId) || getStoreOfficialPluginMeta(resolvedId)
   const sha256 = found.sha256 || found.checksum || ''
   const category = getPluginCategories(localMeta?.category || found.category)
+  const mergedI18n = mergePluginI18n(found.i18n, localMeta?.i18n)
+  const defaultLocale = localMeta?.defaultLocale || found.defaultLocale
+  const categoryId = localMeta?.categoryId || found.categoryId
   return {
     ...found,
     id: resolvedId,
@@ -108,6 +113,9 @@ export function normalizeCatalogEntry(found, pluginId = '') {
     title: localMeta?.title || localMeta?.name || found.title || found.name || resolvedId,
     description: localMeta?.description || found.description || '',
     category,
+    ...(categoryId ? { categoryId } : {}),
+    ...(defaultLocale ? { defaultLocale } : {}),
+    ...(mergedI18n ? { i18n: mergedI18n } : {}),
     version: found.version || '1.0.0',
     downloadUrl: found.downloadUrl || '',
     sha256,
@@ -139,7 +147,7 @@ export async function findInV2StaticCatalog(pluginId, options) {
 export function buildCatalogDownloadInfo(entry) {
   if (!entry) return null
   if (entry.revoked) {
-    const reason = entry.revokedReason || entry.revoked_reason || t('pluginCatalog.revokedDefaultReason')
+    const reason = getLocalizedPluginField(entry, 'revokedReason') || t('pluginCatalog.revokedDefaultReason')
     const err = new Error(t('pluginCatalog.revokedWithReason', { reason }))
     err.code = 'PLUGIN_REVOKED'
     throw err
@@ -170,7 +178,7 @@ export function normalizePluginVersionError(payload = {}) {
   const data = payload.data || payload
   const errors = data.errors || payload.errors || {}
   const err = new Error(
-    data.message || payload.message || t('pluginCatalog.versionIncompatible')
+    resolveErrorMessage(data?.message ? data : payload, 'pluginCatalog.versionIncompatible')
   )
   err.code = data.code || payload.code || errors.code || PLUGIN_VERSION_INCOMPATIBLE
   err.status = payload.status || data.status || 426
@@ -200,7 +208,7 @@ export function getPluginVersionIncompatibleMessage(err) {
     return t('pluginCatalog.versionTooLow', { current: currentAppVersion, min: minAppVersion })
   }
 
-  return err?.message || t('pluginCatalog.versionIncompatible')
+  return resolveErrorMessage(err, 'pluginCatalog.versionIncompatible')
 }
 
 /**
@@ -251,7 +259,8 @@ export function buildCatalogUpdateInfo(entry, currentVersion, platform) {
     return {
       ...noUpdate(pluginId, t('pluginCatalog.revokedShort')),
       revoked: true,
-      revokedReason: entry.revokedReason || entry.revoked_reason || t('pluginCatalog.revokedDisabledReason')
+      revokedReason: getLocalizedPluginField(entry, 'revokedReason') || t('pluginCatalog.revokedDisabledReason'),
+      ...(entry.i18n && typeof entry.i18n === 'object' ? { i18n: entry.i18n } : {})
     }
   }
   if (entry?.draft) return noUpdate(pluginId, t('pluginCatalog.notPublished'))

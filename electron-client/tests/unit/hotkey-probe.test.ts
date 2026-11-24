@@ -36,12 +36,12 @@ test('协议→服务→原生端口：已有绑定不注册不撤销，系统�
 })
 test('并发请求互斥，失败/取消清理busy，迟到结果丢弃', async () => {
   const f=fixture();f.state.pending=true;const abort=new AbortController(), pending=f.call(['Cmd+P'],abort.signal)
-  await assert.rejects(f.call(['Cmd+K']),/正在检测/);abort.abort();f.finish();await assert.rejects(pending,/取消/)
+  await assert.rejects(f.call(['Cmd+K']),/currently probing/i);abort.abort();f.finish();await assert.rejects(pending,/cancelled/i)
   f.state.pending=false;f.state.fail=true;await assert.rejects(f.call(['Cmd+P']),/系统检测失败/);f.state.fail=false;assert.equal((await f.call(['Cmd+P'])).success,true)
 })
 test('取消、未ready、暂停不探测；原生文件缺失明确失败', async () => {
-  const f=fixture(), abort=new AbortController();abort.abort();await assert.rejects(f.call(['Cmd+P'],abort.signal),/取消/)
-  f.state.ready=false;await assert.rejects(f.call(['Cmd+P']),/就绪/);f.state.ready=true;f.state.suspended=true;await assert.rejects(f.call(['Cmd+P']),/暂停/);assert.deepEqual(f.calls,[])
+  const f=fixture(), abort=new AbortController();abort.abort();await assert.rejects(f.call(['Cmd+P'],abort.signal),/cancelled/i)
+  f.state.ready=false;await assert.rejects(f.call(['Cmd+P']),/not ready/i);f.state.ready=true;f.state.suspended=true;await assert.rejects(f.call(['Cmd+P']),/suspended/i);assert.deepEqual(f.calls,[])
   await assert.rejects(nativeHotkeyProbe('/nonexistent-ztools-hotkey-component')(['Command+P']),/ENOENT/)
 })
 test('Mac旧DLL兼容入口失败关闭，不接受假探测和假结束进程', {skip:process.platform!=='darwin'}, async()=>{

@@ -354,7 +354,7 @@ test('screen capture preserves source errors when the post-failure TCC status is
       service.capture({}, caller, new AbortController().signal),
       (error) => error instanceof ZToolsError &&
         error.code === errorCodes.screenError &&
-        error.message === '屏幕操作失败' &&
+        error.message === 'Screen operation failed' &&
         !error.message.includes('desktopCapturer failed')
     )
     assert.equal(permissionReads, 2)

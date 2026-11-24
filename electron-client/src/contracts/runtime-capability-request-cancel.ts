@@ -9,13 +9,13 @@ export interface RuntimeCapabilityRequestCancellation {
 
 export function parseRuntimeCapabilityRequestCancellation(value: unknown): RuntimeCapabilityRequestCancellation {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ZToolsError(errorCodes.invalidRequest, '屏幕权限申请取消请求无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid screen capture permission cancel request')
   }
   const source = value as Record<string, unknown>
   if (Object.keys(source).some(key => key !== 'messageId' && key !== 'reason') ||
       typeof source.messageId !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(source.messageId) ||
       (source.reason !== 'cancel' && source.reason !== 'timeout')) {
-    throw new ZToolsError(errorCodes.invalidRequest, '屏幕权限申请取消请求无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid screen capture permission cancel request')
   }
   return { messageId: source.messageId as string, reason: source.reason as 'cancel' | 'timeout' }
 }

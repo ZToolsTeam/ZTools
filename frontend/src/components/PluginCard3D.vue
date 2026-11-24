@@ -2,6 +2,8 @@
 import { BanIcon, DownloadIcon, RotateCcwIcon, RotateCwIcon, StarIcon, Trash2Icon, TriangleAlertIcon } from '@lucide/vue'
 import { GithubLogo, StarFilledIcon } from '@/utils/appIcons'
 import { computed, ref } from 'vue'
+import { RouterLink } from 'vue-router'
+import { ROUTES } from '@/router/routes'
 import { downloadPluginUpdate } from '@/api/apiserver'
 import { usePluginsStore } from '@/stores/plugins'
 import { isCommunityPluginItem, isOfficialPluginItem } from '@/utils/storeCatalogManager'
@@ -10,7 +12,7 @@ import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { getPluginPlatforms } from '@/utils/platform'
 import { track } from '@edition'
 import { useAppI18n } from '@/i18n'
-import { getLocalizedPluginName, getLocalizedPluginDescription } from '@/utils/pluginI18n'
+import { getLocalizedPluginName, getLocalizedPluginDescription, getLocalizedPluginField } from '@/utils/pluginI18n'
 
 const { t } = useAppI18n()
 
@@ -21,6 +23,7 @@ const props = defineProps({
   installFailed: { type: Boolean, default: false },
   updateInfo: { type: Object, default: null },
   showFavorite: { type: Boolean, default: false },
+  actionTabindex: { type: Number, default: 0 },
   isFavorite: { type: Boolean, default: false },
   // 评分汇总 { average: number|null, count }；只有 average 有值时显示（开源版没有评分，始终不传）
   ratingSummary: { type: Object, default: null },
@@ -44,7 +47,7 @@ const isRevoked = computed(() =>
   Boolean(props.plugin.revoked || pluginsStore.isRevoked(props.plugin.pluginId))
 )
 const revokedReason = computed(() =>
-  props.plugin.revoked_reason || props.plugin.revokedReason || pluginsStore.getRevokedReason(props.plugin.pluginId) || t('market.revokedDefaultReason')
+  getLocalizedPluginField(props.plugin, 'revokedReason') || pluginsStore.getRevokedReason(props.plugin.pluginId) || t('market.revokedDefaultReason')
 )
 // 插件目录里的新版本不再支持当前系统时也会禁用，文案与官方下架区分开
 const isPlatformUnsupported = computed(() =>
@@ -169,7 +172,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             <span
               v-if="ratingText"
               class="card-rating"
-              :title="t('market.card.ratingTooltip', { score: ratingText, count: ratingSummary.count })"
+              :title="t('market.card.ratingTooltip', { score: ratingText, count: ratingSummary.count }, ratingSummary.count)"
               :aria-label="t('market.card.ratingAria', { score: ratingText })"
             >
               <StarFilledIcon class="card-rating-star" aria-hidden="true" />{{ ratingText }}
@@ -201,6 +204,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
         >
           <!-- 源码/GitHub 跳转按钮：官方插件隐藏，展示官方认证；社区插件展示源码按钮 -->
           <a
+            :tabindex="actionTabindex"
             v-if="!isOfficial && (plugin.homepage_url || plugin.homepage || plugin.github_url)"
             :href="plugin.homepage_url || plugin.homepage || plugin.github_url"
             target="_blank"
@@ -212,6 +216,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
           </a>
 
           <button
+            :tabindex="actionTabindex"
             v-if="showFavorite"
             class="card-icon-btn"
             :class="{ 'is-active': isFavorite }"
@@ -222,6 +227,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
           </button>
 
           <button
+            :tabindex="actionTabindex"
             v-if="hasUpdate"
             class="card-icon-btn update"
             :title="t('common.update')"
@@ -234,9 +240,20 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
 
           <!-- 已下架插件：禁用启动，标红提示 [已下架]，引导一键安全卸载 -->
           <template v-if="isRevoked">
+            <RouterLink
+              v-if="isInstalled && isBundled"
+              v-slot="{ navigate }"
+              :to="{ ...ROUTES.ADVANCED_SETTINGS, query: { manageBundled: plugin.pluginId } }"
+              custom
+            >
+              <RcButton class="card-action" size="xs" variant="secondary" :tabindex="actionTabindex" @click.stop="navigate">
+                {{ t('myPage.manageBundledTitle') }}
+              </RcButton>
+            </RouterLink>
             <RcButton
-            class="card-action"
-              v-if="isInstalled"
+              v-else-if="isInstalled"
+              class="card-action"
+              :tabindex="actionTabindex"
               size="xs"
               variant="danger"
               :icon="Trash2Icon"
@@ -246,8 +263,9 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
               {{ t('common.uninstall') }}
             </RcButton>
             <RcButton
-            class="card-action"
               v-else
+              class="card-action"
+              :tabindex="actionTabindex"
               size="xs"
               variant="ghost"
               :disabled="true"
@@ -259,6 +277,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             </RcButton>
           </template>
           <RcButton
+            :tabindex="actionTabindex"
             class="card-action"
             v-else-if="isDownloading"
             size="xs"
@@ -268,6 +287,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             {{ t('common.installing') }}
           </RcButton>
           <RcButton
+            :tabindex="actionTabindex"
             class="card-action"
             v-else-if="installFailed && !isInstalled"
             size="xs"
@@ -279,6 +299,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             {{ t('common.retry') }}
           </RcButton>
           <RcButton
+            :tabindex="actionTabindex"
             class="card-action"
             v-else-if="isInstalled"
             size="xs"
@@ -288,6 +309,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             {{ t('common.open') }}
           </RcButton>
           <RcButton
+            :tabindex="actionTabindex"
             class="card-action"
             v-else-if="isBundled"
             size="xs"
@@ -298,6 +320,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             {{ t('common.restore') }}
           </RcButton>
           <RcButton
+            :tabindex="actionTabindex"
             class="card-action"
             v-else
             size="xs"

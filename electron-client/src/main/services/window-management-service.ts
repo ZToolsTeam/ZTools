@@ -1,5 +1,6 @@
 import type { SidecarManager } from './sidecar-manager.js'
 import type { HudService } from './hud-service.js'
+import { t, type SupportedLocale } from '../i18n/index.js'
 
 export type WindowActionName =
   | 'left-half'
@@ -33,158 +34,78 @@ export interface WindowActionMeta {
   shortcut?: string
 }
 
-export const WINDOW_ACTIONS: Record<WindowActionName, WindowActionMeta> = {
-  'left-half': {
-    name: 'left-half',
-    title: '左半屏',
-    description: '将当前活动窗口吸附到屏幕左半部分',
-    category: 'halves',
-    icon: 'window-left',
-    shortcut: 'Ctrl+Alt+Left'
-  },
-  'right-half': {
-    name: 'right-half',
-    title: '右半屏',
-    description: '将当前活动窗口吸附到屏幕右半部分',
-    category: 'halves',
-    icon: 'window-right',
-    shortcut: 'Ctrl+Alt+Right'
-  },
-  'top-half': {
-    name: 'top-half',
-    title: '上半屏',
-    description: '将当前活动窗口吸附到屏幕上半部分',
-    category: 'halves',
-    icon: 'window-top',
-    shortcut: 'Ctrl+Alt+Up'
-  },
-  'bottom-half': {
-    name: 'bottom-half',
-    title: '下半屏',
-    description: '将当前活动窗口吸附到屏幕下半部分',
-    category: 'halves',
-    icon: 'window-bottom',
-    shortcut: 'Ctrl+Alt+Down'
-  },
-  'top-left': {
-    name: 'top-left',
-    title: '左上角四分之一',
-    description: '将当前窗口排列到屏幕左上四分之一区域',
-    category: 'corners',
-    icon: 'window-top-left',
-    shortcut: 'Ctrl+Alt+U'
-  },
-  'top-right': {
-    name: 'top-right',
-    title: '右上角四分之一',
-    description: '将当前窗口排列到屏幕右上四分之一区域',
-    category: 'corners',
-    icon: 'window-top-right',
-    shortcut: 'Ctrl+Alt+I'
-  },
-  'bottom-left': {
-    name: 'bottom-left',
-    title: '左下角四分之一',
-    description: '将当前窗口排列到屏幕左下四分之一区域',
-    category: 'corners',
-    icon: 'window-bottom-left',
-    shortcut: 'Ctrl+Alt+J'
-  },
-  'bottom-right': {
-    name: 'bottom-right',
-    title: '右下角四分之一',
-    description: '将当前窗口排列到屏幕右下四分之一区域',
-    category: 'corners',
-    icon: 'window-bottom-right',
-    shortcut: 'Ctrl+Alt+K'
-  },
-  'first-third': {
-    name: 'first-third',
-    title: '左侧三分之一',
-    description: '将当前窗口调整为屏幕左侧三分之一宽度',
-    category: 'thirds',
-    icon: 'window-third-left',
-    shortcut: 'Ctrl+Alt+D'
-  },
-  'center-third': {
-    name: 'center-third',
-    title: '中间三分之一',
-    description: '将当前窗口居中并调整为三分之一宽度',
-    category: 'thirds',
-    icon: 'window-third-center',
-    shortcut: 'Ctrl+Alt+F'
-  },
-  'last-third': {
-    name: 'last-third',
-    title: '右侧三分之一',
-    description: '将当前窗口调整为屏幕右侧三分之一宽度',
-    category: 'thirds',
-    icon: 'window-third-right',
-    shortcut: 'Ctrl+Alt+G'
-  },
-  'first-two-thirds': {
-    name: 'first-two-thirds',
-    title: '左侧三分之二',
-    description: '将当前窗口调整为屏幕左侧三分之二宽度',
-    category: 'thirds',
-    icon: 'window-two-thirds-left',
-    shortcut: 'Ctrl+Alt+E'
-  },
-  'last-two-thirds': {
-    name: 'last-two-thirds',
-    title: '右侧三分之二',
-    description: '将当前窗口调整为屏幕右侧三分之二宽度',
-    category: 'thirds',
-    icon: 'window-two-thirds-right',
-    shortcut: 'Ctrl+Alt+T'
-  },
-  'maximize': {
-    name: 'maximize',
-    title: '最大化',
-    description: '将当前活动窗口最大化充满整个工作区（避让任务栏）',
-    category: 'sizes',
-    icon: 'window-maximize',
-    shortcut: 'Ctrl+Alt+Return'
-  },
-  'center': {
-    name: 'center',
-    title: '居中显示',
-    description: '将当前活动窗口居中，保持适中比例',
-    category: 'sizes',
-    icon: 'window-center',
-    shortcut: 'Ctrl+Alt+C'
-  },
-  'restore': {
-    name: 'restore',
-    title: '还原原始大小',
-    description: '将活动窗口还原至调整前的上一位置与尺寸',
-    category: 'sizes',
-    icon: 'window-restore'
-  },
-  'reasonable-size': {
-    name: 'reasonable-size',
-    title: '适中黄金比例',
-    description: '调整窗口为屏幕宽度的 60%、高度的 80%',
-    category: 'sizes',
-    icon: 'window-aspect'
-  },
-  'make-larger': {
-    name: 'make-larger',
-    title: '按比例微调放大',
-    description: '将活动窗口各边向外延伸 50 像素',
-    category: 'sizes',
-    icon: 'window-plus'
-  },
-  'make-smaller': {
-    name: 'make-smaller',
-    title: '按比例微调缩小',
-    description: '将活动窗口各边向内收缩 50 像素',
-    category: 'sizes',
-    icon: 'window-minus'
-  },
-  'next-display': { name: 'next-display', title: '移到下一显示器', description: '将窗口移动到下一显示器的工作区', category: 'display', icon: 'monitor' },
-  'previous-display': { name: 'previous-display', title: '移到上一显示器', description: '将窗口移动到上一显示器的工作区', category: 'display', icon: 'monitor' }
+interface WindowActionSpec {
+  readonly name: WindowActionName
+  readonly category: 'halves' | 'corners' | 'thirds' | 'sizes' | 'display'
+  readonly icon: string
+  readonly shortcut?: string
 }
+
+const WINDOW_ACTION_SPECS: Record<WindowActionName, WindowActionSpec> = {
+  'left-half': { name: 'left-half', category: 'halves', icon: 'window-left', shortcut: 'Ctrl+Alt+Left' },
+  'right-half': { name: 'right-half', category: 'halves', icon: 'window-right', shortcut: 'Ctrl+Alt+Right' },
+  'top-half': { name: 'top-half', category: 'halves', icon: 'window-top', shortcut: 'Ctrl+Alt+Up' },
+  'bottom-half': { name: 'bottom-half', category: 'halves', icon: 'window-bottom', shortcut: 'Ctrl+Alt+Down' },
+  'top-left': { name: 'top-left', category: 'corners', icon: 'window-top-left', shortcut: 'Ctrl+Alt+U' },
+  'top-right': { name: 'top-right', category: 'corners', icon: 'window-top-right', shortcut: 'Ctrl+Alt+I' },
+  'bottom-left': { name: 'bottom-left', category: 'corners', icon: 'window-bottom-left', shortcut: 'Ctrl+Alt+J' },
+  'bottom-right': { name: 'bottom-right', category: 'corners', icon: 'window-bottom-right', shortcut: 'Ctrl+Alt+K' },
+  'first-third': { name: 'first-third', category: 'thirds', icon: 'window-third-left', shortcut: 'Ctrl+Alt+D' },
+  'center-third': { name: 'center-third', category: 'thirds', icon: 'window-third-center', shortcut: 'Ctrl+Alt+F' },
+  'last-third': { name: 'last-third', category: 'thirds', icon: 'window-third-right', shortcut: 'Ctrl+Alt+G' },
+  'first-two-thirds': { name: 'first-two-thirds', category: 'thirds', icon: 'window-two-thirds-left', shortcut: 'Ctrl+Alt+E' },
+  'last-two-thirds': { name: 'last-two-thirds', category: 'thirds', icon: 'window-two-thirds-right', shortcut: 'Ctrl+Alt+T' },
+  'maximize': { name: 'maximize', category: 'sizes', icon: 'window-maximize', shortcut: 'Ctrl+Alt+Return' },
+  'center': { name: 'center', category: 'sizes', icon: 'window-center', shortcut: 'Ctrl+Alt+C' },
+  'restore': { name: 'restore', category: 'sizes', icon: 'window-restore' },
+  'reasonable-size': { name: 'reasonable-size', category: 'sizes', icon: 'window-aspect' },
+  'make-larger': { name: 'make-larger', category: 'sizes', icon: 'window-plus' },
+  'make-smaller': { name: 'make-smaller', category: 'sizes', icon: 'window-minus' },
+  'next-display': { name: 'next-display', category: 'display', icon: 'monitor' },
+  'previous-display': { name: 'previous-display', category: 'display', icon: 'monitor' }
+}
+
+/** 按当前或指定 locale 实时构造窗口动作元数据快照 */
+export function getWindowActionMeta(action: WindowActionName, locale?: SupportedLocale): WindowActionMeta {
+  const spec = WINDOW_ACTION_SPECS[action]
+  return {
+    name: spec.name,
+    title: t(`windowActions.${spec.name}.title`, undefined, locale),
+    description: t(`windowActions.${spec.name}.description`, undefined, locale),
+    category: spec.category,
+    icon: spec.icon,
+    ...(spec.shortcut ? { shortcut: spec.shortcut } : {})
+  }
+}
+
+function createDynamicActionMeta(spec: WindowActionSpec): WindowActionMeta {
+  const meta: WindowActionMeta = {
+    name: spec.name,
+    title: '',
+    description: '',
+    category: spec.category,
+    icon: spec.icon,
+    ...(spec.shortcut ? { shortcut: spec.shortcut } : {})
+  }
+  Object.defineProperties(meta, {
+    title: {
+      enumerable: true,
+      get: () => t(`windowActions.${spec.name}.title`)
+    },
+    description: {
+      enumerable: true,
+      get: () => t(`windowActions.${spec.name}.description`)
+    }
+  })
+  return meta
+}
+
+export const WINDOW_ACTIONS: Record<WindowActionName, WindowActionMeta> = Object.fromEntries(
+  (Object.keys(WINDOW_ACTION_SPECS) as WindowActionName[]).map((name) => [
+    name,
+    createDynamicActionMeta(WINDOW_ACTION_SPECS[name])
+  ])
+) as Record<WindowActionName, WindowActionMeta>
 
 export interface WindowBounds {
   x: number
@@ -424,9 +345,11 @@ export class WindowManagementService {
    * 获取所有支持的分屏动作清单
    */
   public listActions(): WindowActionMeta[] {
-    return Object.values(WINDOW_ACTIONS).filter(action => process.platform === 'win32'
-      ? action.name !== 'restore'
-      : action.name !== 'next-display' && action.name !== 'previous-display')
+    return (Object.keys(WINDOW_ACTION_SPECS) as WindowActionName[])
+      .filter((name) => process.platform === 'win32'
+        ? name !== 'restore'
+        : name !== 'next-display' && name !== 'previous-display')
+      .map((name) => getWindowActionMeta(name))
   }
 
   /**
@@ -441,15 +364,20 @@ export class WindowManagementService {
       return {
         success: false,
         action: (actionName as WindowActionName) || 'center',
-        title: actionName || '未知动作',
-        error: `不支持的窗口调度动作: "${actionName}"`
+        title: actionName || t('windowActions.error.unknownAction'),
+        error: t('windowActions.error.unsupportedAction', { action: actionName })
       }
     }
 
     // Windows 的目标窗口、显示器与几何由原生进程读取，不能采用插件或缓存估算的坐标。
     if (process.platform === 'win32') return this.applyWindowsAction(normalized, context)
     if (normalized === 'next-display' || normalized === 'previous-display') {
-      return { success: false, action: normalized, title: WINDOW_ACTIONS[normalized].title, error: '当前平台不支持跨显示器动作' }
+      return {
+        success: false,
+        action: normalized,
+        title: getWindowActionMeta(normalized).title,
+        error: t('windowActions.error.crossDisplayUnsupported')
+      }
     }
 
     // 解析真实目标窗口（若当前传入的是 ZTools 主界面或未传，自动回退至 lastExternalForegroundHwnd）
@@ -471,13 +399,13 @@ export class WindowManagementService {
       height: 700
     }
     const workArea = context.workArea ?? this.defaultWorkArea
-    const meta = WINDOW_ACTIONS[normalized]
+    const meta = getWindowActionMeta(normalized)
 
     // 恢复窗口动作处理
     if (normalized === 'restore') {
       const savedBounds = this.getSavedWindowState(targetWindowId)
       if (!savedBounds) {
-        const errMsg = '未找到该窗口的上一位置状态 (No previous window state)'
+        const errMsg = t('windowActions.error.noPreviousState')
         if (this.options.hudService) {
           try {
             void this.options.hudService.showHUD(errMsg, {
@@ -506,7 +434,10 @@ export class WindowManagementService {
           error: err instanceof Error ? err.message : String(err)
         }))
         if (!sidecarRes || sidecarRes.success === false) {
-          const errMsg = sidecarRes?.error || '窗口调度失败'
+          if (sidecarRes?.error) {
+            console.warn('[WindowManagementService] Sidecar restore failed:', sidecarRes.error)
+          }
+          const errMsg = t('windowActions.error.dispatchFailed')
           return {
             success: false,
             action: 'restore',
@@ -530,7 +461,7 @@ export class WindowManagementService {
 
       if (this.options.hudService) {
         try {
-          void this.options.hudService.showHUD(`窗口已${meta.title}`, {
+          void this.options.hudService.showHUD(t('windowActions.hud.applied', { title: meta.title }), {
             icon: meta.icon,
             durationMs: 1200
           })
@@ -557,7 +488,10 @@ export class WindowManagementService {
     if (this.options.sidecarManager) {
       const sidecarRes = await this.options.sidecarManager.manageWindow(normalized, targetRect)
       if (!sidecarRes || sidecarRes.success === false) {
-        const errMsg = sidecarRes?.error || '窗口调度失败'
+        if (sidecarRes?.error) {
+          console.warn('[WindowManagementService] Sidecar window action failed:', normalized, sidecarRes.error)
+        }
+        const errMsg = t('windowActions.error.dispatchFailed')
         return {
           success: false,
           action: normalized,
@@ -583,7 +517,7 @@ export class WindowManagementService {
 
     if (this.options.hudService) {
       try {
-        void this.options.hudService.showHUD(`窗口已${meta.title}`, {
+        void this.options.hudService.showHUD(t('windowActions.hud.applied', { title: meta.title }), {
           icon: meta.icon,
           durationMs: 1200
         })
@@ -611,20 +545,23 @@ export class WindowManagementService {
   ): Promise<WindowActionResult> {
     const normalized = this.normalizeActionName(action)
     const failure = (error: string): WindowActionResult => ({ success: false, action: normalized || 'center', title: action, error })
-    if (!normalized || !this.listActions().some(item => item.name === normalized)) return failure('不支持的窗口调度动作')
-    if (!this.options.sidecarManager || window.isDestroyed() || signal?.aborted) return failure('窗口管理不可用或操作已取消')
+    if (!normalized || !this.listActions().some(item => item.name === normalized)) return failure(t('windowActions.error.unsupportedActionGeneric'))
+    if (!this.options.sidecarManager || window.isDestroyed() || signal?.aborted) return failure(t('windowActions.error.unavailableOrCancelled'))
     window.hide()
     try {
       // Windows 隐藏窗口后才会将前台交给下一个窗口，等待激活完成，避免读到自身。
       await new Promise<void>(resolve => setTimeout(resolve, 80))
-      if (signal?.aborted) throw new Error('窗口操作已取消')
+      if (signal?.aborted) throw new Error(t('windowActions.error.cancelled'))
       const target = await this.options.sidecarManager.getActiveWindow()
       if (!target.active || !Number.isSafeInteger(target.hwnd) || target.hwnd <= 0 || !Number.isSafeInteger(target.pid) || target.pid <= 0 || target.pid === process.pid) {
-        throw new Error('未找到可操作的外部窗口，请先激活目标应用后重试')
+        throw new Error(t('windowActions.error.noExternalWindow'))
       }
-      if (signal?.aborted || window.isDestroyed()) throw new Error('窗口操作已取消')
+      if (signal?.aborted || window.isDestroyed()) throw new Error(t('windowActions.error.cancelled'))
       const result = await this.applyAction(normalized, { windowId: String(target.hwnd), targetProcessId: target.pid })
-      if (!result.success) throw new Error(result.error || '窗口操作失败')
+      if (!result.success) {
+        if (!window.isDestroyed()) { window.show(); window.focus() }
+        return result
+      }
       return result
     } catch (error) {
       if (!window.isDestroyed()) { window.show(); window.focus() }
@@ -633,20 +570,25 @@ export class WindowManagementService {
   }
 
   private async applyWindowsAction(action: WindowActionName, context: ApplyWindowActionContext): Promise<WindowActionResult> {
-    const meta = WINDOW_ACTIONS[action]
+    const meta = getWindowActionMeta(action)
     const failure = (error: string): WindowActionResult => ({ success: false, action, title: meta.title, error })
-    if (action === 'restore') return failure('当前版本暂不支持还原窗口的上一位置')
-    if (!this.options.sidecarManager) return failure('窗口管理原生进程不可用')
+    if (action === 'restore') return failure(t('windowActions.error.restoreNotSupported'))
+    if (!this.options.sidecarManager) return failure(t('windowActions.error.sidecarUnavailable'))
     const hwnd = Number(context.windowId), pid = context.targetProcessId
-    if (!Number.isSafeInteger(hwnd) || hwnd <= 0 || !pid || !Number.isSafeInteger(pid) || pid === process.pid) return failure('缺少已确认的外部目标窗口')
+    if (!Number.isSafeInteger(hwnd) || hwnd <= 0 || !pid || !Number.isSafeInteger(pid) || pid === process.pid) return failure(t('windowActions.error.missingExternalTarget'))
     try {
       const result = await this.options.sidecarManager.manageWindow(action, undefined, { hwnd, pid })
-      if (result?.success !== true) return failure(result?.error || '窗口操作未获确认')
+      if (result?.success !== true) {
+        if (result?.error) {
+          console.warn('[WindowManagementService] Windows sidecar action not confirmed:', action, result.error)
+        }
+        return failure(t('windowActions.error.notConfirmed'))
+      }
       const rect = result.rect
       if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) {
-        return failure('窗口操作未返回有效的实际位置')
+        return failure(t('windowActions.error.invalidRect'))
       }
-      void this.options.hudService?.showHUD(`窗口已${meta.title}`, { icon: meta.icon, durationMs: 1200 })
+      void this.options.hudService?.showHUD(t('windowActions.hud.applied', { title: meta.title }), { icon: meta.icon, durationMs: 1200 })
       return { success: true, action, preset: action, title: meta.title, rect, bounds: rect }
     } catch (error) {
       return failure(error instanceof Error ? error.message : String(error))

@@ -38,7 +38,7 @@ test('Argon2id: different password or salt produces completely different key', (
 test('Argon2id: throws error if salt is shorter than 8 bytes', () => {
   assert.throws(
     () => argon2id('password', 'short'),
-    /盐值长度至少需要 8 字节/
+    /salt must be at least 8 bytes/
   )
 })
 

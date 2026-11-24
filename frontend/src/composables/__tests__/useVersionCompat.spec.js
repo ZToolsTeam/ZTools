@@ -201,4 +201,31 @@ describe('fetchVersions', () => {
       expect(result.compatible).toBe(false)
     }
   )
+
+  it('热切换语言时 checkCompat 返回的 reason 与 createPluginCompatComputed 自动更新', async () => {
+    const { getCurrentLocale, setI18nLocale } = await import('@/i18n')
+    const { checkCompat: liveCheckCompat, useVersionCompat } = await import('../useVersionCompat')
+    const prevLocale = getCurrentLocale()
+
+    try {
+      setI18nLocale('zh-CN')
+      const result = liveCheckCompat({ minAppVersion: '3.0.0' }, '2.0.0', '1.0.0')
+      expect(result.compatible).toBe(false)
+      expect(result.reason).toContain('请先升级客户端')
+
+      setI18nLocale('en-US')
+      expect(result.reason).toContain('This plugin requires App >= 3.0.0')
+
+      const { appVersion, webVersion, createPluginCompatComputed } = useVersionCompat()
+      appVersion.value = '2.0.0'
+      webVersion.value = '1.0.0'
+      const reactiveCompat = createPluginCompatComputed({ minAppVersion: '3.0.0' })
+      expect(reactiveCompat.value.reason).toContain('This plugin requires App >= 3.0.0')
+
+      setI18nLocale('zh-CN')
+      expect(reactiveCompat.value.reason).toContain('请先升级客户端')
+    } finally {
+      setI18nLocale(prevLocale)
+    }
+  })
 })

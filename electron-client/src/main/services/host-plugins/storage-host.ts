@@ -8,13 +8,17 @@ import yauzl from 'yauzl'
 import yazl from 'yazl'
 import { createSnapshotArchive, extractSnapshotArchive } from './snapshot-archive.js'
 import type { CallerIdentity } from '../../../contracts/capabilities.js'
-import { errorCodes, ZToolsError } from '../../../contracts/errors.js'
+import { errorCodes } from '../../../contracts/errors.js'
+import { t } from '../../i18n/index.js'
 import {
   calculateDirectorySize,
   computeFileSha256,
+  escapePsSingleQuoted,
+  hostPluginError,
   formatBytes,
   isProtectedSystemPath,
   resolveDefaultAppDataRoot,
+  resolveHostErrorMessage,
   resolveHostSystemCommands,
   runCommand,
   type HostPluginContext,
@@ -22,20 +26,21 @@ import {
 } from './shared-utils.js'
 
 /** 清空回收站：清空前后各数一次当前用户回收站的项目数，以清空后的实际数量判断结果 */
-const EMPTY_RECYCLE_BIN_SCRIPT = `
+function buildEmptyRecycleBinScript(): string {
+  const openFailedMsg = escapePsSingleQuoted(t('hostPlugin.storage.recycleBin.openFailed'))
+  return `
   $ErrorActionPreference = 'Stop'
   $bin = (New-Object -ComObject Shell.Application).Namespace(10)
-  if ($null -eq $bin) { throw '无法打开系统回收站' }
+  if ($null -eq $bin) { throw '${openFailedMsg}' }
   $before = [int]$bin.Items().Count
   if ($before -gt 0) {
-    # 空回收站或某个盘没有回收站目录时，Clear-RecycleBin 在 5.1 上会报“找不到路径”的非终止错误；
-    # 这里忽略它，是否清空以下面重新数到的数量为准
     Clear-RecycleBin -Force -ErrorAction SilentlyContinue
   }
   $binAfter = (New-Object -ComObject Shell.Application).Namespace(10)
   $after = [int]$binAfter.Items().Count
   [PSCustomObject]@{ before = $before; after = $after } | ConvertTo-Json -Compress
 `
+}
 
 export class StorageHostPluginHandler {
   readonly #ctx: HostPluginContext
@@ -73,27 +78,27 @@ export class StorageHostPluginHandler {
       lowerFn === 'getmovableitems'
     ) {
       const candidateDirs = [
-        { name: 'npm 全局缓存 (npm-cache)', path: path.join(localAppData, 'npm-cache'), category: '开发缓存' },
-        { name: 'pnpm Store 仓库', path: path.join(localAppData, 'pnpm', 'store'), category: '开发缓存' },
-        { name: 'Yarn 缓存目录', path: path.join(localAppData, 'Yarn', 'Cache'), category: '开发缓存' },
-        { name: 'pip Python 缓存', path: path.join(localAppData, 'pip', 'Cache'), category: '开发缓存' },
-        { name: 'Cargo Rust 缓存', path: path.join(home, '.cargo', 'registry'), category: '开发缓存' },
-        { name: 'Gradle 构建缓存', path: path.join(home, '.gradle', 'caches'), category: '开发缓存' },
-        { name: 'Docker WSL 镜像数据', path: path.join(localAppData, 'Docker', 'wsl'), category: '容器与虚拟机' },
-        { name: '微信文件默认存储 (WeChat Files)', path: path.join(home, 'Documents', 'WeChat Files'), category: '社交软件数据' },
-        { name: '腾讯 QQ 个人文件夹 (Tencent Files)', path: path.join(home, 'Documents', 'Tencent Files'), category: '社交软件数据' },
-        { name: 'VS Code 扩展插件目录 (.vscode/extensions)', path: path.join(home, '.vscode', 'extensions'), category: 'IDE 与工具' },
-        { name: 'Cursor 扩展插件目录 (.cursor/extensions)', path: path.join(home, '.cursor', 'extensions'), category: 'IDE 与工具' },
-        { name: 'JetBrains 全局缓存', path: path.join(localAppData, 'JetBrains'), category: 'IDE 与工具' },
-        { name: 'Chrome 用户缓存数据', path: path.join(localAppData, 'Google', 'Chrome', 'User Data', 'Default', 'Cache'), category: '浏览器数据' },
-        { name: 'Roam 应用配置数据', path: roamingAppData, category: '应用配置' }
+        { name: t('hostPlugin.storage.mover.dir.npmCache'), path: path.join(localAppData, 'npm-cache'), category: t('hostPlugin.storage.mover.cat.devCache') },
+        { name: t('hostPlugin.storage.mover.dir.pnpmStore'), path: path.join(localAppData, 'pnpm', 'store'), category: t('hostPlugin.storage.mover.cat.devCache') },
+        { name: t('hostPlugin.storage.mover.dir.yarnCache'), path: path.join(localAppData, 'Yarn', 'Cache'), category: t('hostPlugin.storage.mover.cat.devCache') },
+        { name: t('hostPlugin.storage.mover.dir.pipCache'), path: path.join(localAppData, 'pip', 'Cache'), category: t('hostPlugin.storage.mover.cat.devCache') },
+        { name: t('hostPlugin.storage.mover.dir.cargoCache'), path: path.join(home, '.cargo', 'registry'), category: t('hostPlugin.storage.mover.cat.devCache') },
+        { name: t('hostPlugin.storage.mover.dir.gradleCache'), path: path.join(home, '.gradle', 'caches'), category: t('hostPlugin.storage.mover.cat.devCache') },
+        { name: t('hostPlugin.storage.mover.dir.dockerWsl'), path: path.join(localAppData, 'Docker', 'wsl'), category: t('hostPlugin.storage.mover.cat.containerVm') },
+        { name: t('hostPlugin.storage.mover.dir.wechatFiles'), path: path.join(home, 'Documents', 'WeChat Files'), category: t('hostPlugin.storage.mover.cat.social') },
+        { name: t('hostPlugin.storage.mover.dir.qqFiles'), path: path.join(home, 'Documents', 'Tencent Files'), category: t('hostPlugin.storage.mover.cat.social') },
+        { name: t('hostPlugin.storage.mover.dir.vscodeExt'), path: path.join(home, '.vscode', 'extensions'), category: t('hostPlugin.storage.mover.cat.ide') },
+        { name: t('hostPlugin.storage.mover.dir.cursorExt'), path: path.join(home, '.cursor', 'extensions'), category: t('hostPlugin.storage.mover.cat.ide') },
+        { name: t('hostPlugin.storage.mover.dir.jetbrainsCache'), path: path.join(localAppData, 'JetBrains'), category: t('hostPlugin.storage.mover.cat.ide') },
+        { name: t('hostPlugin.storage.mover.dir.chromeCache'), path: path.join(localAppData, 'Google', 'Chrome', 'User Data', 'Default', 'Cache'), category: t('hostPlugin.storage.mover.cat.browser') },
+        { name: t('hostPlugin.storage.mover.dir.roamConfig'), path: roamingAppData, category: t('hostPlugin.storage.mover.cat.appConfig') }
       ]
 
       const customDirs = Array.isArray(params.customPaths) ? params.customPaths.map(String) : []
       for (const cp of customDirs) {
         try {
           const authPath = await this.#ctx.authorizeExistingPath(cp, caller, 'read')
-          candidateDirs.push({ name: path.basename(authPath), path: authPath, category: '自定义目录' })
+          candidateDirs.push({ name: path.basename(authPath), path: authPath, category: t('hostPlugin.storage.mover.cat.custom') })
         } catch {
           // skip unauthorized path
         }
@@ -136,16 +141,16 @@ export class StorageHostPluginHandler {
       const sourcePath = String(params.sourcePath ?? '').trim()
       const targetRoot = String(params.targetRoot ?? params.targetPath ?? params.targetDir ?? '').trim()
       if (!sourcePath || !targetRoot) {
-        return { ok: false, success: false, error: '源目录与目标目录均不能为空' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.mover.emptyDirs') }
       }
       const resolvedSource = await this.#ctx.authorizeExistingPath(sourcePath, caller, 'write')
       const resolvedTargetRoot = await this.#ctx.authorizeOutputPath(targetRoot, caller)
       if (isProtectedSystemPath(resolvedSource)) {
-        return { ok: false, success: false, error: '拒绝迁移系统核心受保护目录' }
+        return { ok: false, success: false, errorCode: 'PERMISSION_DENIED', error: t('hostPlugin.storage.mover.protectedDir') }
       }
       const destDir = path.join(resolvedTargetRoot, path.basename(resolvedSource))
       if (resolvedSource.toLowerCase() === destDir.toLowerCase()) {
-        return { ok: false, success: false, error: '源目录与目标路径不能相同' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.mover.sameDir') }
       }
       await fs.mkdir(resolvedTargetRoot, { recursive: true })
       await fs.cp(resolvedSource, destDir, { recursive: true, force: true })
@@ -180,19 +185,19 @@ export class StorageHostPluginHandler {
         sourcePath: resolvedSource,
         targetPath: destDir,
         isJunction: true,
-        message: `已成功迁移至 ${destDir} 并建立目录联接 (Junction)`
+        message: t('hostPlugin.storage.mover.migrated', { destDir })
       }
     }
 
     if (lowerFn === 'restore' || lowerFn === 'restorejunction') {
       const sourcePath = String(params.sourcePath ?? '').trim()
       if (!sourcePath) {
-        return { ok: false, success: false, error: '未指定要还原的目录路径' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.mover.restorePathMissing') }
       }
       const resolvedSource = await this.#ctx.authorizeExistingPath(sourcePath, caller, 'write')
       const lstat = await fs.lstat(resolvedSource)
       if (!lstat.isSymbolicLink()) {
-        return { ok: false, success: false, error: '该路径不是符号链接或目录联接 (Junction)' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.mover.notLinkOrJunction') }
       }
       const realTarget = await fs.readlink(resolvedSource)
       const stagingRestorePath = `${resolvedSource}.ztools-restore-tmp-${Date.now()}`
@@ -214,7 +219,7 @@ export class StorageHostPluginHandler {
         ok: true,
         success: true,
         sourcePath: resolvedSource,
-        message: '已解除联接并将数据迁回原位置'
+        message: t('hostPlugin.storage.mover.restored')
       }
     }
 
@@ -302,8 +307,8 @@ export class StorageHostPluginHandler {
                 deletedAtMs: Math.round(stat.mtimeMs),
                 modifiedAt: stat.mtime.toISOString(),
                 extension: ext || '.bin',
-                integrity: isRecycleBin || ext === '.bak' ? '回收站/备份可恢复' : '临时缓存快照',
-                locationType: isRecycleBin ? '回收站残留' : '临时缓存区'
+                integrity: isRecycleBin || ext === '.bak' ? t('hostPlugin.storage.recovery.integrityRecycle') : t('hostPlugin.storage.recovery.integrityTemp'),
+                locationType: isRecycleBin ? t('hostPlugin.storage.recovery.locRecycle') : t('hostPlugin.storage.recovery.locTemp')
               })
             } catch {
               // ignore
@@ -329,7 +334,7 @@ export class StorageHostPluginHandler {
           ? [singleSource]
           : []
       if (sourcePaths.length === 0) {
-        return { ok: false, success: false, error: '未选择需要恢复的文件' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.recovery.noFilesSelected') }
       }
 
       const rawTarget = String(
@@ -350,7 +355,7 @@ export class StorageHostPluginHandler {
         try {
           const resolvedSrc = await this.#ctx.authorizeExistingPath(sourcePaths[0]!, caller, 'read')
           if (!fsSync.existsSync(resolvedSrc)) {
-            return { ok: false, success: false, error: '待恢复的源文件不存在' }
+            return { ok: false, success: false, errorCode: 'FILE_NOT_FOUND', error: t('hostPlugin.storage.recovery.sourceNotFound') }
           }
           const resolvedDestFile = await this.#ctx.authorizeOutputPath(String(params.targetPath).trim(), caller)
           await fs.mkdir(path.dirname(resolvedDestFile), { recursive: true })
@@ -368,7 +373,7 @@ export class StorageHostPluginHandler {
           return {
             ok: false,
             success: false,
-            error: err instanceof Error ? err.message : '恢复文件失败'
+            error: resolveHostErrorMessage(err, 'hostPlugin.storage.recovery.failed')
           }
         }
       }
@@ -395,7 +400,7 @@ export class StorageHostPluginHandler {
         targetPath: recovered[0] ?? resolvedTargetDir,
         outputPath: recovered[0] ?? resolvedTargetDir,
         recoveredFiles: recovered,
-        ...(recovered.length === 0 ? { error: '未成功恢复任何有效文件' } : {})
+        ...(recovered.length === 0 ? { error: t('hostPlugin.storage.recovery.noneRecovered') } : {})
       }
     }
 
@@ -424,7 +429,7 @@ export class StorageHostPluginHandler {
       const passes = Math.min(Math.max(Number(params.passes) || 3, 1), 7)
 
       if (rawPaths.length === 0) {
-        return { ok: false, success: false, error: '未提供待粉碎的文件路径' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.shredder.noPaths') }
       }
 
       const shredded: string[] = []
@@ -435,11 +440,11 @@ export class StorageHostPluginHandler {
         try {
           resolved = await this.#ctx.authorizeExistingPath(rawPath, caller, 'write')
         } catch (err) {
-          errors.push({ path: rawPath, error: err instanceof Error ? err.message : '路径未授权' })
+          errors.push({ path: rawPath, error: resolveHostErrorMessage(err, 'hostPlugin.storage.shredder.pathUnauthorized') })
           continue
         }
         if (isProtectedSystemPath(resolved)) {
-          errors.push({ path: resolved, error: '系统受保护路径禁止粉碎' })
+          errors.push({ path: resolved, error: t('hostPlugin.storage.shredder.protectedPath') })
           continue
         }
         try {
@@ -494,9 +499,9 @@ export class StorageHostPluginHandler {
       ok: true,
       success: true,
       algorithms: [
-        { id: 'zero-1', name: '快速单次覆写 (1 Pass 0x00)', passes: 1 },
-        { id: 'dod-3', name: 'DoD 5220.22-M 标准粉碎 (3 Passes)', passes: 3 },
-        { id: 'gutmann-7', name: '高强度随机密码学覆写 (7 Passes)', passes: 7 }
+        { id: 'zero-1', labelKey: 'hostPlugin.storage.shredder.algoZero1', name: t('hostPlugin.storage.shredder.algoZero1'), passes: 1 },
+        { id: 'dod-3', labelKey: 'hostPlugin.storage.shredder.algoDod3', name: t('hostPlugin.storage.shredder.algoDod3'), passes: 3 },
+        { id: 'gutmann-7', labelKey: 'hostPlugin.storage.shredder.algoGutmann7', name: t('hostPlugin.storage.shredder.algoGutmann7'), passes: 7 }
       ]
     }
   }
@@ -562,7 +567,7 @@ export class StorageHostPluginHandler {
               ? [params.path]
               : []
       if (rawSources.length === 0) {
-        return { ok: false, success: false, error: '未找到任何有效的待备份源文件或目录' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.backup.noValidSources') }
       }
 
       const backupDir = rawDirParam
@@ -583,7 +588,7 @@ export class StorageHostPluginHandler {
       const zipPath = String(
         params.backupPath ?? params.archivePath ?? params.filePath ?? params.path ?? params.zipPath ?? ''
       ).trim()
-      if (!zipPath) return { ok: false, success: false, error: '需指定快照归档路径' }
+      if (!zipPath) return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.backup.zipPathRequired') }
       const resolvedZipPath = await this.#ctx.authorizeExistingPath(zipPath, caller, 'read')
       const outputParent = String(params.targetDir ?? params.outputDir ?? '').trim() || path.dirname(resolvedZipPath)
       const resolvedParent = await this.#ctx.authorizeOutputPath(outputParent, caller)
@@ -644,7 +649,7 @@ export class StorageHostPluginHandler {
     }
 
     if (!dbPath) {
-      return { ok: false, success: false, error: '未提供 SQLite 数据库文件路径 (dbPath)' }
+      return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.sqlite.dbPathMissing') }
     }
 
     const rawSql = String(params.sql ?? '').trim()
@@ -654,7 +659,7 @@ export class StorageHostPluginHandler {
 
     const fileBuf = await fs.readFile(resolvedDbPath)
     if (!isWriteCall && !fileBuf.subarray(0, 16).equals(Buffer.from('SQLite format 3\0'))) {
-      throw new ZToolsError(errorCodes.dataCorrupt, '所选文件不是有效的 SQLite 数据库，请使用「打开数据库」选择其他文件')
+      throw hostPluginError(errorCodes.dataCorrupt, 'hostPlugin.storage.sqlite.invalidDb', { hostCode: 'SQLITE_INVALID_DB' })
     }
     const db = new SQL.Database(new Uint8Array(fileBuf))
 
@@ -737,13 +742,13 @@ export class StorageHostPluginHandler {
           sql = `SELECT * FROM "${safeTable}" LIMIT ${limit}`
         }
         if (!sql) {
-          return { ok: false, success: false, error: 'SQL 语句不能为空' }
+          return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.sqlite.emptySql') }
         }
 
         const isMutatingOrMaintenance =
           /^\s*(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|REPLACE|VACUUM|REINDEX)\b/i.test(sql)
         if (isMutatingOrMaintenance && isProtectedSystemPath(resolvedDbPath)) {
-          return { ok: false, success: false, error: '拒绝写入受保护系统目录下的 SQLite 数据库' }
+          return { ok: false, success: false, errorCode: 'PERMISSION_DENIED', error: t('hostPlugin.storage.sqlite.protectedDir') }
         }
 
         const results = db.exec(sql)
@@ -897,7 +902,7 @@ export class StorageHostPluginHandler {
             status: 'missing',
             leftPath: rawLeft,
             rightPath: rawRight,
-            error: '文件对比路径缺失'
+            errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.diff.pathMissing')
           })
           continue
         }
@@ -928,7 +933,7 @@ export class StorageHostPluginHandler {
       const rawLeftDir = String(params.leftDir ?? params.leftPath ?? '').trim()
       const rawRightDir = String(params.rightDir ?? params.rightPath ?? '').trim()
       if (!rawLeftDir || !rawRightDir) {
-        return { ok: false, success: false, error: '需同时指定左右对比目录路径' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.diff.dirsRequired') }
       }
       const leftDir = await this.#ctx.authorizeExistingPath(rawLeftDir, caller, 'read')
       const rightDir = await this.#ctx.authorizeExistingPath(rawRightDir, caller, 'read')
@@ -975,7 +980,7 @@ export class StorageHostPluginHandler {
     const rawLeftPath = String(params.leftPath ?? params.left ?? params.fileA ?? '').trim()
     const rawRightPath = String(params.rightPath ?? params.right ?? params.fileB ?? '').trim()
     if (!rawLeftPath || !rawRightPath) {
-      return { ok: false, success: false, error: '需同时提供左右两个待对比文件路径 (leftPath, rightPath)' }
+      return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.diff.filesRequired') }
     }
     return this.#compareSinglePair(rawLeftPath, rawRightPath, caller)
   }
@@ -1036,7 +1041,7 @@ export class StorageHostPluginHandler {
           const resolvedSrc = await this.#ctx.authorizeExistingPath(rawSrc, caller, 'write')
           const resolvedDst = await this.#ctx.authorizeOutputPath(rawDst, caller)
           if (isProtectedSystemPath(resolvedSrc) || isProtectedSystemPath(resolvedDst)) {
-            errors.push({ path: resolvedSrc, error: '受保护系统路径禁止重命名' })
+            errors.push({ path: resolvedSrc, error: t('hostPlugin.storage.rename.protectedPath') })
             continue
           }
           if (resolvedSrc !== resolvedDst) {
@@ -1073,20 +1078,20 @@ export class StorageHostPluginHandler {
         // 旧实现无论 Clear-RecycleBin 成败都输出 OK，清空失败也报告“已清空”
         let counts: { before?: unknown; after?: unknown }
         try {
-          counts = JSON.parse(await this.#sys.runPowerShell(EMPTY_RECYCLE_BIN_SCRIPT, 60_000)) as { before?: unknown; after?: unknown }
+          counts = JSON.parse(await this.#sys.runPowerShell(buildEmptyRecycleBinScript(), 60_000)) as { before?: unknown; after?: unknown }
         } catch (err) {
           return {
             ok: false,
             success: false,
             plugin: pluginName,
             errorCode: 'RECYCLE_BIN_FAILED',
-            error: `清空回收站失败：${err instanceof Error ? err.message : String(err)}`
+            error: t('hostPlugin.storage.recycleBin.emptyFailed', { detail: err instanceof Error ? err.message : String(err) })
           }
         }
         const before = typeof counts?.before === 'number' ? counts.before : NaN
         const after = typeof counts?.after === 'number' ? counts.after : NaN
         if (!Number.isInteger(before) || !Number.isInteger(after) || before < 0 || after < 0) {
-          return { ok: false, success: false, plugin: pluginName, errorCode: 'RECYCLE_BIN_FAILED', error: '清空回收站失败：无法确认回收站剩余项目数' }
+          return { ok: false, success: false, plugin: pluginName, errorCode: 'RECYCLE_BIN_FAILED', error: t('hostPlugin.storage.recycleBin.countUnconfirmed') }
         }
         if (after > 0) {
           return {
@@ -1096,7 +1101,7 @@ export class StorageHostPluginHandler {
             errorCode: 'RECYCLE_BIN_NOT_EMPTY',
             removedCount: Math.max(0, before - after),
             remainingCount: after,
-            error: `回收站仍有 ${after} 项未清空（可能被占用或权限不足）`
+            error: t('hostPlugin.storage.recycleBin.itemsRemain', { count: after })
           }
         }
         return {
@@ -1105,10 +1110,10 @@ export class StorageHostPluginHandler {
           plugin: pluginName,
           removedCount: before,
           remainingCount: 0,
-          message: before === 0 ? '回收站已经是空的' : `已清空系统回收站（${before} 项）`
+          message: before === 0 ? t('hostPlugin.storage.recycleBin.alreadyEmpty') : t('hostPlugin.storage.recycleBin.emptied', { count: before })
         }
       }
-      return { ok: false, success: false, error: '当前系统不支持 Clear-RecycleBin' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.storage.recycleBin.unsupported') }
     }
 
     if (
@@ -1137,7 +1142,7 @@ export class StorageHostPluginHandler {
         try {
           const resolved = await this.#ctx.authorizeExistingPath(rawPath, caller, 'write')
           if (isProtectedSystemPath(resolved)) {
-            errors.push({ path: resolved, error: '系统受保护路径禁止清理' })
+            errors.push({ path: resolved, error: t('hostPlugin.storage.cleaner.protectedPath') })
             continue
           }
           const stat = await fs.lstat(resolved)
@@ -1215,7 +1220,7 @@ export class StorageHostPluginHandler {
       categories: [
         {
           id: 'system-temp',
-          name: '系统临时与缓存文件',
+          nameKey: 'hostPlugin.storage.cleaner.systemTemp', name: t('hostPlugin.storage.cleaner.systemTemp'),
           path: scanTarget,
           sizeBytes: totalBytes,
           sizeText: formatBytes(totalBytes),
@@ -1248,21 +1253,21 @@ export class StorageHostPluginHandler {
   }
 
   #classifyArchiveEntryCategory(name: string, isDirectory: boolean): string {
-    if (isDirectory) return '文件夹'
+    if (isDirectory) return t('hostPlugin.storage.archive.cat.folder')
     const ext = path.extname(name).toLowerCase()
     if (['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.md', '.csv'].includes(ext)) {
-      return '办公文档'
+      return t('hostPlugin.storage.archive.cat.office')
     }
     if (['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg', '.mp4', '.mov', '.mp3', '.wav'].includes(ext)) {
-      return '图片与媒体'
+      return t('hostPlugin.storage.archive.cat.media')
     }
     if (['.ts', '.tsx', '.js', '.mjs', '.cjs', '.json', '.py', '.rs', '.go', '.java', '.c', '.cpp', '.cs', '.html', '.css', '.sql', '.xml', '.yaml', '.yml'].includes(ext)) {
-      return '源码与配置'
+      return t('hostPlugin.storage.archive.cat.code')
     }
     if (['.exe', '.msi', '.dll', '.bat', '.cmd', '.ps1', '.sh'].includes(ext)) {
-      return '可执行程序'
+      return t('hostPlugin.storage.archive.cat.executable')
     }
-    return '其他文件'
+    return t('hostPlugin.storage.archive.cat.other')
   }
 
   #isUnsafeArchiveEntryPath(entryName: string): boolean {
@@ -1291,7 +1296,7 @@ export class StorageHostPluginHandler {
         params.archivePath ?? params.filePath ?? params.path ?? params.zipPath ?? ''
       ).trim()
       if (!rawArchivePath) {
-        return { ok: false, success: false, error: '未指定待透视的压缩包路径 (archivePath)' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.archive.pathMissingInspect') }
       }
 
       let resolvedArchive: string
@@ -1302,12 +1307,12 @@ export class StorageHostPluginHandler {
       }
 
       if (!fsSync.existsSync(resolvedArchive)) {
-        return { ok: false, success: false, error: `压缩包文件不存在: ${resolvedArchive}` }
+        return { ok: false, success: false, errorCode: 'FILE_NOT_FOUND', error: t('hostPlugin.storage.archive.notFound', { path: resolvedArchive }) }
       }
 
       const stat = await fs.stat(resolvedArchive)
       if (stat.size === 0) {
-        return { ok: false, success: false, error: '压缩包文件为空 (0 B) 或头部已损坏' }
+        return { ok: false, success: false, errorCode: 'DATA_CORRUPT', error: t('hostPlugin.storage.archive.emptyOrCorrupt') }
       }
 
       const entries: Array<{
@@ -1338,14 +1343,14 @@ export class StorageHostPluginHandler {
             { lazyEntries: true, decodeStrings: false, validateEntrySizes: false },
             (err, zipfile) => {
               if (err || !zipfile) {
-                reject(err ?? new Error('无法解析 ZIP 归档头部结构'))
+                reject(err ?? hostPluginError(errorCodes.dataCorrupt, 'hostPlugin.storage.archive.parseHeaderFailed', { hostCode: 'ARCHIVE_PARSE_FAILED' }))
                 return
               }
               zipfile.readEntry()
               zipfile.on('entry', (entry) => {
                 if (signal?.aborted) {
                   zipfile.close()
-                  reject(new Error('操作已取消'))
+                  reject(hostPluginError(errorCodes.cancelled, 'hostPlugin.storage.archive.cancelled', { hostCode: 'ARCHIVE_CANCELLED' }))
                   return
                 }
                 const isUtf8 = (entry.generalPurposeBitFlag & 0x800) !== 0
@@ -1405,7 +1410,7 @@ export class StorageHostPluginHandler {
           ok: false,
           success: false,
           archivePath: resolvedArchive,
-          error: `压缩包损坏或格式不受支持: ${err instanceof Error ? err.message : String(err)}`
+          error: t('hostPlugin.storage.archive.corruptOrUnsupported', { detail: err instanceof Error ? err.message : String(err) })
         }
       }
 
@@ -1454,12 +1459,12 @@ export class StorageHostPluginHandler {
         params.archivePath ?? params.filePath ?? params.path ?? params.zipPath ?? ''
       ).trim()
       if (!rawArchivePath) {
-        return { ok: false, success: false, error: '需指定待解压的压缩包路径 (archivePath)' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.archive.pathMissingExtract') }
       }
 
       const resolvedArchive = await this.#ctx.authorizeExistingPath(rawArchivePath, caller, 'read')
       if (!fsSync.existsSync(resolvedArchive)) {
-        return { ok: false, success: false, error: `压缩包文件不存在: ${resolvedArchive}` }
+        return { ok: false, success: false, errorCode: 'FILE_NOT_FOUND', error: t('hostPlugin.storage.archive.notFound', { path: resolvedArchive }) }
       }
 
       const selectedEntries = Array.isArray(params.entryNames)
@@ -1487,7 +1492,7 @@ export class StorageHostPluginHandler {
         return {
           ok: false,
           success: false,
-          error: 'ENCRYPTED_ARCHIVE: 该压缩包包含加密条目，当前暂不支持无密码提取加密流'
+          error: t('hostPlugin.storage.archive.encryptedUnsupported')
         }
       }
 
@@ -1499,7 +1504,7 @@ export class StorageHostPluginHandler {
 
       const resolvedTargetDir = await this.#ctx.authorizeOutputPath(rawTargetDir || defaultOutDir, caller)
       if (isProtectedSystemPath(resolvedTargetDir)) {
-        return { ok: false, success: false, error: '拒绝解压到受保护的系统核心目录' }
+        return { ok: false, success: false, errorCode: 'PERMISSION_DENIED', error: t('hostPlugin.storage.archive.extractProtectedDir') }
       }
       await fs.mkdir(resolvedTargetDir, { recursive: true })
 
@@ -1513,14 +1518,14 @@ export class StorageHostPluginHandler {
             { lazyEntries: true, decodeStrings: false, validateEntrySizes: false },
             (err, zipfile) => {
               if (err || !zipfile) {
-                reject(err ?? new Error('无法打开 ZIP 压缩包'))
+                reject(err ?? hostPluginError(errorCodes.fileError, 'hostPlugin.storage.archive.openFailed', { hostCode: 'ARCHIVE_OPEN_FAILED' }))
                 return
               }
               zipfile.readEntry()
               zipfile.on('entry', (entry) => {
                 if (signal?.aborted) {
                   zipfile.close()
-                  reject(new Error('解压任务已取消'))
+                  reject(hostPluginError(errorCodes.cancelled, 'hostPlugin.storage.archive.extractCancelled', { hostCode: 'ARCHIVE_EXTRACT_CANCELLED' }))
                   return
                 }
                 const isUtf8 = (entry.generalPurposeBitFlag & 0x800) !== 0
@@ -1567,7 +1572,7 @@ export class StorageHostPluginHandler {
                   .then(() => {
                     zipfile.openReadStream(entry, (streamErr, readStream) => {
                       if (streamErr || !readStream) {
-                        reject(streamErr ?? new Error(`读取条目流失败: ${decodedName}`))
+                        reject(streamErr ?? hostPluginError(errorCodes.fileError, 'hostPlugin.storage.archive.readEntryStreamFailed', { hostCode: 'ARCHIVE_READ_STREAM_FAILED', i18nParams: { name: decodedName } }))
                         return
                       }
                       const writeStream = fsSync.createWriteStream(targetEntryPath)
@@ -1606,7 +1611,7 @@ export class StorageHostPluginHandler {
           extractedCount: 0,
           extractedFiles: [],
           blockedEntries,
-          error: `ZIP_SLIP_BLOCKED: 已拦截 ${blockedEntries.length} 个包含非法路径穿越 (../) 的恶意条目`
+          error: t('hostPlugin.storage.archive.zipSlipBlocked', { count: blockedEntries.length })
         }
       }
 
@@ -1633,18 +1638,18 @@ export class StorageHostPluginHandler {
               : []
 
       if (rawSources.length === 0) {
-        return { ok: false, success: false, error: '需提供至少一个待打包的文件或目录 (sourcePaths)' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.archive.sourcePathsRequired') }
       }
 
       const firstResolved = await this.#ctx.authorizeExistingPath(rawSources[0]!, caller, 'read')
       const rawOutputZip = String(params.outputPath ?? params.archivePath ?? params.zipPath ?? '').trim()
       const defaultZipPath = path.join(
         path.dirname(firstResolved),
-        `${path.parse(firstResolved).name}_归档_${Date.now()}.zip`
+        t('hostPlugin.storage.archive.defaultZipName', { name: path.parse(firstResolved).name, timestamp: Date.now() })
       )
       const resolvedOutZip = await this.#ctx.authorizeOutputPath(rawOutputZip || defaultZipPath, caller)
       if (isProtectedSystemPath(resolvedOutZip)) {
-        return { ok: false, success: false, error: '禁止在系统核心受保护目录创建压缩包' }
+        return { ok: false, success: false, errorCode: 'PERMISSION_DENIED', error: t('hostPlugin.storage.archive.createProtectedDir') }
       }
       await fs.mkdir(path.dirname(resolvedOutZip), { recursive: true })
 
@@ -1679,7 +1684,7 @@ export class StorageHostPluginHandler {
       }
 
       if (addedCount === 0) {
-        return { ok: false, success: false, error: '未找到任何有效可打包的文件' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.archive.noValidFiles') }
       }
 
       await new Promise<void>((resolve, reject) => {
@@ -1708,7 +1713,7 @@ export class StorageHostPluginHandler {
         params.archivePath ?? params.filePath ?? params.path ?? ''
       ).trim()
       if (!rawArchivePath) {
-        return { ok: false, success: false, error: '需指定待校验的压缩包路径' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.storage.archive.verifyPathRequired') }
       }
       const resolvedArchive = await this.#ctx.authorizeExistingPath(rawArchivePath, caller, 'read')
       const inspected = (await this.handleArchiveManager(
@@ -1819,7 +1824,7 @@ export class StorageHostPluginHandler {
       sources.push({ id, label, channel, appName, path: resolved })
     }
 
-    addSource('browser-default', '浏览器与系统下载', 'browser', '系统下载', sysDownloads)
+    addSource('browser-default', t('hostPlugin.storage.dl.browserDefault'), 'browser', t('hostPlugin.storage.dl.systemDownloads'), sysDownloads)
 
     if (process.platform === 'win32') {
       try {
@@ -1839,7 +1844,7 @@ export class StorageHostPluginHandler {
             .trim()
             .replace(/%USERPROFILE%/gi, home)
             .replace(/%HOMEDRIVE%%HOMEPATH%/gi, home)
-          addSource('browser-shell-downloads', '系统重定向下载目录', 'browser', '系统下载', expanded)
+          addSource('browser-shell-downloads', t('hostPlugin.storage.dl.redirected'), 'browser', t('hostPlugin.storage.dl.systemDownloads'), expanded)
         }
       } catch {
         // ignore registry query error
@@ -1857,16 +1862,16 @@ export class StorageHostPluginHandler {
       : [home, sysDownloads]
 
     const netdiskCandidates: Array<{ sub: string; label: string; appName: string; ch?: 'browser' | 'netdisk' }> = [
-      { sub: 'BaiduNetdiskDownload', label: '百度网盘下载', appName: '百度网盘' },
-      { sub: 'QuarkDownload', label: '夸克网盘下载', appName: '夸克网盘' },
-      { sub: '夸克网盘下载', label: '夸克网盘下载', appName: '夸克网盘' },
-      { sub: 'AliyunPanDownload', label: '阿里云盘下载', appName: '阿里云盘' },
-      { sub: '阿里云盘下载', label: '阿里云盘下载', appName: '阿里云盘' },
-      { sub: '115download', label: '115网盘下载', appName: '115网盘' },
-      { sub: '迅雷下载', label: '迅雷下载', appName: '迅雷' },
-      { sub: 'TDDOWNLOAD', label: '迅雷下载 (TDDOWNLOAD)', appName: '迅雷' },
-      { sub: '360Download', label: '360浏览器下载', appName: '360浏览器', ch: 'browser' },
-      { sub: '360安全浏览器下载', label: '360安全浏览器下载', appName: '360浏览器', ch: 'browser' }
+      { sub: 'BaiduNetdiskDownload', label: t('hostPlugin.storage.dl.baiduLabel'), appName: t('hostPlugin.storage.dl.baiduApp') },
+      { sub: 'QuarkDownload', label: t('hostPlugin.storage.dl.quarkLabel'), appName: t('hostPlugin.storage.dl.quarkApp') },
+      { sub: '夸克网盘下载', label: t('hostPlugin.storage.dl.quarkLabel'), appName: t('hostPlugin.storage.dl.quarkApp') }, // i18n-allow: Windows app default download folder name
+      { sub: 'AliyunPanDownload', label: t('hostPlugin.storage.dl.aliyunLabel'), appName: t('hostPlugin.storage.dl.aliyunApp') },
+      { sub: '阿里云盘下载', label: t('hostPlugin.storage.dl.aliyunLabel'), appName: t('hostPlugin.storage.dl.aliyunApp') }, // i18n-allow: Windows app default download folder name
+      { sub: '115download', label: t('hostPlugin.storage.dl.115Label'), appName: t('hostPlugin.storage.dl.115App') },
+      { sub: '迅雷下载', label: t('hostPlugin.storage.dl.thunderLabel'), appName: t('hostPlugin.storage.dl.thunderApp') }, // i18n-allow: Windows app default download folder name
+      { sub: 'TDDOWNLOAD', label: t('hostPlugin.storage.dl.thunderTddLabel'), appName: t('hostPlugin.storage.dl.thunderApp') },
+      { sub: '360Download', label: t('hostPlugin.storage.dl.360Label'), appName: t('hostPlugin.storage.dl.360App'), ch: 'browser' },
+      { sub: '360安全浏览器下载', label: t('hostPlugin.storage.dl.360SecLabel'), appName: t('hostPlugin.storage.dl.360App'), ch: 'browser' } // i18n-allow: Windows app default download folder name
     ]
 
     for (const root of drives) {
@@ -1883,7 +1888,7 @@ export class StorageHostPluginHandler {
     }
 
     for (const idmSub of ['Compressed', 'Programs', 'Video', 'Documents', 'Music']) {
-      addSource(`idm-${idmSub.toLowerCase()}`, `IDM 下载 (${idmSub})`, 'netdisk', 'IDM', path.join(sysDownloads, idmSub))
+      addSource(`idm-${idmSub.toLowerCase()}`, t('hostPlugin.storage.dl.idmLabel', { sub: idmSub }), 'netdisk', 'IDM', path.join(sysDownloads, idmSub))
     }
 
     const collectRecentMonthDirs = (parentDir: string, maxMonths = 3): string[] => {
@@ -1916,10 +1921,10 @@ export class StorageHostPluginHandler {
           const monthDirs = collectRecentMonthDirs(fileRoot, 3)
           if (monthDirs.length > 0) {
             for (const mDir of monthDirs) {
-              addSource(`im-wechat-${acc.name}-${path.basename(mDir)}`, `微信接收 (${path.basename(mDir)})`, 'im', '微信', mDir)
+              addSource(`im-wechat-${acc.name}-${path.basename(mDir)}`, t('hostPlugin.storage.dl.wechatReceivedSub', { sub: path.basename(mDir) }), 'im', t('hostPlugin.storage.dl.wechatApp'), mDir)
             }
           } else {
-            addSource(`im-wechat-${acc.name}`, '微信接收文件', 'im', '微信', fileRoot)
+            addSource(`im-wechat-${acc.name}`, t('hostPlugin.storage.dl.wechatReceived'), 'im', t('hostPlugin.storage.dl.wechatApp'), fileRoot)
           }
         }
       } catch {
@@ -1942,10 +1947,10 @@ export class StorageHostPluginHandler {
           const monthDirs = collectRecentMonthDirs(fileRoot, 3)
           if (monthDirs.length > 0) {
             for (const mDir of monthDirs) {
-              addSource(`im-xwechat-${acc.name}-${path.basename(mDir)}`, `微信接收 (${path.basename(mDir)})`, 'im', '微信', mDir)
+              addSource(`im-xwechat-${acc.name}-${path.basename(mDir)}`, t('hostPlugin.storage.dl.wechatReceivedSub', { sub: path.basename(mDir) }), 'im', t('hostPlugin.storage.dl.wechatApp'), mDir)
             }
           } else {
-            addSource(`im-xwechat-${acc.name}`, '微信接收文件', 'im', '微信', fileRoot)
+            addSource(`im-xwechat-${acc.name}`, t('hostPlugin.storage.dl.wechatReceived'), 'im', t('hostPlugin.storage.dl.wechatApp'), fileRoot)
           }
         }
       } catch {
@@ -1963,7 +1968,7 @@ export class StorageHostPluginHandler {
           const fileRoot = path.join(wxwRoot, acc.name, 'File')
           const monthDirs = collectRecentMonthDirs(fileRoot, 3)
           for (const mDir of monthDirs) {
-            addSource(`im-wxwork-${acc.name}-${path.basename(mDir)}`, `企业微信 (${path.basename(mDir)})`, 'im', '企业微信', mDir)
+            addSource(`im-wxwork-${acc.name}-${path.basename(mDir)}`, t('hostPlugin.storage.dl.wxworkSub', { sub: path.basename(mDir) }), 'im', t('hostPlugin.storage.dl.wxworkApp'), mDir)
           }
         }
       } catch {
@@ -1981,24 +1986,24 @@ export class StorageHostPluginHandler {
         const accounts = fsSync.readdirSync(qqRoot, { withFileTypes: true })
         for (const acc of accounts) {
           if (!acc.isDirectory() || acc.name === 'All Users') continue
-          addSource(`im-qq-${acc.name}`, `QQ 接收 (${acc.name})`, 'im', 'QQ', path.join(qqRoot, acc.name, 'FileRecv'))
+          addSource(`im-qq-${acc.name}`, t('hostPlugin.storage.dl.qqSub', { account: acc.name }), 'im', 'QQ', path.join(qqRoot, acc.name, 'FileRecv'))
         }
       } catch {
         // ignore
       }
     }
 
-    addSource('im-dingtalk-dl', '钉钉下载', 'im', '钉钉', path.join(sysDownloads, 'DingTalk'))
-    addSource('im-dingtalk-doc', '钉钉接收文件', 'im', '钉钉', path.join(docs, 'DingTalk Files'))
-    addSource('im-lark-dl', '飞书下载', 'im', '飞书', path.join(sysDownloads, 'Lark'))
-    addSource('im-feishu-dl', '飞书下载', 'im', '飞书', path.join(sysDownloads, 'Feishu'))
+    addSource('im-dingtalk-dl', t('hostPlugin.storage.dl.dingtalkDl'), 'im', t('hostPlugin.storage.dl.dingtalkApp'), path.join(sysDownloads, 'DingTalk'))
+    addSource('im-dingtalk-doc', t('hostPlugin.storage.dl.dingtalkDoc'), 'im', t('hostPlugin.storage.dl.dingtalkApp'), path.join(docs, 'DingTalk Files'))
+    addSource('im-lark-dl', t('hostPlugin.storage.dl.feishuDl'), 'im', t('hostPlugin.storage.dl.feishuApp'), path.join(sysDownloads, 'Lark'))
+    addSource('im-feishu-dl', t('hostPlugin.storage.dl.feishuDl'), 'im', t('hostPlugin.storage.dl.feishuApp'), path.join(sysDownloads, 'Feishu'))
 
     for (let i = 0; i < customDirs.length; i++) {
       const rawCustom = String(customDirs[i] ?? '').trim()
       if (!rawCustom || rawCustom.includes('\0') || rawCustom.includes('..') || !path.isAbsolute(rawCustom)) {
         continue
       }
-      addSource(`custom-${i + 1}`, `自定义 (${path.basename(rawCustom) || rawCustom})`, 'custom', '自定义目录', rawCustom)
+      addSource(`custom-${i + 1}`, t('hostPlugin.storage.dl.customLabel', { name: path.basename(rawCustom) || rawCustom }), 'custom', t('hostPlugin.storage.mover.cat.custom'), rawCustom)
     }
 
     return sources
@@ -2018,16 +2023,16 @@ export class StorageHostPluginHandler {
     if (lowerFn === 'validatecustomdir' || lowerFn === 'addcustomdir') {
       const rawDir = String(params.dirPath ?? params.path ?? '').trim()
       if (!rawDir) {
-        return { ok: false, success: false, error: 'INVALID_DIR_PATH: 目录路径不能为空' }
+        return { ok: false, success: false, errorCode: 'INVALID_DIR_PATH', error: t('hostPlugin.storage.dir.emptyPath') }
       }
       if (rawDir.includes('\0') || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(rawDir) || !path.isAbsolute(rawDir)) {
-        return { ok: false, success: false, error: 'PATH_TRAVERSAL_REJECTED: 仅允许无路径穿越的绝对目录路径' }
+        return { ok: false, success: false, errorCode: 'PATH_TRAVERSAL_REJECTED', error: t('hostPlugin.storage.dir.pathTraversal') }
       }
       try {
         const resolved = await this.#ctx.authorizeExistingPath(rawDir, caller, 'read')
         const st = await fs.stat(resolved)
         if (!st.isDirectory()) {
-          return { ok: false, success: false, error: 'NOT_A_DIRECTORY: 目标路径不是文件夹' }
+          return { ok: false, success: false, errorCode: 'NOT_A_DIRECTORY', error: t('hostPlugin.storage.dir.notADirectory') }
         }
         return {
           ok: true,
@@ -2120,7 +2125,7 @@ export class StorageHostPluginHandler {
 
   // ==================== 11. 目录增量同步 (FolderSyncPlugin) ====================
   async handleFolderSync(_fn: string, _params: Record<string, unknown>, _caller?: CallerIdentity): Promise<unknown> {
-    return { ok: false, success: false, errorCode: 'UPGRADE_REQUIRED', error: '旧目录同步接口已停止，请更新目录同步插件后重新选择文件夹' }
+    return { ok: false, success: false, errorCode: 'UPGRADE_REQUIRED', error: t('hostPlugin.storage.sync.upgradeRequired') }
   }
 
   #pasteStackItems: Array<{
@@ -2181,7 +2186,7 @@ export class StorageHostPluginHandler {
             },
             {
               browser: '360chrome',
-              browserLabel: '360极速',
+              browserLabel: t('hostPlugin.storage.bookmarks.browser360Extreme'),
               filePath: path.join(
                 localAppData,
                 '360ChromeX',
@@ -2193,7 +2198,7 @@ export class StorageHostPluginHandler {
             },
             {
               browser: 'qqbrowser',
-              browserLabel: 'QQ浏览器',
+              browserLabel: t('hostPlugin.storage.bookmarks.browserQQ'),
               filePath: path.join(
                 localAppData,
                 'Tencent',
@@ -2310,7 +2315,7 @@ export class StorageHostPluginHandler {
           ? (node.children as Array<Record<string, unknown>>)
           : []
         const nextTrail =
-          name && !['书签栏', 'Bookmarks bar', '其他书签', 'Other bookmarks'].includes(name)
+          name && !['书签栏', 'Bookmarks bar', '其他书签', 'Other bookmarks'].includes(name) // i18n-allow: Chromium built-in bookmark root names
             ? [...trail, name]
             : trail
         for (const child of children) {
@@ -2332,7 +2337,7 @@ export class StorageHostPluginHandler {
           }
         } catch (err) {
           warnings.push(
-            `${src.browserLabel} 书签解析跳过: ${err instanceof Error ? err.message : String(err)}`
+            t('hostPlugin.storage.bookmarks.parseSkipped', { browser: src.browserLabel, detail: err instanceof Error ? err.message : String(err) })
           )
         }
       }
@@ -2367,7 +2372,7 @@ export class StorageHostPluginHandler {
                   title: String(row[1] || rawUrl),
                   url: rawUrl,
                   hostname,
-                  folderBreadcrumb: 'Firefox 书签',
+                  folderBreadcrumb: t('hostPlugin.storage.bookmarks.firefoxFolder'),
                   browser: 'firefox',
                   browserLabel: 'Firefox',
                   dateAdded: Math.floor(Number(row[3] || Date.now() * 1000) / 1000)
@@ -2378,7 +2383,7 @@ export class StorageHostPluginHandler {
             db.close()
           }
         } catch (err) {
-          warnings.push(`Firefox 书签读取警告: ${err instanceof Error ? err.message : String(err)}`)
+          warnings.push(t('hostPlugin.storage.bookmarks.firefoxWarning', { detail: err instanceof Error ? err.message : String(err) }))
         } finally {
           await fs.rm(tmpCopy, { force: true }).catch(() => undefined)
         }
@@ -2444,7 +2449,7 @@ export class StorageHostPluginHandler {
     if (lowerFn === 'pushitem') {
       const rawText = String(params.text || '').trim()
       if (!rawText) {
-        return { ok: false, errorCode: 'EMPTY_TEXT', error: 'EMPTY_TEXT: 仅支持非空纯文本入栈' }
+        return { ok: false, errorCode: 'EMPTY_TEXT', error: t('hostPlugin.storage.pasteStack.emptyText') }
       }
       const last = this.#pasteStackItems[this.#pasteStackItems.length - 1]
       if (last && last.text === rawText) {
@@ -2460,7 +2465,7 @@ export class StorageHostPluginHandler {
         textPreview: rawText.replace(/\s+/g, ' ').slice(0, 60),
         charCount: rawText.length,
         timestamp: Date.now(),
-        sourceApp: typeof params.sourceApp === 'string' ? params.sourceApp : '系统剪贴板'
+        sourceApp: typeof params.sourceApp === 'string' ? params.sourceApp : t('hostPlugin.storage.pasteStack.systemClipboard')
       }
       this.#pasteStackItems.push(item)
       return { ok: true, deduplicated: false, item, items: this.#pasteStackItems }
@@ -2470,7 +2475,7 @@ export class StorageHostPluginHandler {
         return {
           ok: false,
           errorCode: 'STACK_EMPTY',
-          error: 'STACK_EMPTY: 粘贴栈为空，无法执行出栈上屏'
+          error: t('hostPlugin.storage.pasteStack.stackEmpty')
         }
       }
       const mode = params.mode === 'lifo' ? 'lifo' : 'fifo'
@@ -2511,7 +2516,7 @@ export class StorageHostPluginHandler {
     if (lowerFn === 'pastetoactivewindow' || lowerFn === 'insertsnippet') {
       const text = String(params.text || '')
       if (!text) {
-        return { ok: false, errorCode: 'EMPTY_SNIPPET', error: 'EMPTY_SNIPPET: 短语内容不能为空' }
+        return { ok: false, errorCode: 'EMPTY_SNIPPET', error: t('hostPlugin.storage.snippet.empty') }
       }
       if (this.#ctx.clipboard) {
         await this.#ctx.clipboard.setText(text)
@@ -2535,7 +2540,7 @@ export class StorageHostPluginHandler {
     if (lowerFn === 'readfile' || lowerFn === 'readbytes') {
       const rawPath = String(params.filePath ?? params.path ?? '').trim()
       if (!rawPath) {
-        return { ok: false, success: false, errorCode: 'INVALID_ARGS', error: '文档路径不能为空' }
+        return { ok: false, success: false, errorCode: 'INVALID_ARGS', error: t('hostPlugin.storage.doc.pathMissing') }
       }
       const authorizedPath = await this.#ctx.authorizeExistingPath(rawPath, caller, 'read')
       const stat = await fs.stat(authorizedPath)
@@ -2553,7 +2558,7 @@ export class StorageHostPluginHandler {
       const outputPath = String(params.outputPath ?? params.filePath ?? '').trim()
       const base64Data = String(params.base64Data ?? '')
       if (!outputPath || !base64Data) {
-        return { ok: false, success: false, errorCode: 'INVALID_ARGS', error: '输出路径与数据不能为空' }
+        return { ok: false, success: false, errorCode: 'INVALID_ARGS', error: t('hostPlugin.storage.doc.outputAndDataMissing') }
       }
       const authorizedPath = await this.#ctx.authorizeOutputPath(outputPath, caller)
       await fs.writeFile(authorizedPath, Buffer.from(base64Data, 'base64'))
@@ -2784,7 +2789,7 @@ export class StorageHostPluginHandler {
       const rawPath = String(params.filePath || '').trim()
       const correctExt = String(params.correctExt || '').trim().replace(/^\./, '')
       if (!rawPath || !correctExt) {
-        return { ok: false, errorCode: 'INVALID_ARGS', error: '文件路径与目标扩展名不能为空' }
+        return { ok: false, errorCode: 'INVALID_ARGS', error: t('hostPlugin.storage.file.pathAndExtMissing') }
       }
       const authorizedPath = await this.#ctx.authorizeExistingPath(rawPath, caller, 'write')
       const parsed = path.parse(authorizedPath)
@@ -2796,7 +2801,7 @@ export class StorageHostPluginHandler {
       const rawPath = String(params.filePath || '').trim()
       const base64Data = String(params.base64Data || '')
       if (!rawPath) {
-        return { ok: false, errorCode: 'INVALID_ARGS', error: '文件路径不能为空' }
+        return { ok: false, errorCode: 'INVALID_ARGS', error: t('hostPlugin.storage.file.pathMissing') }
       }
       const authorizedPath = await this.#ctx.authorizeOutputPath(rawPath, caller)
       const tmpPath = `${authorizedPath}.ztools-tmp-${process.pid}`
@@ -2810,7 +2815,7 @@ export class StorageHostPluginHandler {
           return {
             ok: false,
             errorCode: 'FILE_LOCKED',
-            error: '文件正被其他应用打开，请关闭后重试'
+            error: t('hostPlugin.storage.file.inUse')
           }
         }
         throw err
@@ -2820,7 +2825,7 @@ export class StorageHostPluginHandler {
     if (lowerFn === 'readfile' || lowerFn === 'readbytes' || lowerFn === 'inspectfile') {
       const rawPath = String(params.filePath ?? params.path ?? '').trim()
       if (!rawPath) {
-        return { ok: false, success: false, errorCode: 'INVALID_ARGS', error: '文件路径不能为空' }
+        return { ok: false, success: false, errorCode: 'INVALID_ARGS', error: t('hostPlugin.storage.file.pathMissing') }
       }
       const authorizedPath = await this.#ctx.authorizeExistingPath(rawPath, caller, 'read')
       const stat = await fs.stat(authorizedPath)
@@ -2854,7 +2859,7 @@ export class StorageHostPluginHandler {
       const outputPath = String(params.outputPath || '').trim()
       const base64Data = String(params.base64Data || '')
       if (!outputPath) {
-        return { ok: false, errorCode: 'INVALID_ARGS', error: '输出路径不能为空' }
+        return { ok: false, errorCode: 'INVALID_ARGS', error: t('hostPlugin.storage.file.outputPathMissing') }
       }
       const authorizedPath = await this.#ctx.authorizeOutputPath(outputPath, caller)
       await fs.writeFile(authorizedPath, Buffer.from(base64Data, 'base64'))
@@ -2863,7 +2868,7 @@ export class StorageHostPluginHandler {
     if (lowerFn === 'readfile' || lowerFn === 'readbytes') {
       const rawPath = String(params.filePath ?? params.path ?? '').trim()
       if (!rawPath) {
-        return { ok: false, success: false, errorCode: 'INVALID_ARGS', error: '媒体文件路径不能为空' }
+        return { ok: false, success: false, errorCode: 'INVALID_ARGS', error: t('hostPlugin.storage.file.mediaPathMissing') }
       }
       const authorizedPath = await this.#ctx.authorizeExistingPath(rawPath, caller, 'read')
       const stat = await fs.stat(authorizedPath)

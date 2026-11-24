@@ -67,7 +67,7 @@ test('provider 只列活动接口、读取真实配置，写入参数保持独�
     await provider.write('Wi-Fi', 'en0', before, target, signal())
     assert.deepEqual(calls, [{ file: helper, args: ['--apply', 'Wi-Fi', 'en0', JSON.stringify(before), JSON.stringify(target), '--authorize'] }])
     const invalid = new MacDnsNetworkProvider(undefined, undefined, helper, async () => '{"version":1,"success":false,"code":"ADMIN_PERMISSION_REQUIRED"}')
-    await assert.rejects(invalid.write('Wi-Fi', 'en0', before, target, signal()), /未获得系统授权/)
+    await assert.rejects(invalid.write('Wi-Fi', 'en0', before, target, signal()), /system authorization was not granted/i)
   } finally { await fs.rm(root, { recursive: true, force: true }) }
 })
 test('备份落盘、自动配置空数组、跨服务恢复与损坏记录', async () => {
@@ -77,9 +77,9 @@ test('备份落盘、自动配置空数组、跨服务恢复与损坏记录', as
     assert.deepEqual((await f.backups.load('Wi-Fi', first.id)).servers, before)
     assert.deepEqual((await f.backups.latest('Wi-Fi'))?.servers, [])
     if (process.platform !== 'win32') assert.equal((await fs.stat(path.join(f.root, second.id + '.json'))).mode & 0o777, 0o600)
-    await assert.rejects(f.backups.load('Other', first.id), /不属于/)
+    await assert.rejects(f.backups.load('Other', first.id), /does not belong/i)
     await fs.writeFile(path.join(f.root, second.id + '.json'), '{}')
-    await assert.rejects(f.backups.latest('Wi-Fi'), /损坏/)
+    await assert.rejects(f.backups.latest('Wi-Fi'), /corrupted/i)
     if (process.platform !== 'win32') {
       const pointer = path.join(f.root, createHash('sha256').update('Wi-Fi').digest('hex') + '.latest')
       await fs.rm(pointer); await fs.symlink(path.join(f.root, first.id + '.json'), pointer)
@@ -122,7 +122,7 @@ test('写入失败后区分未改变、需要恢复、外部漂移和无法确�
         if (mode === 'unreadable') f.network.read = async () => { throw new Error('read denied') }
         throw new Error('apply failed')
       }
-      await assert.rejects(f.call(apply), mode === 'restore' ? /已恢复并核对/ : mode === 'unchanged' ? /未改变/ : mode === 'drift' ? /其他配置/ : mode === 'unreadable' ? /无法读取当前状态/ : /自动恢复未确认/)
+      await assert.rejects(f.call(apply), mode === 'restore' ? /restored and verified/i : mode === 'unchanged' ? /unchanged/i : mode === 'drift' ? /different configuration/i : mode === 'unreadable' ? /unable to read current state/i : /automatic restore could not be confirmed/i)
       assert.equal(attempts, ['restore', 'restore-failed'].includes(mode) ? 2 : 1)
       if (mode === 'restore') assert.deepEqual(f.get(), before)
       assert.deepEqual((await f.backups.latest('Wi-Fi'))?.servers, before)
@@ -137,10 +137,10 @@ test('授权等待可取消，取消归属隔离，停止不允许迟到写入',
     entered(); await delay(10000, undefined, { signal: abort }); f.set(target)
   }
   try {
-    const operation = assert.rejects(f.call(apply), /未改变/); await waiting
-    await assert.rejects(f.call({ action: 'cancel', operationId: apply.operationId }, { ...caller, webContentsId: 99 }), /其他插件/)
+    const operation = assert.rejects(f.call(apply), /unchanged/i); await waiting
+    await assert.rejects(f.call({ action: 'cancel', operationId: apply.operationId }, { ...caller, webContentsId: 99 }), /another plugin/i)
     await f.service.stop(); await operation; assert.deepEqual(f.get(), before)
-    await assert.rejects(f.call(apply), /已停止/)
+    await assert.rejects(f.call(apply), /stopped/i)
   } finally { await f.close() }
 })
 test('停止发生在预读取期间时不会进入写入', async () => {
@@ -158,7 +158,7 @@ test('真实写入子进程：授权中取消即退出，已进入事务则等�
       await fs.writeFile(helper, `#!${process.execPath}\nconst fs=require('node:fs'); ${commit ? "process.on('SIGTERM',()=>{})" : "process.on('SIGTERM',()=>process.exit(3))"}; fs.writeFileSync(${JSON.stringify(ready)},'ready'); setTimeout(()=>{process.stdout.write('{"version":1,"success":true,"code":"APPLIED"}');process.exit(0)},350)`, { mode: 0o755 })
       await fs.rm(ready, { force: true }); const controller = new AbortController()
       const operation = runDnsWriteCommand(helper, [], controller.signal)
-      const expected = commit ? operation : assert.rejects(operation, /取消/)
+      const expected = commit ? operation : assert.rejects(operation, /cancelled/i)
       // 新建的可执行脚本首次启动会被 macOS 安全检查拖慢（实测约 0.8 秒），给足 5 秒等待子进程就绪
       for (let i = 0; i < 1000; i++) { try { await fs.stat(ready); break } catch { await delay(5) } }
       await fs.stat(ready); const start = performance.now(); controller.abort()
@@ -213,7 +213,7 @@ test('异常终止或强制超时返回状态未确认，绝不据此覆盖系�
   const f = await fixture(); let reads = 0
   f.network.read = async () => { reads++; return [...before] }
   f.network.write = async () => { throw new DnsWriteOutcomeUnknownError() }
-  try { await assert.rejects(f.call(apply), /状态未确认.*备份/); assert.equal(reads, 1); assert.deepEqual((await f.backups.latest('Wi-Fi'))?.servers, before) }
+  try { await assert.rejects(f.call(apply), /write outcome is unconfirmed.*backup/i); assert.equal(reads, 1); assert.deepEqual((await f.backups.latest('Wi-Fi'))?.servers, before) }
   finally { await f.close() }
 })
 

@@ -1,5 +1,5 @@
 import { List, Form, ActionPanel, Action, Icon, Clipboard, showToast, Toast, useState, useEffect, useRef, useMemo, useNavigation, useLocale } from '@ztools/declarative-ui';
-import { t } from './i18n.js';
+import { t, isDefaultSideName } from './i18n.js';
 import { diffText, formatHunk, formatUnifiedDiff, describeHunk, hunkPreviewMarkdown, splitLines, MAX_DIFF_LINES } from './logic.js';
 import { createCompatFileInputProps, isDeclarativeFileInputSupported } from './host-compat.js';
 import { pickTextFile, readTextFileByPath, extractDroppedFilePaths } from './host.js';
@@ -14,13 +14,12 @@ const isSide = (v) => {
     return typeof s.name === 'string' && typeof s.text === 'string' && (s.source === undefined || s.source === 'text' || s.source === 'clipboard' || s.source === 'file');
 };
 const isFlag = (v) => typeof v === 'boolean';
-const DEFAULT_SIDE_NAMES = new Set(['左侧', '右侧', 'Left', 'Right']);
 const displaySideName = (side, fallbackKey) => {
     if (side.source === 'file')
         return side.name;
     if (side.source === 'clipboard')
         return t('clipboardName');
-    if (DEFAULT_SIDE_NAMES.has(side.name) || !side.name)
+    if (isDefaultSideName(side.name))
         return t(fallbackKey);
     return side.name;
 };

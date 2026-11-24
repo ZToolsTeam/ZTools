@@ -6,15 +6,20 @@ import os from 'node:os'
 import path from 'node:path'
 import { readSystemAvailableMemoryBytes } from '../../platform/macos/memory.js'
 import type { CallerIdentity } from '../../../contracts/capabilities.js'
+import { errorCodes } from '../../../contracts/errors.js'
+import { t } from '../../i18n/index.js'
 import {
   PROTECTED_PROCESS_NAMES,
   formatBytes,
+  isAccessDeniedCommandResult,
   isForbiddenRegistryPath,
   isProtectedSystemPath,
+  resolveHostErrorMessage,
   resolveHostSystemCommands,
   type HostPluginContext,
   type HostSystemCommands,
   escapePsSingleQuoted,
+  hostPluginError,
   PowerShellError
 } from './shared-utils.js'
 
@@ -95,13 +100,16 @@ export class SystemRegistryHostPluginHandler {
 
       if (process.platform === 'win32') {
         // 「所有文件」的键名就是 *：一律用 -LiteralPath，否则 -Path 会把它当通配符，枚举出所有文件类型的 shell 子键
+        const scopeAllFilesLabel = escapePsSingleQuoted(t('hostPlugin.sys.ctxMenu.scopeAllFiles'))
+        const scopeDirectoryLabel = escapePsSingleQuoted(t('hostPlugin.sys.ctxMenu.scopeDirectory'))
+        const scopeBackgroundLabel = escapePsSingleQuoted(t('hostPlugin.sys.ctxMenu.scopeBackground'))
         const psScript = `
           $roots = @(
-            @{ Scope = 'file'; ScopeLabel = '所有文件 (*)'; Path = 'HKCU:\\Software\\Classes\\*\\shell' },
-            @{ Scope = 'directory'; ScopeLabel = '文件夹 (Directory)'; Path = 'HKCU:\\Software\\Classes\\Directory\\shell' },
-            @{ Scope = 'background'; ScopeLabel = '桌面背景 (Background)'; Path = 'HKCU:\\Software\\Classes\\Directory\\Background\\shell' },
-            @{ Scope = 'file'; ScopeLabel = '所有文件 (*)'; Path = 'HKLM:\\Software\\Classes\\*\\shell' },
-            @{ Scope = 'directory'; ScopeLabel = '文件夹 (Directory)'; Path = 'HKLM:\\Software\\Classes\\Directory\\shell' }
+            @{ Scope = 'file'; ScopeLabel = '${scopeAllFilesLabel}'; Path = 'HKCU:\\Software\\Classes\\*\\shell' },
+            @{ Scope = 'directory'; ScopeLabel = '${scopeDirectoryLabel}'; Path = 'HKCU:\\Software\\Classes\\Directory\\shell' },
+            @{ Scope = 'background'; ScopeLabel = '${scopeBackgroundLabel}'; Path = 'HKCU:\\Software\\Classes\\Directory\\Background\\shell' },
+            @{ Scope = 'file'; ScopeLabel = '${scopeAllFilesLabel}'; Path = 'HKLM:\\Software\\Classes\\*\\shell' },
+            @{ Scope = 'directory'; ScopeLabel = '${scopeDirectoryLabel}'; Path = 'HKLM:\\Software\\Classes\\Directory\\shell' }
           )
           $results = @()
           foreach ($r in $roots) {
@@ -139,14 +147,14 @@ export class SystemRegistryHostPluginHandler {
         try {
           raw = await this.#sys.runPowerShell(psScript, 12_000, signal)
         } catch (err) {
-          return SystemRegistryHostPluginHandler.#psFailure(err, 'SCAN_FAILED', '读取右键菜单失败')
+          return SystemRegistryHostPluginHandler.#psFailure(err, 'SCAN_FAILED', t('hostPlugin.sys.ctxMenu.scanFailed'))
         }
         if (raw.trim()) {
           let parsed: unknown
           try {
             parsed = JSON.parse(raw)
           } catch {
-            return { ok: false, success: false, errorCode: 'SCAN_FAILED', error: 'SCAN_FAILED: 右键菜单扫描结果格式无效' }
+            return { ok: false, success: false, errorCode: 'SCAN_FAILED', error: t('hostPlugin.sys.ctxMenu.scanInvalid') }
           }
           const list = Array.isArray(parsed) ? parsed : [parsed]
           for (const entry of list) {
@@ -154,19 +162,19 @@ export class SystemRegistryHostPluginHandler {
               const rec = entry as Record<string, unknown>
               const rawScope = String(rec.scope ?? 'file').toLowerCase()
               const normalizedScope: 'file' | 'directory' | 'background' =
-                rawScope.includes('background') || rawScope.includes('背景')
+                rawScope.includes('background') || rawScope.includes('背景') // i18n-allow: legacy Chinese scope alias
                   ? 'background'
-                  : rawScope.includes('directory') || rawScope.includes('文件夹')
+                  : rawScope.includes('directory') || rawScope.includes('文件夹') // i18n-allow: legacy Chinese scope alias
                     ? 'directory'
                     : 'file'
               const scopeLabel =
                 typeof rec.scopeLabel === 'string' && rec.scopeLabel
                   ? rec.scopeLabel
                   : normalizedScope === 'background'
-                    ? '桌面背景 (Background)'
+                    ? t('hostPlugin.sys.ctxMenu.scopeBackground')
                     : normalizedScope === 'directory'
-                      ? '文件夹 (Directory)'
-                      : '所有文件 (*)'
+                      ? t('hostPlugin.sys.ctxMenu.scopeDirectory')
+                      : t('hostPlugin.sys.ctxMenu.scopeAllFiles')
               items.push({
                 ...rec,
                 scope: normalizedScope,
@@ -192,17 +200,17 @@ export class SystemRegistryHostPluginHandler {
       const enabled =
         lowerFn === 'enable' ? true : lowerFn === 'disable' ? false : Boolean(params.enabled)
       if (!regPath || process.platform !== 'win32') {
-        return { ok: false, success: false, error: '无效的注册表路径或非 Windows 平台' }
+        return { ok: false, success: false, errorCode: 'INVALID_REG_PATH', error: t('hostPlugin.sys.ctxMenu.invalidRegOrPlatform') }
       }
       if (isForbiddenRegistryPath(regPath)) {
-        return { ok: false, success: false, error: '安全策略拦截：禁止修改系统敏感注册表路径' }
+        return { ok: false, success: false, errorCode: 'PERMISSION_DENIED', error: t('hostPlugin.sys.ctxMenu.forbiddenRegPath') }
       }
       const normalizedRegPath = regPath
         .replace(/^HKCU:\\?/i, 'HKEY_CURRENT_USER\\')
         .replace(/^HKLM:\\?/i, 'HKEY_LOCAL_MACHINE\\')
       // 只允许扫描列出的右键菜单项（HKCU / HKLM 下 *、Directory、Directory\Background、Drive 的 shell\<项>），不能借此改任意注册表键
       if (!SystemRegistryHostPluginHandler.#isContextMenuShellKey(normalizedRegPath, true)) {
-        return { ok: false, success: false, errorCode: 'INVALID_REG_PATH', error: 'INVALID_REG_PATH: 只能启用或禁用右键菜单 shell 下的菜单项' }
+        return { ok: false, success: false, errorCode: 'INVALID_REG_PATH', error: t('hostPlugin.sys.ctxMenu.shellOnly') }
       }
       const psRegPath = `Registry::${escapePsSingleQuoted(normalizedRegPath)}`
       // 键名 * 必须用 -LiteralPath（否则会通配到其他文件类型的同名项）；先判断 LegacyDisable 是否存在，修改后读回确认，
@@ -233,21 +241,21 @@ export class SystemRegistryHostPluginHandler {
       try {
         out = await this.#sys.runPowerShell(script, 8_000, signal)
       } catch (err) {
-        return { ...base, ...SystemRegistryHostPluginHandler.#psFailure(err, 'TOGGLE_FAILED', '修改右键菜单启用状态失败') }
+        return { ...base, ...SystemRegistryHostPluginHandler.#psFailure(err, 'TOGGLE_FAILED', t('hostPlugin.sys.ctxMenu.toggleFailed')) }
       }
       const status = SystemRegistryHostPluginHandler.#lastStatusLine(out)
       if (status === 'OK') return { ok: true, success: true, ...base }
       const failure: Record<string, { errorCode: string; error: string }> = {
-        ACCESS_DENIED: { errorCode: 'ADMIN_REQUIRED', error: 'ADMIN_REQUIRED: 修改该右键菜单项需要管理员权限，请以管理员身份运行 ZTools 后重试' },
-        KEY_NOT_FOUND: { errorCode: 'ITEM_NOT_FOUND', error: 'ITEM_NOT_FOUND: 右键菜单项不存在，可能已被删除' },
-        VERIFY_FAILED: { errorCode: 'VERIFY_FAILED', error: 'VERIFY_FAILED: 已执行修改，但读回的启用状态与预期不符' }
+        ACCESS_DENIED: { errorCode: 'ADMIN_REQUIRED', error: t('hostPlugin.sys.ctxMenu.toggleAdminRequired') },
+        KEY_NOT_FOUND: { errorCode: 'ITEM_NOT_FOUND', error: t('hostPlugin.sys.ctxMenu.itemNotFound') },
+        VERIFY_FAILED: { errorCode: 'VERIFY_FAILED', error: t('hostPlugin.sys.ctxMenu.toggleVerifyFailed') }
       }
-      return { ok: false, success: false, ...base, ...(failure[status] ?? { errorCode: 'TOGGLE_FAILED', error: `TOGGLE_FAILED: 修改右键菜单启用状态未得到确认（输出：${out.trim().slice(0, 200) || '空'}）` }) }
+      return { ok: false, success: false, ...base, ...(failure[status] ?? { errorCode: 'TOGGLE_FAILED', error: t('hostPlugin.sys.ctxMenu.toggleUnconfirmed', { output: out.trim().slice(0, 200) || t('hostPlugin.sys.emptyOutput') }) }) }
     }
 
     if (lowerFn === 'switchwin11classic' || lowerFn === 'togglewin11classic') {
       if (process.platform !== 'win32') {
-        return { ok: false, success: false, error: '仅 Windows 平台支持切换 Win11 经典右键菜单' }
+        return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.sys.ctxMenu.win11ClassicWinOnly') }
       }
       const clsidKey = 'HKCU\\Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}'
       const inprocKey = `${clsidKey}\\InprocServer32`
@@ -274,12 +282,12 @@ export class SystemRegistryHostPluginHandler {
           success: ok,
           classic: true,
           output: res.stdout || res.stderr,
-          ...(ok ? {} : { error: res.stderr || res.stdout || '写入经典右键菜单注册表项失败' })
+          ...(ok ? {} : { error: res.stderr || res.stdout || t('hostPlugin.sys.ctxMenu.win11ClassicWriteFailed') })
         }
       } else {
         const queryRes = await this.#sys.runCommand('reg', ['query', clsidKey], 5_000, signal)
         if (queryRes.exitCode !== 0) {
-          return { ok: true, success: true, classic: false, output: '当前已是 Win11 默认现代右键菜单' }
+          return { ok: true, success: true, classic: false, output: t('hostPlugin.sys.ctxMenu.win11ModernAlready') }
         }
         const res = await this.#sys.runCommand('reg', ['delete', clsidKey, '/f'], 8_000, signal)
         const ok = res.exitCode === 0
@@ -288,14 +296,14 @@ export class SystemRegistryHostPluginHandler {
           success: ok,
           classic: false,
           output: res.stdout || res.stderr,
-          ...(ok ? {} : { error: res.stderr || res.stdout || '恢复 Win11 默认右键菜单失败' })
+          ...(ok ? {} : { error: res.stderr || res.stdout || t('hostPlugin.sys.ctxMenu.win11ModernRestoreFailed') })
         }
       }
     }
 
     if (lowerFn === 'cleanorphans' || lowerFn === 'removeorphans') {
       if (process.platform !== 'win32') {
-        return { ok: false, success: false, error: '仅 Windows 平台支持清理孤儿右键菜单注册表项' }
+        return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.sys.ctxMenu.cleanOrphanWinOnly') }
       }
       const rawTargets = Array.isArray(params.regPaths)
         ? params.regPaths.map(String)
@@ -309,7 +317,7 @@ export class SystemRegistryHostPluginHandler {
                 ? [params.id]
                 : []
       if (rawTargets.length === 0) {
-        return { ok: false, success: false, error: '未提供待清理的孤儿注册表路径列表' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.sys.ctxMenu.cleanOrphanEmpty') }
       }
       const cleanedPaths: string[] = []
       const errors: Array<{ regPath: string; error: string }> = []
@@ -325,7 +333,7 @@ export class SystemRegistryHostPluginHandler {
         ) {
           errors.push({
             regPath: rawTarget,
-            error: '安全策略拦截：仅允许清理 HKCU\\Software\\Classes\\ 下的菜单项'
+            error: t('hostPlugin.sys.ctxMenu.cleanOrphanHkcuOnly')
           })
           continue
         }
@@ -336,7 +344,7 @@ export class SystemRegistryHostPluginHandler {
         } else {
           errors.push({
             regPath: normalized,
-            error: res.stderr || res.stdout || '删除注册表项失败'
+            error: res.stderr || res.stdout || t('hostPlugin.sys.ctxMenu.deleteRegFailed')
           })
         }
       }
@@ -356,16 +364,16 @@ export class SystemRegistryHostPluginHandler {
       const displayName = String(params.displayName ?? params.name ?? keyName).trim()
       const rawCommand = String(params.command ?? '').trim()
       if (!keyName || !rawCommand || process.platform !== 'win32') {
-        return { ok: false, success: false, error: '名称和执行命令不能为空' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.sys.ctxMenu.nameAndCmdRequired') }
       }
       // 键名白名单：只删 ASCII 单引号时弯引号仍能提前结束 PowerShell 字符串注入命令；. / .. 会被当成上级目录
       if (!/^[\w .()-]{1,64}$/.test(keyName) || /^[. ]+$/.test(keyName)) {
-        return { ok: false, success: false, errorCode: 'INVALID_KEY_NAME', error: 'INVALID_KEY_NAME: 菜单键名只能包含字母、数字、下划线、空格、点、括号和连字符（1~64 个字符），显示名称可另行填写' }
+        return { ok: false, success: false, errorCode: 'INVALID_KEY_NAME', error: t('hostPlugin.sys.ctxMenu.invalidKeyName') }
       }
       const exeMatch = rawCommand.match(/^"([^"]+)"|^(\S+)/)
       const rawExePath = (exeMatch?.[1] ?? exeMatch?.[2] ?? '').trim()
       if (!rawExePath) {
-        return { ok: false, success: false, error: '无法解析命令中的可执行文件路径' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.sys.ctxMenu.cannotResolveExe') }
       }
       const authorizedExe = await this.#ctx.authorizeExistingPath(rawExePath, caller, 'read')
       const command = `"${authorizedExe}" "%1"`
@@ -407,13 +415,13 @@ export class SystemRegistryHostPluginHandler {
       try {
         out = await this.#sys.runPowerShell(script, 8_000, signal)
       } catch (err) {
-        return { ...base, ...SystemRegistryHostPluginHandler.#psFailure(err, 'WRITE_FAILED', '写入右键菜单失败') }
+        return { ...base, ...SystemRegistryHostPluginHandler.#psFailure(err, 'WRITE_FAILED', t('hostPlugin.sys.ctxMenu.writeFailed')) }
       }
       const status = SystemRegistryHostPluginHandler.#lastStatusLine(out)
       if (status === 'OK') return { ok: true, success: true, ...base }
-      if (status === 'ACCESS_DENIED') return { ok: false, success: false, ...base, errorCode: 'ADMIN_REQUIRED', error: 'ADMIN_REQUIRED: 没有写入该右键菜单注册表项的权限' }
-      if (status === 'VERIFY_FAILED') return { ok: false, success: false, ...base, errorCode: 'VERIFY_FAILED', error: 'VERIFY_FAILED: 已写入右键菜单，但读回的内容与预期不符' }
-      return { ok: false, success: false, ...base, errorCode: 'WRITE_FAILED', error: `WRITE_FAILED: 写入右键菜单未得到确认（输出：${out.trim().slice(0, 200) || '空'}）` }
+      if (status === 'ACCESS_DENIED') return { ok: false, success: false, ...base, errorCode: 'ADMIN_REQUIRED', error: t('hostPlugin.sys.ctxMenu.writeAdminRequired') }
+      if (status === 'VERIFY_FAILED') return { ok: false, success: false, ...base, errorCode: 'VERIFY_FAILED', error: t('hostPlugin.sys.ctxMenu.writeVerifyFailed') }
+      return { ok: false, success: false, ...base, errorCode: 'WRITE_FAILED', error: t('hostPlugin.sys.ctxMenu.writeUnconfirmed', { output: out.trim().slice(0, 200) || t('hostPlugin.sys.emptyOutput') }) }
     }
 
     if (lowerFn === 'delete' || lowerFn === 'remove' || lowerFn === 'deleteitem') {
@@ -423,10 +431,10 @@ export class SystemRegistryHostPluginHandler {
         .replace(/^HKCU\\/i, 'HKEY_CURRENT_USER\\')
       // 删除带 -Recurse：路径必须严格是 HKCU 下某个右键菜单项本身，不能是 shell 根、上级类或任意注册表键
       if (!SystemRegistryHostPluginHandler.#isContextMenuShellKey(normalized, false)) {
-        return { ok: false, success: false, errorCode: 'INVALID_REG_PATH', error: '出于安全保护，仅允许删除当前用户 (HKCU) 下的自定义右键菜单项' }
+        return { ok: false, success: false, errorCode: 'INVALID_REG_PATH', error: t('hostPlugin.sys.ctxMenu.deleteHkcuOnly') }
       }
       if (process.platform !== 'win32') {
-        return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: '仅 Windows 平台支持删除右键菜单项' }
+        return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: t('hostPlugin.sys.ctxMenu.deleteWinOnly') }
       }
       const psRegPath = `Registry::${escapePsSingleQuoted(normalized)}`
       // -LiteralPath：所有文件项路径里的 * 不能被当成通配符，否则会递归删除其他文件类型下的同名菜单项
@@ -449,14 +457,14 @@ export class SystemRegistryHostPluginHandler {
       try {
         out = await this.#sys.runPowerShell(script, 8_000, signal)
       } catch (err) {
-        return { ...base, ...SystemRegistryHostPluginHandler.#psFailure(err, 'DELETE_FAILED', '删除右键菜单项失败') }
+        return { ...base, ...SystemRegistryHostPluginHandler.#psFailure(err, 'DELETE_FAILED', t('hostPlugin.sys.ctxMenu.deleteFailed')) }
       }
       const status = SystemRegistryHostPluginHandler.#lastStatusLine(out)
       if (status === 'OK') return { ok: true, success: true, ...base }
-      if (status === 'ACCESS_DENIED') return { ok: false, success: false, ...base, errorCode: 'ADMIN_REQUIRED', error: 'ADMIN_REQUIRED: 没有删除该右键菜单项的权限' }
-      if (status === 'KEY_NOT_FOUND') return { ok: false, success: false, ...base, errorCode: 'ITEM_NOT_FOUND', error: 'ITEM_NOT_FOUND: 右键菜单项不存在，可能已被删除' }
-      if (status === 'VERIFY_FAILED') return { ok: false, success: false, ...base, errorCode: 'VERIFY_FAILED', error: 'VERIFY_FAILED: 已执行删除，但注册表项仍然存在' }
-      return { ok: false, success: false, ...base, errorCode: 'DELETE_FAILED', error: `DELETE_FAILED: 删除右键菜单项未得到确认（输出：${out.trim().slice(0, 200) || '空'}）` }
+      if (status === 'ACCESS_DENIED') return { ok: false, success: false, ...base, errorCode: 'ADMIN_REQUIRED', error: t('hostPlugin.sys.ctxMenu.deleteAdminRequired') }
+      if (status === 'KEY_NOT_FOUND') return { ok: false, success: false, ...base, errorCode: 'ITEM_NOT_FOUND', error: t('hostPlugin.sys.ctxMenu.itemNotFound') }
+      if (status === 'VERIFY_FAILED') return { ok: false, success: false, ...base, errorCode: 'VERIFY_FAILED', error: t('hostPlugin.sys.ctxMenu.deleteVerifyFailed') }
+      return { ok: false, success: false, ...base, errorCode: 'DELETE_FAILED', error: t('hostPlugin.sys.ctxMenu.deleteUnconfirmed', { output: out.trim().slice(0, 200) || t('hostPlugin.sys.emptyOutput') }) }
     }
 
     return {
@@ -505,7 +513,7 @@ export class SystemRegistryHostPluginHandler {
           if (fsSync.existsSync(exe)) detectedPath = exe
         }
       } catch (err) {
-        detectWarning = `读取微信安装路径失败：${err instanceof Error ? err.message : String(err)}`
+        detectWarning = t('hostPlugin.sys.wechat.readPathFailed', { detail: err instanceof Error ? err.message : String(err) })
       }
     }
 
@@ -539,14 +547,14 @@ export class SystemRegistryHostPluginHandler {
         try {
           raw = await this.#sys.runPowerShell(ps, 6_000, signal)
         } catch (err) {
-          return SystemRegistryHostPluginHandler.#psFailure(err, 'DETECT_FAILED', '读取微信进程失败，不能判断运行实例数')
+          return SystemRegistryHostPluginHandler.#psFailure(err, 'DETECT_FAILED', t('hostPlugin.sys.wechat.readProcsFailed'))
         }
         if (raw.trim()) {
           let parsed: unknown
           try {
             parsed = JSON.parse(raw)
           } catch {
-            return { ok: false, success: false, errorCode: 'DETECT_FAILED', error: 'DETECT_FAILED: 微信进程列表格式无效，不能判断运行实例数' }
+            return { ok: false, success: false, errorCode: 'DETECT_FAILED', error: t('hostPlugin.sys.wechat.invalidProcList') }
           }
           const list = Array.isArray(parsed) ? parsed : [parsed]
           for (const item of list) {
@@ -591,7 +599,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'WECHAT_NOT_FOUND',
-          error: `未检测到本地微信安装路径 (WeChat.exe)，请在设置或参数中指定路径${detectWarning ? `（${detectWarning}）` : ''}`
+          error: detectWarning ? t('hostPlugin.sys.wechat.notFoundWithWarning', { warning: detectWarning }) : t('hostPlugin.sys.wechat.notFound')
         }
       }
       const resolvedExe = rawParamPath
@@ -679,14 +687,14 @@ export class SystemRegistryHostPluginHandler {
     if (lowerFn === 'killprocess' || lowerFn === 'terminate') {
       const pid = Number(params.pid)
       if (!pid || pid <= 4 || pid === process.pid) {
-        return { ok: false, success: false, error: '无效或受保护的系统进程 PID' }
+        return { ok: false, success: false, errorCode: 'PROCESS_PROTECTED', error: t('hostPlugin.sys.process.invalidOrProtectedPid') }
       }
       if (process.platform === 'win32') {
         const tasklist = await this.#sys.runCommand('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], 5_000, signal)
         const m = tasklist.stdout.match(/^"([^"]+)"/)
         const procName = (m?.[1] ?? '').toLowerCase()
         if (PROTECTED_PROCESS_NAMES.has(procName)) {
-          return { ok: false, success: false, error: `安全拦截：禁止终止系统关键进程 (${procName})` }
+          return { ok: false, success: false, errorCode: 'PROCESS_PROTECTED', error: t('hostPlugin.sys.process.criticalBlocked', { name: procName }) }
         }
       }
       try {
@@ -740,7 +748,7 @@ export class SystemRegistryHostPluginHandler {
             }
           }
         } catch (err) {
-          topProcessesWarning = `读取进程内存排行失败：${err instanceof Error ? err.message : String(err)}`
+          topProcessesWarning = t('hostPlugin.sys.boost.topProcsFailed', { detail: err instanceof Error ? err.message : String(err) })
         }
       }
 
@@ -825,7 +833,7 @@ export class SystemRegistryHostPluginHandler {
       ok: false,
       success: false,
       errorCode: 'UNSUPPORTED_ACTION',
-      error: '请更新硬件信息插件，通过新版接口读取硬件信息'
+      error: t('hostPlugin.sys.hardware.upgradeRequired')
     }
   }
 
@@ -841,7 +849,7 @@ export class SystemRegistryHostPluginHandler {
         params.quietUninstallString ?? params.uninstallString ?? params.installLocation ?? params.path ?? params.uninstallPath ?? ''
       ).trim()
       if (!rawUninstallCmd) {
-        return { ok: false, success: false, error: '未提供待清理的软件残余目录或卸载程序路径' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.sys.software.noTargetPath') }
       }
       if (/^msiexec(?:.exe)?\s+/i.test(rawUninstallCmd)) {
         if (params.dryRun !== true && process.platform === 'win32') {
@@ -863,11 +871,11 @@ export class SystemRegistryHostPluginHandler {
         : rawUninstallCmd.slice(cleanCandidate.length).trim().split(/\s+/).filter(Boolean)
 
       if (isProtectedSystemPath(path.resolve(cleanCandidate))) {
-        return { ok: false, success: false, error: '系统核心路径或用户主目录受保护，禁止移除' }
+        return { ok: false, success: false, errorCode: 'PROTECTED_PATH', error: t('hostPlugin.sys.software.protectedPath') }
       }
       const resolved = await this.#ctx.authorizeExistingPath(cleanCandidate, caller, 'write')
       if (isProtectedSystemPath(resolved)) {
-        return { ok: false, success: false, error: '系统核心路径或用户主目录受保护，禁止移除' }
+        return { ok: false, success: false, errorCode: 'PROTECTED_PATH', error: t('hostPlugin.sys.software.protectedPath') }
       }
       if (/\.(?:exe|msi)$/i.test(resolved)) {
         if (params.dryRun !== true) {
@@ -884,7 +892,8 @@ export class SystemRegistryHostPluginHandler {
       // 软件残余目录同样走回收站：没有回收站或超过容量时拒绝并保留目录，绝不永久删除
       const trashRes = await this.#moveTargetToTrash(resolved, signal)
       if (!trashRes.ok) {
-        return { ok: false, success: false, errorCode: trashRes.errorCode ?? 'TRASH_FAILED', error: trashRes.error ?? '移入回收站失败' }
+        const trashErr = trashRes.error
+        return { ok: false, success: false, errorCode: trashRes.errorCode ?? 'TRASH_FAILED', error: trashErr ? trashErr : t('hostPlugin.sys.software.trashFailed') }
       }
       return { ok: true, success: true, removedPath: resolved }
     }
@@ -898,7 +907,7 @@ export class SystemRegistryHostPluginHandler {
             ? [params.path]
             : []
       if (rawPaths.length === 0) {
-        return { ok: false, success: false, error: '未提供待清理的残留文件路径列表 (paths)' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.sys.software.noRemnantPaths') }
       }
       let freedBytes = 0
       const cleanedPaths: string[] = []
@@ -908,7 +917,7 @@ export class SystemRegistryHostPluginHandler {
         try {
           const resolved = await this.#ctx.authorizeExistingPath(rawPath.trim(), caller, 'write')
           if (isProtectedSystemPath(resolved)) {
-            errors.push({ path: resolved, error: '系统核心路径受保护，禁止清理' })
+            errors.push({ path: resolved, error: t('hostPlugin.sys.software.protectedClean') })
             continue
           }
           const stat = await fs.lstat(resolved)
@@ -975,14 +984,14 @@ export class SystemRegistryHostPluginHandler {
         try {
           raw = await this.#sys.runPowerShell(ps, 8_000, signal)
         } catch (err) {
-          return SystemRegistryHostPluginHandler.#psFailure(err, 'SCAN_FAILED', '读取已安装软件列表失败')
+          return SystemRegistryHostPluginHandler.#psFailure(err, 'SCAN_FAILED', t('hostPlugin.sys.software.scanFailed'))
         }
         if (raw.trim()) {
           let parsed: unknown
           try {
             parsed = JSON.parse(raw)
           } catch {
-            return { ok: false, success: false, errorCode: 'SCAN_FAILED', error: 'SCAN_FAILED: 已安装软件列表格式无效' }
+            return { ok: false, success: false, errorCode: 'SCAN_FAILED', error: t('hostPlugin.sys.software.scanInvalid') }
           }
           const list = Array.isArray(parsed) ? parsed : [parsed]
           for (const item of list) {
@@ -1010,8 +1019,8 @@ export class SystemRegistryHostPluginHandler {
                 .digest('hex')
                 .slice(0, 10),
               name,
-              version: String(rec.DisplayVersion ?? '').trim() || '未知版本',
-              publisher: String(rec.Publisher ?? '').trim() || '未知发布者',
+              version: String(rec.DisplayVersion ?? '').trim() || t('hostPlugin.sys.software.unknownVersion'),
+              publisher: String(rec.Publisher ?? '').trim() || t('hostPlugin.sys.software.unknownPublisher'),
               path: installLocation || uninstallString,
               installLocation,
               uninstallString,
@@ -1132,7 +1141,7 @@ export class SystemRegistryHostPluginHandler {
           executedAt: new Date().toISOString()
         }
       }
-      return { ok: false, success: false, error: '当前系统平台不支持 rundll32 锁屏' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.sys.tools.lockUnsupported') }
     }
 
     if (
@@ -1160,18 +1169,18 @@ export class SystemRegistryHostPluginHandler {
         try {
           out = await this.#sys.runPowerShell(ps, 15_000, signal)
         } catch (err) {
-          return { ...base, ...SystemRegistryHostPluginHandler.#psFailure(err, 'EMPTY_TRASH_FAILED', '清空回收站失败') }
+          return { ...base, ...SystemRegistryHostPluginHandler.#psFailure(err, 'EMPTY_TRASH_FAILED', t('hostPlugin.sys.tools.emptyTrashFailed')) }
         }
         const status = SystemRegistryHostPluginHandler.#lastStatusLine(out)
         if (status === 'OK') return { ok: true, success: true, ...base }
         if (status === 'ALREADY_EMPTY') return { ok: true, success: true, ...base, alreadyEmpty: true }
         if (status.startsWith('REMAINING:')) {
-          return { ok: false, success: false, ...base, errorCode: 'EMPTY_TRASH_INCOMPLETE', error: `EMPTY_TRASH_INCOMPLETE: 回收站仍有 ${status.slice('REMAINING:'.length)} 个项目未清空` }
+          return { ok: false, success: false, ...base, errorCode: 'EMPTY_TRASH_INCOMPLETE', error: t('hostPlugin.sys.tools.emptyTrashIncomplete', { count: status.slice('REMAINING:'.length) }) }
         }
-        const detail = status.startsWith('CLEAR_FAILED:') ? status.slice('CLEAR_FAILED:'.length) : `输出：${out.trim().slice(0, 200) || '空'}`
-        return { ok: false, success: false, ...base, errorCode: 'EMPTY_TRASH_FAILED', error: `EMPTY_TRASH_FAILED: 清空回收站失败：${detail}` }
+        const detail = status.startsWith('CLEAR_FAILED:') ? status.slice('CLEAR_FAILED:'.length) : t('hostPlugin.sys.outputPrefix', { output: out.trim().slice(0, 200) || t('hostPlugin.sys.emptyOutput') })
+        return { ok: false, success: false, ...base, errorCode: 'EMPTY_TRASH_FAILED', error: t('hostPlugin.sys.tools.emptyTrashFailedDetail', { detail }) }
       }
-      return { ok: false, success: false, error: '当前平台不支持 Clear-RecycleBin' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.sys.tools.clearRecycleUnsupported') }
     }
 
     if (normalizedAction === 'sleep' || normalizedAction === 'suspend' || normalizedAction === 'hibernatesystem') {
@@ -1184,7 +1193,7 @@ export class SystemRegistryHostPluginHandler {
           executedAt: new Date().toISOString()
         }
       }
-      return { ok: false, success: false, error: '当前平台不支持系统休眠指令' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.sys.tools.sleepUnsupported') }
     }
 
     if (
@@ -1205,7 +1214,7 @@ export class SystemRegistryHostPluginHandler {
             signal
           )
         } catch (err) {
-          return { action: rawAction, ...SystemRegistryHostPluginHandler.#psFailure(err, 'ACTION_FAILED', '发送音量按键失败') }
+          return { action: rawAction, ...SystemRegistryHostPluginHandler.#psFailure(err, 'ACTION_FAILED', t('hostPlugin.sys.tools.volumeKeyFailed')) }
         }
         const ok = SystemRegistryHostPluginHandler.#lastStatusLine(out) === 'OK'
         return {
@@ -1213,10 +1222,10 @@ export class SystemRegistryHostPluginHandler {
           success: ok,
           action: rawAction,
           executedAt: new Date().toISOString(),
-          ...(ok ? {} : { errorCode: 'ACTION_FAILED', error: 'ACTION_FAILED: 发送音量按键未得到确认' })
+          ...(ok ? {} : { errorCode: 'ACTION_FAILED', error: t('hostPlugin.sys.tools.volumeKeyUnconfirmed') })
         }
       }
-      return { ok: false, success: false, error: '当前平台不支持音量快捷键注入' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.sys.tools.volumeKeyUnsupported') }
     }
 
     if (normalizedAction === 'togglehiddenfiles') {
@@ -1233,7 +1242,7 @@ export class SystemRegistryHostPluginHandler {
           showHiddenFiles: nextVal === '1'
         }
       }
-      return { ok: false, success: false, error: '仅 Windows 支持切换隐藏文件显示状态' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.sys.tools.hiddenFilesWinOnly') }
     }
 
     if (normalizedAction === 'togglefileextensions') {
@@ -1250,7 +1259,7 @@ export class SystemRegistryHostPluginHandler {
           showExtensions: nextVal === '0'
         }
       }
-      return { ok: false, success: false, error: '仅 Windows 支持切换文件扩展名显示状态' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.sys.tools.fileExtWinOnly') }
     }
 
     if (normalizedAction === 'toggledarkmode' || normalizedAction === 'toggletheme') {
@@ -1267,7 +1276,7 @@ export class SystemRegistryHostPluginHandler {
           darkMode: nextVal === '0'
         }
       }
-      return { ok: false, success: false, error: '仅 Windows 支持切换系统深浅色模式' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.sys.tools.darkModeWinOnly') }
     }
 
     if (normalizedAction === 'flushdns') {
@@ -1280,7 +1289,7 @@ export class SystemRegistryHostPluginHandler {
           output: res.stdout || res.stderr
         }
       }
-      return { ok: false, success: false, error: '仅 Windows 支持 ipconfig /flushdns' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.sys.tools.flushDnsWinOnly') }
     }
 
     return {
@@ -1337,7 +1346,7 @@ export class SystemRegistryHostPluginHandler {
         try {
           raw = await this.#sys.runPowerShell(ps, 6_000)
         } catch (err) {
-          return SystemRegistryHostPluginHandler.#psFailure(err, 'LIST_FAILED', '读取窗口列表失败')
+          return SystemRegistryHostPluginHandler.#psFailure(err, 'LIST_FAILED', t('hostPlugin.sys.window.listFailed'))
         }
         const windows: Array<Record<string, unknown>> = []
         if (raw.trim()) {
@@ -1345,7 +1354,7 @@ export class SystemRegistryHostPluginHandler {
           try {
             parsed = JSON.parse(raw)
           } catch {
-            return { ok: false, success: false, errorCode: 'LIST_FAILED', error: 'LIST_FAILED: 窗口列表格式无效' }
+            return { ok: false, success: false, errorCode: 'LIST_FAILED', error: t('hostPlugin.sys.window.listInvalid') }
           }
           const list = Array.isArray(parsed) ? parsed : [parsed]
           for (const w of list) {
@@ -1399,7 +1408,7 @@ export class SystemRegistryHostPluginHandler {
       return {
         ok: false,
         success: false,
-        error: '当前操作系统不支持 Win32 窗口管理操作'
+        error: t('hostPlugin.sys.window.win32Unsupported')
       }
     }
 
@@ -1408,7 +1417,7 @@ export class SystemRegistryHostPluginHandler {
       return {
         ok: false,
         success: false,
-        error: '无效的窗口句柄 (hwnd)'
+        error: t('hostPlugin.sys.window.invalidHwnd')
       }
     }
 
@@ -1469,7 +1478,7 @@ export class SystemRegistryHostPluginHandler {
     try {
       out = await this.#sys.runPowerShell(psScript, 8_000)
     } catch (err) {
-      return { action: normalizedAction, ...SystemRegistryHostPluginHandler.#psFailure(err, 'WINDOW_ACTION_FAILED', '执行 Win32 窗口管理操作失败') }
+      return { action: normalizedAction, ...SystemRegistryHostPluginHandler.#psFailure(err, 'WINDOW_ACTION_FAILED', t('hostPlugin.sys.window.actionFailed')) }
     }
     const status = SystemRegistryHostPluginHandler.#lastStatusLine(out)
     const ok = status === 'OK'
@@ -1478,8 +1487,8 @@ export class SystemRegistryHostPluginHandler {
       success: ok,
       action: normalizedAction,
       ...(ok ? {} : status === 'ERR_NO_WINDOW'
-        ? { errorCode: 'NO_WINDOW', error: 'NO_WINDOW: 没有找到要操作的窗口' }
-        : { errorCode: 'WINDOW_ACTION_FAILED', error: '执行 Win32 窗口管理操作失败' })
+        ? { errorCode: 'NO_WINDOW', error: t('hostPlugin.sys.window.noWindow') }
+        : { errorCode: 'WINDOW_ACTION_FAILED', error: t('hostPlugin.sys.window.actionFailed') })
     }
   }
 
@@ -1501,7 +1510,7 @@ export class SystemRegistryHostPluginHandler {
     ) {
       const text = String(params.text ?? params.content ?? '')
       if (!this.#ctx.clipboard) {
-        return { ok: false, success: false, copied: false, error: '宿主剪贴板服务未注入，无法写入剪贴板' }
+        return { ok: false, success: false, copied: false, errorCode: 'CLIPBOARD_ERROR', error: t('hostPlugin.sys.clipboard.serviceMissing') }
       }
       await this.#ctx.clipboard.setText(text)
       return { ok: true, success: true, copied: true, text }
@@ -1583,19 +1592,19 @@ export class SystemRegistryHostPluginHandler {
     pid: number,
     name: string,
     rawServiceType?: string
-  ): '系统内核' | '资源管理器' | '后台服务' | '普通进程' {
+  ): string {
     if (SystemRegistryHostPluginHandler.#isKernelProtectedProcess(pid, name)) {
-      return '系统内核'
+      return t('hostPlugin.sys.procType.kernel')
     }
     const base = SystemRegistryHostPluginHandler.#normalizeProcessBaseName(name)
     if (base === 'explorer') {
-      return '资源管理器'
+      return t('hostPlugin.sys.procType.explorer')
     }
     const st = (rawServiceType ?? '').toLowerCase()
-    if (st.includes('service') || st === '3' || st.includes('后台服务')) {
-      return '后台服务'
+    if (st.includes('service') || st === '3' || st.includes('后台服务')) { // i18n-allow: legacy Chinese service type alias
+      return t('hostPlugin.sys.procType.service')
     }
-    return '普通进程'
+    return t('hostPlugin.sys.procType.normal')
   }
 
   static #validateUnlockTargetPath(rawTarget: string): { valid: true } | { valid: false; errorCode: string; error: string } {
@@ -1604,21 +1613,21 @@ export class SystemRegistryHostPluginHandler {
       return {
         valid: false,
         errorCode: 'INVALID_PATH',
-        error: 'INVALID_PATH: 未提供待检测的文件或文件夹路径'
+        error: t('hostPlugin.sys.unlock.emptyPath')
       }
     }
     if (trimmed.includes('\0')) {
       return {
         valid: false,
         errorCode: 'INVALID_PATH',
-        error: 'INVALID_PATH: 路径包含非法空字节 (null byte)'
+        error: t('hostPlugin.sys.unlock.nullByte')
       }
     }
     if (/(^|[\\/])\.\.([\\/]|$)/.test(trimmed)) {
       return {
         valid: false,
         errorCode: 'INVALID_PATH',
-        error: 'INVALID_PATH: 禁止使用包含 .. 的相对路径穿越'
+        error: t('hostPlugin.sys.unlock.traversal')
       }
     }
     const isWinAbs = /^[a-zA-Z]:[\\/]/.test(trimmed) || /^\\\\[^\\]+\\[^\\]+/.test(trimmed)
@@ -1627,7 +1636,7 @@ export class SystemRegistryHostPluginHandler {
       return {
         valid: false,
         errorCode: 'INVALID_PATH',
-        error: 'INVALID_PATH: 必须提供合法的绝对路径'
+        error: t('hostPlugin.sys.unlock.absoluteRequired')
       }
     }
     return { valid: true }
@@ -1681,7 +1690,7 @@ export class SystemRegistryHostPluginHandler {
         signal
       )
       if (tasklist.exitCode !== 0) {
-        return { exists: false, name: '', executablePath: '', queryFailed: true, error: tasklist.stderr || `tasklist 退出码 ${tasklist.exitCode}` }
+        return { exists: false, name: '', executablePath: '', queryFailed: true, error: tasklist.stderr || t('hostPlugin.sys.unlock.tasklistExitCode', { code: tasklist.exitCode }) }
       }
       for (const line of tasklist.stdout.split(/\r?\n/)) {
         const trimmed = line.trim()
@@ -1713,11 +1722,11 @@ export class SystemRegistryHostPluginHandler {
    */
   async #moveTargetToTrash(resolvedTarget: string, signal?: AbortSignal): Promise<{ ok: boolean; errorCode?: string; error?: string }> {
     if (isProtectedSystemPath(resolvedTarget)) {
-      return { ok: false, errorCode: 'PROTECTED_PATH', error: 'PROTECTED_PATH: 系统核心受保护路径禁止移入回收站' }
+      return { ok: false, errorCode: 'PROTECTED_PATH', error: t('hostPlugin.sys.trash.protectedPath') }
     }
     if (process.platform === 'win32') {
       if (/^[\\/]{2}/.test(resolvedTarget)) {
-        return { ok: false, errorCode: 'TRASH_UNSUPPORTED', error: 'TRASH_UNSUPPORTED: 网络共享（UNC）路径没有回收站，移入回收站会被直接永久删除，已取消，原文件保留' }
+        return { ok: false, errorCode: 'TRASH_UNSUPPORTED', error: t('hostPlugin.sys.trash.uncUnsupported') }
       }
       const escaped = escapePsSingleQuoted(resolvedTarget)
       const isDir = fsSync.existsSync(resolvedTarget) && fsSync.statSync(resolvedTarget).isDirectory()
@@ -1728,7 +1737,7 @@ export class SystemRegistryHostPluginHandler {
         $full = [System.IO.Path]::GetFullPath($p)
         $root = [System.IO.Path]::GetPathRoot($full)
         if (-not $root -or $root.StartsWith('\\\\') -or $root -notmatch '^[A-Za-z]:\\\\$') { Write-Output 'TRASH_UNSUPPORTED:UNC'; exit 0 }
-        # 路径上有目录联接 / 卷挂载点 / 符号链接时，实际所在卷不是盘符根对应的卷，下面按盘符做的类型与容量检查不成立，保守拒绝
+        # Reject reparse points (junctions / symlinks) since drive-root capacity checks would not match the real volume
         $probe = $full
         while ($probe -and $probe.Length -gt $root.Length) {
           $linkType = (Get-Item -LiteralPath $probe -Force).LinkType
@@ -1765,36 +1774,37 @@ export class SystemRegistryHostPluginHandler {
       try {
         out = await this.#sys.runPowerShell(psTrash, 30_000, signal)
       } catch (err) {
-        return { ok: false, errorCode: 'TRASH_FAILED', error: `TRASH_FAILED: ${err instanceof Error ? err.message : String(err)}；原文件保留` }
+        return { ok: false, errorCode: 'TRASH_FAILED', error: t('hostPlugin.sys.trash.failedKept', { detail: err instanceof Error ? err.message : String(err) }) }
       }
       const status = SystemRegistryHostPluginHandler.#lastStatusLine(out)
       if (status === 'TRASH_OK' && !fsSync.existsSync(resolvedTarget)) return { ok: true }
       if (status.startsWith('TRASH_UNSUPPORTED:')) {
         const reason = status.slice('TRASH_UNSUPPORTED:'.length)
-        const reasonText: Record<string, string> = {
-          UNC: '网络共享（UNC）路径',
-          Removable: '可移动磁盘',
-          Network: '网络驱动器',
-          CDRom: '光盘',
-          Ram: '内存盘',
-          NoRootDirectory: '未挂载的卷',
-          Unknown: '无法识别类型的磁盘',
-          POLICY: '组策略已禁用回收站',
-          NUKE_ON_DELETE: '该磁盘的回收站已设置为“不将文件移到回收站”',
-          VOLUME_UNKNOWN: '无法确认所在卷的回收站设置',
-          REPARSE: '路径经过目录联接、挂载的卷或符号链接，无法确认实际所在磁盘的回收站设置'
+        const reasonKeys: Record<string, string> = {
+          UNC: 'hostPlugin.sys.trash.reason.UNC',
+          Removable: 'hostPlugin.sys.trash.reason.Removable',
+          Network: 'hostPlugin.sys.trash.reason.Network',
+          CDRom: 'hostPlugin.sys.trash.reason.CDRom',
+          Ram: 'hostPlugin.sys.trash.reason.Ram',
+          NoRootDirectory: 'hostPlugin.sys.trash.reason.NoRootDirectory',
+          Unknown: 'hostPlugin.sys.trash.reason.Unknown',
+          POLICY: 'hostPlugin.sys.trash.reason.POLICY',
+          NUKE_ON_DELETE: 'hostPlugin.sys.trash.reason.NUKE_ON_DELETE',
+          VOLUME_UNKNOWN: 'hostPlugin.sys.trash.reason.VOLUME_UNKNOWN',
+          REPARSE: 'hostPlugin.sys.trash.reason.REPARSE'
         }
-        return { ok: false, errorCode: 'TRASH_UNSUPPORTED', error: `TRASH_UNSUPPORTED: 目标位置没有可用的回收站（${reasonText[reason] ?? reason}），移入回收站会被直接永久删除，已取消，原文件保留` }
+        const resolvedReason = reasonKeys[reason] ? t(reasonKeys[reason]) : reason
+        return { ok: false, errorCode: 'TRASH_UNSUPPORTED', error: t('hostPlugin.sys.trash.unsupportedReason', { reason: resolvedReason }) }
       }
       if (status.startsWith('TRASH_TOO_LARGE:')) {
         const [, size, limit] = status.split(':')
-        return { ok: false, errorCode: 'TRASH_TOO_LARGE', error: `TRASH_TOO_LARGE: 目标大小 ${formatBytes(Number(size))} 超过该磁盘回收站上限 ${formatBytes(Number(limit))}，移入回收站会被直接永久删除，已取消，原文件保留` }
+        return { ok: false, errorCode: 'TRASH_TOO_LARGE', error: t('hostPlugin.sys.trash.tooLarge', { size: formatBytes(Number(size)), limit: formatBytes(Number(limit)) }) }
       }
-      if (status === 'TRASH_NOT_FOUND') return { ok: false, errorCode: 'TRASH_FAILED', error: 'TRASH_FAILED: 目标已不存在' }
-      return { ok: false, errorCode: 'TRASH_FAILED', error: 'TRASH_FAILED: 系统未确认移入回收站，原文件保留' }
+      if (status === 'TRASH_NOT_FOUND') return { ok: false, errorCode: 'TRASH_FAILED', error: t('hostPlugin.sys.trash.notFound') }
+      return { ok: false, errorCode: 'TRASH_FAILED', error: t('hostPlugin.sys.trash.unconfirmed') }
     }
     // 回收站失败绝不退化为永久删除：用户以为可以从回收站还原
-    return { ok: false, errorCode: 'TRASH_UNSUPPORTED', error: 'TRASH_UNSUPPORTED: 当前平台的此入口不支持移入回收站，原文件保留' }
+    return { ok: false, errorCode: 'TRASH_UNSUPPORTED', error: t('hostPlugin.sys.trash.platformUnsupported') }
   }
 
   async handleFileUnlock(
@@ -1838,7 +1848,7 @@ export class SystemRegistryHostPluginHandler {
           $drives = @($found.Values | ForEach-Object {
             [PSCustomObject]@{
               mount = "$($_.DeviceID)\\"
-              label = if ($_.VolumeName) { $_.VolumeName } else { '外接磁盘' }
+              label = if ($_.VolumeName) { $_.VolumeName } else { '' }
               totalBytes = [int64]($_.Size)
               freeBytes = [int64]($_.FreeSpace)
             }
@@ -1849,10 +1859,10 @@ export class SystemRegistryHostPluginHandler {
         try {
           parsed = JSON.parse(await this.#sys.runPowerShell(ps, 10_000, signal)) as { drives?: unknown; warning?: unknown }
         } catch (err) {
-          return { ok: false, success: false, errorCode: 'DRIVE_LIST_FAILED', error: `DRIVE_LIST_FAILED: 读取外接磁盘失败：${err instanceof Error ? err.message : String(err)}` }
+          return { ok: false, success: false, errorCode: 'DRIVE_LIST_FAILED', error: t('hostPlugin.sys.drive.listFailed', { detail: err instanceof Error ? err.message : String(err) }) }
         }
         if (!parsed || !Array.isArray(parsed.drives)) {
-          return { ok: false, success: false, errorCode: 'DRIVE_LIST_FAILED', error: 'DRIVE_LIST_FAILED: 外接磁盘列表格式无效' }
+          return { ok: false, success: false, errorCode: 'DRIVE_LIST_FAILED', error: t('hostPlugin.sys.drive.listInvalid') }
         }
         for (const item of parsed.drives as unknown[]) {
           if (!item || typeof item !== 'object') continue
@@ -1861,10 +1871,10 @@ export class SystemRegistryHostPluginHandler {
           const totalBytes = Number(rec.totalBytes ?? 0)
           const freeBytes = Number(rec.freeBytes ?? 0)
           if (!mount) continue
-          drives.push({ mount, label: String(rec.label ?? '外接磁盘'), totalBytes, freeBytes, totalText: formatBytes(totalBytes), freeText: formatBytes(freeBytes) })
+          drives.push({ mount, label: String(rec.label || '') || t('hostPlugin.sys.drive.defaultLabel'), totalBytes, freeBytes, totalText: formatBytes(totalBytes), freeText: formatBytes(freeBytes) })
         }
         if (typeof parsed.warning === 'string' && parsed.warning) {
-          return { ok: true, success: true, drives, partial: true, warning: `按磁盘总线识别移动硬盘失败，列表可能不完整：${parsed.warning}` }
+          return { ok: true, success: true, drives, partial: true, warning: t('hostPlugin.sys.drive.busWarning', { detail: String(parsed.warning) }) }
         }
       } else if (process.platform === 'darwin' && fsSync.existsSync('/Volumes')) {
         try {
@@ -1943,14 +1953,14 @@ export class SystemRegistryHostPluginHandler {
             ok: false,
             success: false,
             errorCode: 'ACCESS_DENIED',
-            error: `ACCESS_DENIED: 权限不足，无法访问目标路径 (${resolved})`
+            error: t('hostPlugin.sys.unlock.accessDenied', { path: resolved })
           }
         }
         return {
           ok: false,
           success: false,
           errorCode: 'TARGET_NOT_FOUND',
-          error: `TARGET_NOT_FOUND: 目标文件或文件夹不存在 (${resolved})`
+          error: t('hostPlugin.sys.unlock.targetNotFound', { path: resolved })
         }
       }
 
@@ -1962,7 +1972,7 @@ export class SystemRegistryHostPluginHandler {
         executablePath: string
         lockedPath: string
         handleType: 'file' | 'directory' | 'dll' | 'unknown'
-        serviceTypeLabel: '系统内核' | '资源管理器' | '后台服务' | '普通进程'
+        serviceTypeLabel: string
         isProtected: boolean
         user: string
       }> = []
@@ -2060,18 +2070,18 @@ export class SystemRegistryHostPluginHandler {
               uint handle;
               string key = Guid.NewGuid().ToString();
               int started = RmStartSession(out handle, 0, key);
-              if (started != 0) throw new InvalidOperationException("RmStartSession 失败：" + started);
+              if (started != 0) throw new InvalidOperationException("RmStartSession failed: " + started);
               try {
                 int registered = RmRegisterResources(handle, (uint)files.Length, files, 0, null, 0, null);
-                if (registered != 0) throw new InvalidOperationException("RmRegisterResources 失败：" + registered);
+                if (registered != 0) throw new InvalidOperationException("RmRegisterResources failed: " + registered);
                 uint needed = 0, count = 0, reasons = 0;
                 int res = RmGetList(handle, out needed, ref count, null, ref reasons);
                 if (res == 0) return new RM_PROCESS_INFO[0];
-                if (res != 234) throw new InvalidOperationException("RmGetList 失败：" + res);
+                if (res != 234) throw new InvalidOperationException("RmGetList failed: " + res);
                 count = needed;
                 RM_PROCESS_INFO[] infos = new RM_PROCESS_INFO[count];
                 int listed = RmGetList(handle, out needed, ref count, infos, ref reasons);
-                if (listed != 0) throw new InvalidOperationException("RmGetList 失败：" + listed);
+                if (listed != 0) throw new InvalidOperationException("RmGetList failed: " + listed);
                 return infos;
               } finally {
                 RmEndSession(handle);
@@ -2110,11 +2120,11 @@ export class SystemRegistryHostPluginHandler {
           return {
             ok: false, success: false, targetPath: resolved,
             errorCode: timedOut ? 'DETECT_TIMEOUT' : 'DETECT_FAILED',
-            error: `${timedOut ? 'DETECT_TIMEOUT' : 'DETECT_FAILED'}: 占用检测未完成，不能判断是否被占用：${err instanceof Error ? err.message : String(err)}`
+            error: t('hostPlugin.sys.unlock.detectIncomplete', { code: timedOut ? 'DETECT_TIMEOUT' : 'DETECT_FAILED', detail: err instanceof Error ? err.message : String(err) })
           }
         }
         if (!detection || !Array.isArray(detection.processes)) {
-          return { ok: false, success: false, targetPath: resolved, errorCode: 'DETECT_FAILED', error: 'DETECT_FAILED: 占用检测结果格式无效，不能判断是否被占用' }
+          return { ok: false, success: false, targetPath: resolved, errorCode: 'DETECT_FAILED', error: t('hostPlugin.sys.unlock.detectInvalid') }
         }
         for (const entry of detection.processes as unknown[]) {
           if (entry && typeof entry === 'object') {
@@ -2198,7 +2208,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_PID',
-          error: 'INVALID_PID: 无效的进程 PID'
+          error: t('hostPlugin.sys.unlock.invalidPid')
         }
       }
 
@@ -2208,7 +2218,7 @@ export class SystemRegistryHostPluginHandler {
           success: false,
           pid,
           errorCode: 'MISSING_EXPECTED_NAME',
-          error: 'MISSING_EXPECTED_NAME: 缺少 expectedName 进程身份校验参数'
+          error: t('hostPlugin.sys.unlock.missingExpectedName')
         }
       }
 
@@ -2219,7 +2229,7 @@ export class SystemRegistryHostPluginHandler {
           pid,
           expectedName,
           errorCode: 'PROCESS_PROTECTED',
-          error: `PROCESS_PROTECTED: 系统关键保护进程 (${expectedName}, PID ${pid}) 严禁强制终止`
+          error: t('hostPlugin.sys.unlock.protectedKill', { name: expectedName, pid })
         }
       }
 
@@ -2230,7 +2240,7 @@ export class SystemRegistryHostPluginHandler {
           pid,
           expectedName,
           errorCode: 'PROCESS_PROTECTED',
-          error: 'PROCESS_PROTECTED: 禁止终止 ZTools 宿主自身进程'
+          error: t('hostPlugin.sys.unlock.selfKill')
         }
       }
 
@@ -2241,32 +2251,34 @@ export class SystemRegistryHostPluginHandler {
           ok?: boolean; error?: string; processes?: Array<{ pid: number; name: string; isProtected: boolean }>
         }
         if (current.ok !== true || !Array.isArray(current.processes)) {
+          const recheckDetail = resolveHostErrorMessage(current.error, 'hostPlugin.sys.unlock.recheckInvalid')
           return { ok: false, success: false, pid, expectedName, errorCode: 'LOCK_RECHECK_FAILED',
-            error: `LOCK_RECHECK_FAILED: 无法复核当前占用，未结束进程：${current.error || '占用检测结果无效'}` }
+            error: t('hostPlugin.sys.unlock.recheckFailed', { detail: recheckDetail }) }
         }
         const lock = current.processes.find(item => item.pid === pid)
         if (!lock || SystemRegistryHostPluginHandler.#normalizeProcessBaseName(lock.name) !== SystemRegistryHostPluginHandler.#normalizeProcessBaseName(expectedName)) {
           return { ok: false, success: false, pid, expectedName, errorCode: 'LOCK_CHANGED',
-            error: 'LOCK_CHANGED: 该进程已不再被确认为目标占用者，未结束进程，请重新检测' }
+            error: t('hostPlugin.sys.unlock.lockChanged') }
         }
         if (lock.isProtected) {
           return { ok: false, success: false, pid, expectedName, errorCode: 'PROCESS_PROTECTED',
-            error: 'PROCESS_PROTECTED: 当前占用者属于系统关键保护进程，禁止终止' }
+            error: t('hostPlugin.sys.unlock.holderProtected') }
         }
       }
 
       // 进程名只由宿主查询，不接受调用方传入，避免绕过系统关键进程保护与身份核对
       const liveInfo = await this.#queryLiveProcessName(pid, signal)
       if (liveInfo.queryFailed) {
+        const liveDetail = resolveHostErrorMessage(liveInfo.error, 'hostPlugin.sys.unlock.sysQueryFailed')
         return {
           ok: false, success: false, pid, expectedName, errorCode: 'PROCESS_QUERY_FAILED',
-          error: `PROCESS_QUERY_FAILED: 无法确认进程状态，未执行终止：${liveInfo.error ?? '系统查询失败'}`
+          error: t('hostPlugin.sys.unlock.queryFailed', { detail: liveDetail })
         }
       }
       if (!liveInfo.exists) {
         return {
           ok: false, success: false, pid, expectedName, errorCode: 'PROCESS_GONE',
-          error: `PROCESS_GONE: 进程 ${expectedName} (PID ${pid}) 已不存在，请重新检测占用`
+          error: t('hostPlugin.sys.unlock.processGone', { name: expectedName, pid })
         }
       }
 
@@ -2278,7 +2290,7 @@ export class SystemRegistryHostPluginHandler {
           expectedName,
           actualName: liveInfo.name,
           errorCode: 'PROCESS_PROTECTED',
-          error: `PROCESS_PROTECTED: 目标 PID (${pid}) 属于系统关键保护进程 (${liveInfo.name})，已拦截终止请求`
+          error: t('hostPlugin.sys.unlock.pidProtected', { pid, name: liveInfo.name })
         }
       }
 
@@ -2293,7 +2305,7 @@ export class SystemRegistryHostPluginHandler {
             expectedName,
             actualName: liveInfo.name,
             errorCode: 'PROCESS_IDENTITY_MISMATCH',
-            error: `PROCESS_IDENTITY_MISMATCH: 目标 PID (${pid}) 当前进程为 ${liveInfo.name}，与预期进程 ${expectedName} 不一致，已取消终止操作以防误杀`
+            error: t('hostPlugin.sys.unlock.identityMismatch', { pid, actualName: liveInfo.name, expectedName })
           }
         }
       }
@@ -2308,7 +2320,7 @@ export class SystemRegistryHostPluginHandler {
           if (killed.exitCode !== 0) {
             return {
               ok: false, success: false, pid, expectedName, errorCode: 'TERMINATE_FAILED',
-              error: `TERMINATE_FAILED: 结束资源管理器失败：${killed.stderr || `退出码 ${killed.exitCode}`}`
+              error: t('hostPlugin.sys.unlock.explorerKillFailed', { detail: killed.stderr || t('hostPlugin.sys.exitCode', { code: killed.exitCode }) })
             }
           }
           const started = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
@@ -2323,7 +2335,7 @@ export class SystemRegistryHostPluginHandler {
           if (!started.ok) {
             return {
               ok: false, success: false, pid, expectedName, errorCode: 'EXPLORER_RESTART_FAILED',
-              error: `EXPLORER_RESTART_FAILED: 资源管理器已结束但未能重新启动（${started.error}），请按 Ctrl+Shift+Esc 打开任务管理器，运行 explorer.exe`
+              error: t('hostPlugin.sys.unlock.explorerRestartFailed', { detail: String(started.error) })
             }
           }
           explorerRestarted = true
@@ -2340,7 +2352,7 @@ export class SystemRegistryHostPluginHandler {
               pid,
               expectedName,
               errorCode: 'PROCESS_ACCESS_DENIED',
-              error: `PROCESS_ACCESS_DENIED: 权限不足，无法终止高权限进程 ${expectedName} (PID ${pid})，请以管理员身份运行 ZTools 后重试`
+              error: t('hostPlugin.sys.unlock.killAccessDenied', { name: expectedName, pid })
             }
           }
           if (code !== 'ESRCH') {
@@ -2368,7 +2380,7 @@ export class SystemRegistryHostPluginHandler {
         if (!exited) {
           return {
             ok: false, success: false, pid, expectedName, errorCode: 'TERMINATE_UNCONFIRMED',
-            error: `TERMINATE_UNCONFIRMED: 已向进程 ${expectedName} (PID ${pid}) 发送结束请求，但未确认其退出，请重新检测占用`
+            error: t('hostPlugin.sys.unlock.terminateUnconfirmed', { name: expectedName, pid })
           }
         }
       }
@@ -2406,12 +2418,13 @@ export class SystemRegistryHostPluginHandler {
             success: false,
             pid,
             errorCode: 'PROTECTED_PATH',
-            error: `PROTECTED_PATH: 系统核心受保护路径禁止移入回收站 (${resolvedTarget})`
+            error: t('hostPlugin.sys.unlock.trashProtected', { path: resolvedTarget })
           }
         }
         const trashRes = params.dryRun === true ? null : await this.#moveTargetToTrash(resolvedTarget, signal)
         if (trashRes && !trashRes.ok) {
           // 占用进程此时已结束并确认退出，只有移入回收站失败（原文件保留）：如实告知调用方占用已解除
+          const trashErr = trashRes.error
           return {
             ok: false,
             success: false,
@@ -2420,7 +2433,7 @@ export class SystemRegistryHostPluginHandler {
             explorerRestarted,
             errorCode: 'TRASH_FAILED',
             ...(trashRes.errorCode ? { trashErrorCode: trashRes.errorCode } : {}),
-            error: trashRes.error ?? '移入回收站失败'
+            error: trashErr ? trashErr : t('hostPlugin.sys.software.trashFailed')
           }
         }
         trashed = trashRes !== null
@@ -2433,7 +2446,7 @@ export class SystemRegistryHostPluginHandler {
             success: false,
             pid,
             errorCode: 'INVALID_RENAME_TARGET',
-            error: 'INVALID_RENAME_TARGET: 新文件名包含非法字符'
+            error: t('hostPlugin.sys.unlock.invalidRename')
           }
         }
         if (params.dryRun !== true) {
@@ -2459,13 +2472,13 @@ export class SystemRegistryHostPluginHandler {
     if (lowerFn === 'eject' || lowerFn === 'ejectdrive' || lowerFn === 'ejectremovabledrive' || lowerFn === 'safeeject') {
       const drive = String(params.drive ?? params.path ?? params.targetPath ?? '').trim()
       if (!drive) {
-        return { ok: false, success: false, errorCode: 'INVALID_DRIVE', error: '未提供待弹出的驱动器盘符或挂载点路径' }
+        return { ok: false, success: false, errorCode: 'INVALID_DRIVE', error: t('hostPlugin.sys.eject.missingDrive') }
       }
       if (params.dryRun === true) return { ok: true, success: true, drive, ejected: false, dryRun: true }
       if (process.platform === 'win32') {
         const driveRoot = drive.slice(0, 2).toUpperCase()
         if (!/^[A-Z]:$/.test(driveRoot)) {
-          return { ok: false, success: false, errorCode: 'INVALID_DRIVE', error: 'INVALID_DRIVE: 盘符格式无效' }
+          return { ok: false, success: false, errorCode: 'INVALID_DRIVE', error: t('hostPlugin.sys.eject.invalidDrive') }
         }
         // InvokeVerb('Eject') 是异步的且不返回结果：轮询确认盘符消失才算弹出成功
         const ps = `
@@ -2487,17 +2500,17 @@ export class SystemRegistryHostPluginHandler {
           return { ok: false, success: false, drive, errorCode: 'EJECT_FAILED', error: `EJECT_FAILED: ${err instanceof Error ? err.message : String(err)}` }
         }
         if (out.includes('EJECT_OK')) return { ok: true, success: true, drive, ejected: true }
-        if (out.includes('EJECT_NOT_FOUND')) return { ok: false, success: false, drive, errorCode: 'DRIVE_NOT_FOUND', error: `DRIVE_NOT_FOUND: 未找到驱动器 ${driveRoot}` }
-        return { ok: false, success: false, drive, errorCode: 'EJECT_UNCONFIRMED', error: `EJECT_UNCONFIRMED: 已请求弹出 ${driveRoot}，但盘符仍在，可能仍有程序占用，请关闭相关程序后重试` }
+        if (out.includes('EJECT_NOT_FOUND')) return { ok: false, success: false, drive, errorCode: 'DRIVE_NOT_FOUND', error: t('hostPlugin.sys.eject.notFound', { drive: driveRoot }) }
+        return { ok: false, success: false, drive, errorCode: 'EJECT_UNCONFIRMED', error: t('hostPlugin.sys.eject.unconfirmed', { drive: driveRoot }) }
       }
       if (process.platform === 'darwin') {
         const res = await this.#sys.runCommand('diskutil', ['eject', drive], 10_000, signal)
         if (res.exitCode !== 0) {
-          return { ok: false, success: false, drive, errorCode: 'EJECT_FAILED', error: `EJECT_FAILED: ${res.stderr || res.stdout || `退出码 ${res.exitCode}`}` }
+          return { ok: false, success: false, drive, errorCode: 'EJECT_FAILED', error: `EJECT_FAILED: ${res.stderr || res.stdout || t('hostPlugin.sys.exitCode', { code: res.exitCode })}` }
         }
         return { ok: true, success: true, drive, ejected: true }
       }
-      return { ok: false, success: false, drive, errorCode: 'UNSUPPORTED_PLATFORM', error: '当前平台不支持弹出磁盘' }
+      return { ok: false, success: false, drive, errorCode: 'UNSUPPORTED_PLATFORM', error: t('hostPlugin.sys.eject.unsupported') }
     }
 
     return {
@@ -2648,7 +2661,7 @@ export class SystemRegistryHostPluginHandler {
       $items = @()
       $warnings = @()
 
-      # 值名可能含 * ? [ ]：-Name 会按通配符匹配，因此读出整个键再按名字精确取值
+      # Value names may contain wildcard characters (* ? [ ]); read the whole key and index by exact property name
       function Get-StartupApprovedState($hivePath, $valName) {
         if (-not (Test-Path -LiteralPath $hivePath)) { return $true }
         $all = Get-ItemProperty -LiteralPath $hivePath -ErrorAction SilentlyContinue
@@ -2686,7 +2699,7 @@ export class SystemRegistryHostPluginHandler {
                 name = [string]$p.Name
                 command = $cmdStr
                 source = 'registry'
-                sourceLabel = '注册表'
+                sourceLabel = 'Registry'
                 scope = $r.Scope
                 regKey = ($r.Key -replace '^HKCU:\\\\', 'HKCU\\' -replace '^HKLM:\\\\', 'HKLM\\')
                 enabled = [bool]$isEnabled
@@ -2694,11 +2707,11 @@ export class SystemRegistryHostPluginHandler {
               }
             }
           }
-        } catch { $warnings += "注册表 $($r.Key)：$($_.Exception.Message)" }
+        } catch { $warnings += "Registry $($r.Key): $($_.Exception.Message)" }
       }
 
       $shell = $null
-      try { $shell = New-Object -ComObject WScript.Shell } catch { $warnings += "无法解析启动目录快捷方式：$($_.Exception.Message)" }
+      try { $shell = New-Object -ComObject WScript.Shell } catch { $warnings += "Failed to resolve startup folder shortcuts: $($_.Exception.Message)" }
       $startupFolders = @(
         @{ Path = [Environment]::GetFolderPath('Startup'); Scope = 'User' },
         @{ Path = [Environment]::GetFolderPath('CommonStartup'); Scope = 'System' }
@@ -2709,7 +2722,7 @@ export class SystemRegistryHostPluginHandler {
             Get-ChildItem -LiteralPath $sf.Path -File | Where-Object { $_.Name -ne 'desktop.ini' } | ForEach-Object {
               $isDisabledExt = $_.Extension -eq '.disabled'
               $displayName = if ($isDisabledExt) { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) } else { $_.BaseName }
-              # 快捷方式要检查它指向的程序是否存在，.lnk 文件本身永远存在
+              # Verify the target executable for .lnk shortcuts instead of the .lnk file itself
               $target = ''
               if ($shell -and ($_.Name -match '\\.lnk(\\.disabled)?$')) {
                 try { $target = [string]$shell.CreateShortcut($_.FullName).TargetPath } catch { $target = '' }
@@ -2720,14 +2733,14 @@ export class SystemRegistryHostPluginHandler {
                 command = $_.FullName
                 exePath = if ($target) { $target } else { $_.FullName }
                 source = 'folder'
-                sourceLabel = '启动目录'
+                sourceLabel = 'Startup Folder'
                 scope = $sf.Scope
                 enabled = (-not $isDisabledExt)
                 publisher = ''
               }
             }
           }
-        } catch { $warnings += "启动目录 $($sf.Path)：$($_.Exception.Message)" }
+        } catch { $warnings += "Startup folder $($sf.Path): $($_.Exception.Message)" }
       }
 
       try {
@@ -2742,13 +2755,13 @@ export class SystemRegistryHostPluginHandler {
             serviceName = [string]$_.Name
             command = [string]$_.PathName
             source = 'service'
-            sourceLabel = '后台服务'
+            sourceLabel = 'Service'
             scope = 'System'
             enabled = ($_.StartMode -eq 'Auto')
             publisher = ''
           }
         }
-      } catch { $warnings += "后台服务：$($_.Exception.Message)" }
+      } catch { $warnings += "Services: $($_.Exception.Message)" }
 
       try {
         Get-ScheduledTask | Where-Object {
@@ -2766,19 +2779,19 @@ export class SystemRegistryHostPluginHandler {
               taskPath = $fullTaskName
               command = $fullCmd
               source = 'task'
-              sourceLabel = '计划任务'
+              sourceLabel = 'Scheduled Task'
               scope = 'System'
               enabled = ($_.State -ne 'Disabled')
               publisher = if ($_.Author) { [string]$_.Author } else { '' }
             }
           }
         }
-      } catch { $warnings += "计划任务：$($_.Exception.Message)" }
+      } catch { $warnings += "Scheduled tasks: $($_.Exception.Message)" }
 
       @{ items = @($items); warnings = @($warnings) } | ConvertTo-Json -Compress -Depth 5
     `
     const parsed = JSON.parse(await this.#sys.runPowerShell(psScript, 30_000, signal)) as { items?: unknown; warnings?: unknown }
-    if (!parsed || !Array.isArray(parsed.items)) throw new Error('启动项扫描结果格式无效')
+    if (!parsed || !Array.isArray(parsed.items)) throw hostPluginError(errorCodes.dataCorrupt, 'hostPlugin.sys.startup.scanInvalid', { hostCode: 'STARTUP_SCAN_INVALID' })
     return {
       entries: (parsed.items as unknown[]).filter((x): x is Record<string, unknown> => Boolean(x && typeof x === 'object')),
       warnings: Array.isArray(parsed.warnings) ? (parsed.warnings as unknown[]).map(String).filter(Boolean) : []
@@ -2792,7 +2805,7 @@ export class SystemRegistryHostPluginHandler {
     command: string
     exePath: string
     source: 'registry' | 'folder' | 'service' | 'task' | 'launchd'
-    sourceLabel: '注册表' | '启动目录' | '后台服务' | '计划任务' | 'LaunchAgent'
+    sourceLabel: string
     scope: string
     regKey?: string | undefined
     serviceName?: string | undefined
@@ -2807,7 +2820,7 @@ export class SystemRegistryHostPluginHandler {
       command: string
       exePath: string
       source: 'registry' | 'folder' | 'service' | 'task' | 'launchd'
-      sourceLabel: '注册表' | '启动目录' | '后台服务' | '计划任务' | 'LaunchAgent'
+      sourceLabel: string
       scope: string
       regKey?: string | undefined
       serviceName?: string | undefined
@@ -2856,16 +2869,16 @@ export class SystemRegistryHostPluginHandler {
       if (seenIds.has(id)) continue
       seenIds.add(id)
 
-      const sourceLabel: '注册表' | '启动目录' | '后台服务' | '计划任务' | 'LaunchAgent' =
+      const sourceLabel: string =
         source === 'folder'
-          ? '启动目录'
+          ? t('hostPlugin.sys.startup.source.folder')
           : source === 'service'
-            ? '后台服务'
+            ? t('hostPlugin.sys.startup.source.service')
             : source === 'task'
-              ? '计划任务'
+              ? t('hostPlugin.sys.startup.source.task')
               : source === 'launchd'
                 ? 'LaunchAgent'
-                : '注册表'
+                : t('hostPlugin.sys.startup.source.registry')
 
       let fileMissing = false
       if (typeof raw.fileMissing === 'boolean') {
@@ -2894,10 +2907,6 @@ export class SystemRegistryHostPluginHandler {
     return normalized
   }
 
-  static #isAccessDeniedText(text: string): boolean {
-    return /拒绝访问|Access is denied/i.test(text)
-  }
-
   /**
    * 查询启动项注册表值：reg query 退出码 0 为存在（解析字符串值），1 为不存在（输出含拒绝访问时除外），其余为查询失败。
    * 不依赖本地化的“找不到”文本（中文系统实际是“错误: 系统找不到指定的注册表项或值。”）。
@@ -2911,14 +2920,14 @@ export class SystemRegistryHostPluginHandler {
       return { state: 'present', value: m?.[2]?.trim() ?? '' }
     }
     const text = `${res.stderr} ${res.stdout}`.trim()
-    const denied = SystemRegistryHostPluginHandler.#isAccessDeniedText(text)
+    const denied = isAccessDeniedCommandResult(res)
     // reg query 对“不存在”和“拒绝访问”都返回 1，只靠中英文提示区分在其他语言系统上会把拒绝访问误判为不存在。
     // 因此再列出整个键（不存在时再看父键的子键列表），按值名 / 键名精确比对确认确实不存在
     if (res.exitCode === 1 && !denied && (await this.#confirmRegistryValueAbsent(key, name, signal))) return { state: 'absent' }
     return {
       state: 'error',
       errorCode: denied ? 'ADMIN_REQUIRED' : 'REGISTRY_QUERY_FAILED',
-      error: `读取 ${key} 失败：${text || `退出码 ${res.exitCode}`}`
+      error: t('hostPlugin.sys.startup.readKeyFailed', { key, detail: text || t('hostPlugin.sys.exitCode', { code: res.exitCode }) })
     }
   }
 
@@ -2945,22 +2954,22 @@ export class SystemRegistryHostPluginHandler {
     const exe = SystemRegistryHostPluginHandler.#expandWindowsEnvVars((exePath ?? '').trim())
     const isDriveAbsolute = /^[a-zA-Z]:[\\/]/.test(exe)
     if (/^[\\/]{2}/.test(exe)) {
-      return { errorCode: 'CANNOT_VERIFY', error: `目标程序在网络位置（${exe}），网络不可用时无法确认是否存在，不作为残留删除` }
+      return { errorCode: 'CANNOT_VERIFY', error: t('hostPlugin.sys.startup.verifyNetworkPath', { exe }) }
     }
     if (!exe || (!isDriveAbsolute && !path.isAbsolute(exe))) {
-      return { errorCode: 'CANNOT_VERIFY', error: '无法从启动命令解析出目标程序的完整路径，不能确认是残留' }
+      return { errorCode: 'CANNOT_VERIFY', error: t('hostPlugin.sys.startup.verifyNoFullPath') }
     }
     const root = isDriveAbsolute ? exe.slice(0, 3) : path.parse(exe).root
     if (!fsSync.existsSync(root)) {
-      return { errorCode: 'CANNOT_VERIFY', error: `目标程序所在磁盘 ${root} 当前不可用（可能是未插入的移动磁盘），不作为残留删除` }
+      return { errorCode: 'CANNOT_VERIFY', error: t('hostPlugin.sys.startup.verifyDriveUnavailable', { root }) }
     }
     try {
       await fs.stat(exe)
-      return { errorCode: 'ITEM_NOT_BROKEN', error: `目标程序仍存在，不是残留（${exe}），如需停止开机启动请使用禁用` }
+      return { errorCode: 'ITEM_NOT_BROKEN', error: t('hostPlugin.sys.startup.verifyNotBroken', { exe }) }
     } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code
       if (code === 'ENOENT' || code === 'ENOTDIR') return null
-      return { errorCode: 'CANNOT_VERIFY', error: `无法确认目标程序是否存在（${exe}）：${err instanceof Error ? err.message : String(err)}` }
+      return { errorCode: 'CANNOT_VERIFY', error: t('hostPlugin.sys.startup.verifyCheckFailed', { exe, detail: err instanceof Error ? err.message : String(err) }) }
     }
   }
 
@@ -2968,7 +2977,7 @@ export class SystemRegistryHostPluginHandler {
   async #removeBrokenRegistryStartup(id: string, name: string, scope: string, dryRun: boolean, signal?: AbortSignal): Promise<
     { status: 'removed' | 'gone' } | { status: 'failed'; errorCode: string; error: string }
   > {
-    if (!name) return { status: 'failed', errorCode: 'INVALID_IDENTIFIER', error: '缺少注册表启动项名称' }
+    if (!name) return { status: 'failed', errorCode: 'INVALID_IDENTIFIER', error: t('hostPlugin.sys.startup.missingRegName') }
     const { runKey, disabledKey } = SystemRegistryHostPluginHandler.#startupRegistryKeys(id, scope)
     const present: Array<{ key: string; value: string }> = []
     for (const key of [runKey, disabledKey]) {
@@ -2985,12 +2994,15 @@ export class SystemRegistryHostPluginHandler {
     }
     if (dryRun) return { status: 'removed' }
     const errors: string[] = []
+    let denied = false
     for (const { key } of present) {
       const res = await this.#sys.runCommand('reg', ['delete', key, '/v', name, '/f'], 5_000, signal)
-      if (res.exitCode !== 0) errors.push(`${key}：${(res.stderr || res.stdout).trim() || `退出码 ${res.exitCode}`}`)
+      if (res.exitCode !== 0) {
+        if (isAccessDeniedCommandResult(res)) denied = true
+        errors.push(`${key}: ${(res.stderr || res.stdout).trim() || t('hostPlugin.sys.exitCode', { code: res.exitCode })}`)
+      }
     }
     if (errors.length) {
-      const denied = errors.some(text => SystemRegistryHostPluginHandler.#isAccessDeniedText(text))
       return { status: 'failed', errorCode: denied ? 'ADMIN_REQUIRED' : 'REGISTRY_DELETE_FAILED', error: errors.join('；') }
     }
     return { status: 'removed' }
@@ -3001,21 +3013,21 @@ export class SystemRegistryHostPluginHandler {
     { status: 'removed' | 'gone' } | { status: 'failed'; errorCode: string; error: string }
   > {
     if (!filePath || !path.isAbsolute(filePath) || !SystemRegistryHostPluginHandler.#isInsideStartupFolder(filePath)) {
-      return { status: 'failed', errorCode: 'INVALID_PATH', error: '只能清理系统启动目录中的文件' }
+      return { status: 'failed', errorCode: 'INVALID_PATH', error: t('hostPlugin.sys.startup.folderOnlyClean') }
     }
     try {
       await fs.lstat(filePath)
     } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code
       if (code === 'ENOENT') return { status: 'gone' }
-      return { status: 'failed', errorCode: 'CANNOT_VERIFY', error: `无法读取启动目录文件：${err instanceof Error ? err.message : String(err)}` }
+      return { status: 'failed', errorCode: 'CANNOT_VERIFY', error: t('hostPlugin.sys.startup.folderReadFailed', { detail: err instanceof Error ? err.message : String(err) }) }
     }
     const lower = filePath.toLowerCase()
     if (lower.endsWith('.lnk.disabled')) {
-      return { status: 'failed', errorCode: 'CANNOT_VERIFY', error: '已禁用的快捷方式无法解析目标程序，请先启用后重新检测' }
+      return { status: 'failed', errorCode: 'CANNOT_VERIFY', error: t('hostPlugin.sys.startup.disabledShortcutVerify') }
     }
     if (!lower.endsWith('.lnk')) {
-      return { status: 'failed', errorCode: 'ITEM_NOT_BROKEN', error: '启动目录中的这个文件本身就是要运行的程序或脚本，它仍然存在，不是残留' }
+      return { status: 'failed', errorCode: 'ITEM_NOT_BROKEN', error: t('hostPlugin.sys.startup.fileNotBroken') }
     }
     let target: string
     try {
@@ -3028,11 +3040,11 @@ export class SystemRegistryHostPluginHandler {
       )
       const line = SystemRegistryHostPluginHandler.#lastStatusLine(out)
       if (!line.startsWith('TARGET:')) {
-        return { status: 'failed', errorCode: 'CANNOT_VERIFY', error: '解析快捷方式目标未得到结果，不能确认是残留' }
+        return { status: 'failed', errorCode: 'CANNOT_VERIFY', error: t('hostPlugin.sys.startup.shortcutEmpty') }
       }
       target = line.slice('TARGET:'.length).trim()
     } catch (err) {
-      return { status: 'failed', errorCode: 'CANNOT_VERIFY', error: `解析快捷方式目标失败，不能确认是残留：${err instanceof Error ? err.message : String(err)}` }
+      return { status: 'failed', errorCode: 'CANNOT_VERIFY', error: t('hostPlugin.sys.startup.shortcutFailed', { detail: err instanceof Error ? err.message : String(err) }) }
     }
     // 目标为空（如 Windows Installer 发布的快捷方式）同样无法确认，交给 #confirmStartupTargetMissing 拒绝
     const problem = await SystemRegistryHostPluginHandler.#confirmStartupTargetMissing(target)
@@ -3047,7 +3059,7 @@ export class SystemRegistryHostPluginHandler {
       return {
         status: 'failed',
         errorCode: denied ? 'ADMIN_REQUIRED' : 'FOLDER_DELETE_FAILED',
-        error: denied ? '删除所有用户启动目录中的文件需要管理员权限' : err instanceof Error ? err.message : String(err)
+        error: denied ? t('hostPlugin.sys.startup.allUsersAdminRequired') : err instanceof Error ? err.message : String(err)
       }
     }
     return { status: 'removed' }
@@ -3080,7 +3092,7 @@ export class SystemRegistryHostPluginHandler {
           const timedOut = err instanceof PowerShellError && err.exitCode === 124
           return {
             ok: false, success: false, errorCode: timedOut ? 'SCAN_TIMEOUT' : 'SCAN_FAILED',
-            error: `${timedOut ? 'SCAN_TIMEOUT' : 'SCAN_FAILED'}: 读取启动项失败，不能当作没有启动项：${err instanceof Error ? err.message : String(err)}`
+            error: t('hostPlugin.sys.startup.scanFailedDetail', { code: timedOut ? 'SCAN_TIMEOUT' : 'SCAN_FAILED', detail: err instanceof Error ? err.message : String(err) })
           }
         }
       } else if (process.platform === 'darwin') {
@@ -3154,7 +3166,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_IDENTIFIER',
-          error: 'INVALID_IDENTIFIER: 缺少启动项名称或标识 (id/name)'
+          error: t('hostPlugin.sys.startup.missingIdentifier')
         }
       }
 
@@ -3168,7 +3180,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_IDENTIFIER',
-          error: 'INVALID_IDENTIFIER: 启动项标识包含非法控制字符或注入风险片段，已安全拦截'
+          error: t('hostPlugin.sys.startup.unsafeIdentifier')
         }
       }
 
@@ -3187,7 +3199,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'PROTECTED_SYSTEM_ITEM',
-          error: 'PROTECTED_SYSTEM_ITEM: 微软系统核心服务或系统计划任务受保护，禁止修改或禁用'
+          error: t('hostPlugin.sys.startup.protectedMsItem')
         }
       }
 
@@ -3220,7 +3232,7 @@ export class SystemRegistryHostPluginHandler {
             ok: false,
             success: false,
             errorCode: 'ITEM_NOT_FOUND',
-            error: `ITEM_NOT_FOUND: 未找到注册表自启项 "${name}"`
+            error: t('hostPlugin.sys.startup.regNotFound', { name })
           }
         }
 
@@ -3232,14 +3244,14 @@ export class SystemRegistryHostPluginHandler {
         )
         if (addRes.exitCode !== 0) {
           const outErr = `${addRes.stderr} ${addRes.stdout}`
-          const isDenied = /拒绝访问|Access is denied/i.test(outErr)
+          const isDenied = isAccessDeniedCommandResult(addRes)
           return {
             ok: false,
             success: false,
             errorCode: isDenied ? 'ADMIN_REQUIRED' : 'REGISTRY_WRITE_FAILED',
             error: isDenied
-              ? `ADMIN_REQUIRED: 修改${isHklm ? '系统级' : ''}注册表自启项需要管理员权限`
-              : outErr.trim() || '修改注册表自启状态失败'
+              ? (isHklm ? t('hostPlugin.sys.startup.regAdminRequiredHklm') : t('hostPlugin.sys.startup.regAdminRequired'))
+              : outErr.trim() || t('hostPlugin.sys.startup.regToggleFailed')
           }
         }
         // 原位置删除失败时同一项会同时留在两处，开机照样启动：回滚刚写入的值并如实报错
@@ -3248,7 +3260,9 @@ export class SystemRegistryHostPluginHandler {
           const rollback = await this.#sys.runCommand('reg', ['delete', dstKey, '/v', name, '/f'], 5_000, signal)
           return {
             ok: false, success: false, errorCode: 'REGISTRY_WRITE_FAILED',
-            error: `REGISTRY_WRITE_FAILED: 移除原启动项失败（${delRes.stderr || `退出码 ${delRes.exitCode}`}）${rollback.exitCode === 0 ? '，已撤销本次修改' : '，撤销也未完成，请检查 Run 与 RunDisabled 两处'}`
+            error: rollback.exitCode === 0
+              ? t('hostPlugin.sys.startup.regRemoveRollbackOk', { detail: delRes.stderr || t('hostPlugin.sys.exitCode', { code: delRes.exitCode }) })
+              : t('hostPlugin.sys.startup.regRemoveRollbackFail', { detail: delRes.stderr || t('hostPlugin.sys.exitCode', { code: delRes.exitCode }) })
           }
         }
         return {
@@ -3267,21 +3281,21 @@ export class SystemRegistryHostPluginHandler {
             ok: false,
             success: false,
             errorCode: 'INVALID_IDENTIFIER',
-            error: 'INVALID_IDENTIFIER: 非法的服务名格式'
+            error: t('hostPlugin.sys.startup.invalidServiceName')
           }
         }
         const startMode = targetEnabled ? 'auto' : 'demand'
         const cfgRes = await this.#sys.runCommand('sc.exe', ['config', serviceName, `start=`, startMode], 8_000, signal)
         if (cfgRes.exitCode !== 0) {
           const outErr = `${cfgRes.stderr} ${cfgRes.stdout}`
-          const isDenied = cfgRes.exitCode === 5 || /拒绝访问|Access is denied|FAILED 5\b/i.test(outErr)
+          const isDenied = isAccessDeniedCommandResult(cfgRes)
           return {
             ok: false,
             success: false,
             errorCode: isDenied ? 'ADMIN_REQUIRED' : 'SERVICE_UPDATE_FAILED',
             error: isDenied
-              ? `ADMIN_REQUIRED: 修改后台服务 "${serviceName}" 启动类型需要管理员权限`
-              : outErr.trim() || '修改后台服务启动模式失败'
+              ? t('hostPlugin.sys.startup.serviceAdminRequired', { name: serviceName })
+              : outErr.trim() || t('hostPlugin.sys.startup.serviceToggleFailed')
           }
         }
         return {
@@ -3299,14 +3313,14 @@ export class SystemRegistryHostPluginHandler {
         const taskRes = await this.#sys.runCommand('schtasks', ['/Change', '/TN', taskPath, flag], 8_000, signal)
         if (taskRes.exitCode !== 0) {
           const outErr = `${taskRes.stderr} ${taskRes.stdout}`
-          const isDenied = /拒绝访问|Access is denied/i.test(outErr)
+          const isDenied = isAccessDeniedCommandResult(taskRes)
           return {
             ok: false,
             success: false,
             errorCode: isDenied ? 'ADMIN_REQUIRED' : 'TASK_UPDATE_FAILED',
             error: isDenied
-              ? `ADMIN_REQUIRED: 修改计划任务 "${taskPath}" 状态需要管理员权限`
-              : outErr.trim() || '修改计划任务状态失败'
+              ? t('hostPlugin.sys.startup.taskAdminRequired', { path: taskPath })
+              : outErr.trim() || t('hostPlugin.sys.startup.taskToggleFailed')
           }
         }
         return {
@@ -3326,7 +3340,7 @@ export class SystemRegistryHostPluginHandler {
             ok: false,
             success: false,
             errorCode: 'INVALID_PATH',
-            error: 'INVALID_PATH: 启动目录项缺少合法文件路径'
+            error: t('hostPlugin.sys.startup.folderMissingPath')
           }
         }
         if (source === 'folder' && !SystemRegistryHostPluginHandler.#isInsideStartupFolder(filePath)) {
@@ -3334,7 +3348,7 @@ export class SystemRegistryHostPluginHandler {
             ok: false,
             success: false,
             errorCode: 'INVALID_PATH',
-            error: 'INVALID_PATH: 只能启用或禁用系统启动目录中的文件'
+            error: t('hostPlugin.sys.startup.folderOnlyToggle')
           }
         }
         const nextPath = targetEnabled
@@ -3343,7 +3357,7 @@ export class SystemRegistryHostPluginHandler {
             ? filePath
             : `${filePath}.disabled`
         if (!fsSync.existsSync(filePath)) {
-          return { ok: false, success: false, errorCode: 'ITEM_NOT_FOUND', error: `ITEM_NOT_FOUND: 启动项文件不存在：${filePath}` }
+          return { ok: false, success: false, errorCode: 'ITEM_NOT_FOUND', error: t('hostPlugin.sys.startup.folderNotFound', { path: filePath }) }
         }
         try {
           if (filePath !== nextPath) {
@@ -3366,7 +3380,7 @@ export class SystemRegistryHostPluginHandler {
             success: false,
             errorCode: isDenied ? 'ADMIN_REQUIRED' : 'FOLDER_TOGGLE_FAILED',
             error: isDenied
-              ? 'ADMIN_REQUIRED: 修改系统级启动目录文件需要管理员权限'
+              ? t('hostPlugin.sys.startup.folderAdminRequired')
               : err instanceof Error
                 ? err.message
                 : String(err)
@@ -3379,7 +3393,7 @@ export class SystemRegistryHostPluginHandler {
         success: false,
         id: id || `${source}:${name}`,
         errorCode: 'UNSUPPORTED_SOURCE',
-        error: `UNSUPPORTED_SOURCE: 当前平台不支持修改此类启动项（${source}）`
+        error: t('hostPlugin.sys.startup.unsupportedSource', { source })
       }
     }
 
@@ -3399,7 +3413,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'EMPTY_ITEMS',
-          error: 'EMPTY_ITEMS: 未提供待清理的残留启动项'
+          error: t('hostPlugin.sys.startup.cleanEmptyItems')
         }
       }
 
@@ -3413,7 +3427,7 @@ export class SystemRegistryHostPluginHandler {
             ok: false,
             success: false,
             errorCode: 'INVALID_IDENTIFIER',
-            error: 'INVALID_IDENTIFIER: 启动项标识包含非法字符，拒绝执行清理'
+            error: t('hostPlugin.sys.startup.cleanUnsafeId')
           }
         }
       }
@@ -3431,11 +3445,11 @@ export class SystemRegistryHostPluginHandler {
         // 调用方传来的 fileMissing / exePath 一律不采信：由宿主读取注册表值或快捷方式目标，确认目标程序确实不存在才删除
         if (source !== 'registry' && source !== 'folder') {
           // 服务与计划任务不做删除：误删会破坏已安装软件；请在系统工具里卸载对应程序
-          failed.push({ id: itemId, errorCode: 'UNSUPPORTED_SOURCE', error: `${source === 'service' ? '后台服务' : source === 'task' ? '计划任务' : source}不支持作为残留项删除，请在系统中卸载对应程序` })
+          failed.push({ id: itemId, errorCode: 'UNSUPPORTED_SOURCE', error: t('hostPlugin.sys.startup.cleanSourceUnsupported', { source: source === 'service' ? t('hostPlugin.sys.startup.source.service') : source === 'task' ? t('hostPlugin.sys.startup.source.task') : source }) })
           continue
         }
         if (process.platform !== 'win32') {
-          failed.push({ id: itemId, errorCode: 'UNSUPPORTED_PLATFORM', error: '当前平台不支持清理此类启动项' })
+          failed.push({ id: itemId, errorCode: 'UNSUPPORTED_PLATFORM', error: t('hostPlugin.sys.startup.cleanPlatformUnsupported') })
           continue
         }
         const result = source === 'registry'
@@ -3449,7 +3463,7 @@ export class SystemRegistryHostPluginHandler {
       }
 
       const details = failed.map(item => `${item.id}：${item.error}`).join('；')
-      const doneLabel = dryRun ? '可清理' : '已清理'
+      const doneLabel = dryRun ? t('hostPlugin.sys.startup.cleanDryRunLabel') : t('hostPlugin.sys.startup.cleanDoneLabel')
       const base = {
         ...(dryRun ? { dryRun: true, removedCount: 0, removedIds: [] as string[], removableIds: removedIds } : { removedCount: removedIds.length, removedIds }),
         ...(alreadyGoneIds.length ? { alreadyGoneIds } : {}),
@@ -3464,7 +3478,7 @@ export class SystemRegistryHostPluginHandler {
           partial: true,
           ...base,
           errorCode: 'PARTIAL_FAILED',
-          error: `${doneLabel} ${removedIds.length} 个，${failed.length} 个未清理：${details}`
+          error: t('hostPlugin.sys.startup.cleanPartialSummary', { doneLabel, removedCount: removedIds.length, failedCount: failed.length, details })
         }
       }
       // 全部失败：错误文本以错误码开头（插件桥接层在失败时只转发 error 文本，靠前缀识别错误码，如 ADMIN_REQUIRED 提示以管理员身份运行）
@@ -3496,7 +3510,7 @@ export class SystemRegistryHostPluginHandler {
       ok: false,
       success: false,
       errorCode: 'UNSUPPORTED_ACTION',
-      error: '请更新屏幕亮度插件，通过新版接口读取和调节显示器'
+      error: t('hostPlugin.sys.display.upgradeRequired')
     })
 
     if (
@@ -3519,7 +3533,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_DISPLAY_ID',
-          error: 'INVALID_DISPLAY_ID: 显示器标识包含非法字符'
+          error: t('hostPlugin.sys.display.invalidIdChars')
         }
       }
 
@@ -3529,7 +3543,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'DDC_UNSUPPORTED',
-          error: 'DDC_UNSUPPORTED: 该显示器未开启 DDC/CI 硬件控制或使用了不支持 DDC 的转接线'
+          error: t('hostPlugin.sys.display.ddcUnsupported')
         }
       }
 
@@ -3539,7 +3553,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_BRIGHTNESS',
-          error: 'INVALID_BRIGHTNESS: 亮度值必须为有效的数字 (0-100)'
+          error: t('hostPlugin.sys.display.invalidBrightness')
         }
       }
       const clampedBrightness = Math.max(0, Math.min(100, Math.round(rawBrightness)))
@@ -3562,7 +3576,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_DISPLAY_ID',
-          error: 'INVALID_DISPLAY_ID: 显示器标识无效'
+          error: t('hostPlugin.sys.display.invalidId')
         }
       }
       const protocol = String(params.protocol ?? '').trim().toLowerCase()
@@ -3571,7 +3585,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'CONTRAST_UNSUPPORTED',
-          error: 'CONTRAST_UNSUPPORTED: 该显示器不支持硬件对比度调节'
+          error: t('hostPlugin.sys.display.contrastUnsupported')
         }
       }
       const rawContrast = Number(params.contrast ?? params.value)
@@ -3580,7 +3594,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_CONTRAST',
-          error: 'INVALID_CONTRAST: 对比度值必须为有效的数字 (0-100)'
+          error: t('hostPlugin.sys.display.invalidContrast')
         }
       }
       const clampedContrast = Math.max(0, Math.min(100, Math.round(rawContrast)))
@@ -3599,7 +3613,7 @@ export class SystemRegistryHostPluginHandler {
         ok: true,
         success: true,
         action: 'sleepMonitors',
-        message: '已发送关闭显示器电源信号'
+        message: t('hostPlugin.sys.display.powerOffSent')
       }
     }
 
@@ -3655,7 +3669,7 @@ export class SystemRegistryHostPluginHandler {
         const ps = `
           $ErrorActionPreference = 'Stop'
           Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class ZKernelPower { [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags); }'
-          if ([ZKernelPower]::SetThreadExecutionState(${flags}) -eq 0) { [Console]::Error.WriteLine('SetThreadExecutionState 调用失败'); exit 2 }
+          if ([ZKernelPower]::SetThreadExecutionState(${flags}) -eq 0) { [Console]::Error.WriteLine('${escapePsSingleQuoted(t('hostPlugin.sys.caffeine.setStateFailed'))}'); exit 2 }
           [Console]::Out.WriteLine('${readyMarker}')
           [Console]::Out.Flush()
           while ($true) { Start-Sleep -Seconds 30; if ([ZKernelPower]::SetThreadExecutionState(${flags}) -eq 0) { exit 2 } }
@@ -3673,7 +3687,7 @@ export class SystemRegistryHostPluginHandler {
       return Promise.resolve({
         ok: false,
         errorCode: 'KEEP_AWAKE_START_FAILED',
-        error: `无法启动防休眠进程：${err instanceof Error ? err.message : String(err)}`
+        error: t('hostPlugin.sys.caffeine.startFailed', { detail: err instanceof Error ? err.message : String(err) })
       })
     }
 
@@ -3682,10 +3696,10 @@ export class SystemRegistryHostPluginHandler {
       let stdoutText = ''
       let stderrText = ''
       const timer = setTimeout(() => {
-        finish({ ok: false, errorCode: 'KEEP_AWAKE_START_TIMEOUT', error: '防休眠进程启动超时，未确认生效' }, true)
+        finish({ ok: false, errorCode: 'KEEP_AWAKE_START_TIMEOUT', error: t('hostPlugin.sys.caffeine.startTimeout') }, true)
       }, 20_000)
       const onAbort = (): void => {
-        finish({ ok: false, errorCode: 'CANCELLED', error: '防休眠启动已取消' }, true)
+        finish({ ok: false, errorCode: 'CANCELLED', error: t('hostPlugin.sys.caffeine.startCancelled') }, true)
       }
       const finish = (
         result: { ok: true; child: ReturnType<typeof spawn> } | { ok: false; errorCode: string; error: string },
@@ -3705,11 +3719,11 @@ export class SystemRegistryHostPluginHandler {
         resolve(result)
       }
       const onError = (err: Error): void => {
-        finish({ ok: false, errorCode: 'KEEP_AWAKE_START_FAILED', error: `无法启动防休眠进程：${err.message}` })
+        finish({ ok: false, errorCode: 'KEEP_AWAKE_START_FAILED', error: t('hostPlugin.sys.caffeine.startFailed', { detail: err.message }) })
       }
       const onExit = (code: number | null, sig: NodeJS.Signals | null): void => {
-        const detail = stderrText.trim() || (sig ? `信号 ${sig}` : `退出码 ${code ?? '未知'}`)
-        finish({ ok: false, errorCode: 'KEEP_AWAKE_START_FAILED', error: `防休眠进程启动后立即退出：${detail}` })
+        const detail = stderrText.trim() || (sig ? t('hostPlugin.sys.signal', { signal: sig }) : t('hostPlugin.sys.exitCode', { code: code ?? t('hostPlugin.sys.unknownCode') }))
+        finish({ ok: false, errorCode: 'KEEP_AWAKE_START_FAILED', error: t('hostPlugin.sys.caffeine.exitedEarly', { detail }) })
       }
       const onSpawn = (): void => {
         // macOS：caffeinate 创建成功即生效；Windows 还要等就绪标记
@@ -3804,7 +3818,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_DURATION',
-          error: 'INVALID_DURATION: 持续时长必须为 0（无限期）或 1~10080 分钟之间的有效数值'
+          error: t('hostPlugin.sys.caffeine.invalidDuration')
         }
       }
 
@@ -3814,7 +3828,7 @@ export class SystemRegistryHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_MODE',
-          error: 'INVALID_MODE: 防休眠模式仅支持 display（保持屏幕常亮）或 system（仅保持系统后台运行）'
+          error: t('hostPlugin.sys.caffeine.invalidMode')
         }
       }
 
@@ -3829,7 +3843,7 @@ export class SystemRegistryHostPluginHandler {
             ok: false,
             success: false,
             errorCode: 'UNSUPPORTED_PLATFORM',
-            error: '当前系统不支持防休眠'
+            error: t('hostPlugin.sys.caffeine.unsupported')
           }
         }
         const started = await this.#startKeepAliveProcess(rawMode, signal)
@@ -3843,7 +3857,7 @@ export class SystemRegistryHostPluginHandler {
             ok: false,
             success: false,
             errorCode: 'KEEP_AWAKE_SUPERSEDED',
-            error: '防休眠启动期间收到了新的操作，本次启动已取消'
+            error: t('hostPlugin.sys.caffeine.superseded')
           }
         }
         keepAliveProc = started.child
@@ -3986,7 +4000,7 @@ export class SystemRegistryHostPluginHandler {
             ok: false,
             success: false,
             errorCode: 'INVALID_DURATION',
-            error: 'INVALID_DURATION: 锁定时长必须为正数（1~604800 秒）或 null（无限期）'
+            error: t('hostPlugin.sys.keyLock.invalidDuration')
           }
         }
         durationSeconds = Math.round(num)
@@ -4052,74 +4066,74 @@ export class SystemRegistryHostPluginHandler {
   static readonly #KNOWN_HOTKEY_SUSPECTS: ReadonlyArray<{
     comboUpper: string
     processNames: string[]
-    appName: string
-    modifyGuide: string
+    appNameKey: string
+    modifyGuideKey: string
   }> = [
     {
       comboUpper: 'CTRL+ALT+A',
       processNames: ['wechat.exe', 'weixin.exe', 'qq.exe', 'tim.exe', 'dingtalk.exe'],
-      appName: '微信 / QQ / 钉钉截图',
-      modifyGuide: '打开微信/QQ -> 设置 -> 快捷键 -> 截取屏幕，修改或清空热键'
+      appNameKey: 'hostPlugin.sys.hotkey.suspect.chatScreenshot.app',
+      modifyGuideKey: 'hostPlugin.sys.hotkey.suspect.chatScreenshot.guide'
     },
     {
       comboUpper: 'CTRL+ALT+S',
       processNames: ['qq.exe', 'cloudmusic.exe'],
-      appName: 'QQ 录屏 / 网易云音乐',
-      modifyGuide: '打开 QQ 或网易云音乐设置 -> 快捷键 -> 取消全局快捷键勾选'
+      appNameKey: 'hostPlugin.sys.hotkey.suspect.qqRecordMusic.app',
+      modifyGuideKey: 'hostPlugin.sys.hotkey.suspect.qqRecordMusic.guide'
     },
     {
       comboUpper: 'CTRL+ALT+P',
       processNames: ['cloudmusic.exe', 'qqmusic.exe'],
-      appName: '网易云音乐 / QQ音乐播放控制',
-      modifyGuide: '打开音乐软件设置 -> 快捷键 -> 禁用启用全局快捷键'
+      appNameKey: 'hostPlugin.sys.hotkey.suspect.musicPlayback.app',
+      modifyGuideKey: 'hostPlugin.sys.hotkey.suspect.musicPlayback.guide'
     },
     {
       comboUpper: 'CTRL+ALT+D',
       processNames: ['cloudmusic.exe', 'eudic.exe', 'youdaodict.exe'],
-      appName: '网易云桌面歌词 / 欧路/有道词典',
-      modifyGuide: '在软件设置中关闭全局桌面歌词或取词快捷键'
+      appNameKey: 'hostPlugin.sys.hotkey.suspect.lyricsDict.app',
+      modifyGuideKey: 'hostPlugin.sys.hotkey.suspect.lyricsDict.guide'
     },
     {
       comboUpper: 'ALT+Z',
       processNames: ['nvcontainer.exe', 'nvidia share.exe', 'nvidia overlay.exe'],
-      appName: 'NVIDIA GeForce Experience 游戏内覆盖',
-      modifyGuide: '打开 NVIDIA App / GeForce Experience -> 设置 -> 关闭游戏内覆盖 (In-Game Overlay)'
+      appNameKey: 'hostPlugin.sys.hotkey.suspect.nvidiaOverlay.app',
+      modifyGuideKey: 'hostPlugin.sys.hotkey.suspect.nvidiaOverlay.guide'
     },
     {
       comboUpper: 'ALT+R',
       processNames: ['nvcontainer.exe', 'radeonsoftware.exe', 'amddvr.exe'],
-      appName: 'NVIDIA 性能图层 / AMD Radeon Adrenalin',
-      modifyGuide: '打开显卡控制面板 -> 热键设置 -> 修改性能监控或驱动面板快捷键'
+      appNameKey: 'hostPlugin.sys.hotkey.suspect.gpuPerf.app',
+      modifyGuideKey: 'hostPlugin.sys.hotkey.suspect.gpuPerf.guide'
     },
     {
       comboUpper: 'CTRL+SHIFT+F',
       processNames: ['sogoucloud.exe', 'imeutil.exe', 'wechatime.exe', 'ctfmon.exe'],
-      appName: '微软拼音 / 搜狗输入法繁简切换',
-      modifyGuide: '打开系统设置 -> 时间和语言 -> 输入 -> 高级键盘设置 / 输入法按键设置 -> 关闭 Ctrl+Shift+F 简繁切换'
+      appNameKey: 'hostPlugin.sys.hotkey.suspect.imeSimplified.app',
+      modifyGuideKey: 'hostPlugin.sys.hotkey.suspect.imeSimplified.guide'
     },
     {
       comboUpper: 'CTRL+SPACE',
       processNames: ['ctfmon.exe', 'sogoucloud.exe'],
-      appName: '系统输入法中英文切换',
-      modifyGuide: '系统输入法设置 -> 按键 -> 更改输入法切换热键'
+      appNameKey: 'hostPlugin.sys.hotkey.suspect.imeSwitch.app',
+      modifyGuideKey: 'hostPlugin.sys.hotkey.suspect.imeSwitch.guide'
     },
     {
       comboUpper: 'CTRL+ALT+W',
       processNames: ['wechat.exe', 'weixin.exe'],
-      appName: '微信主窗口呼出',
-      modifyGuide: '微信设置 -> 快捷键 -> 打开微信'
+      appNameKey: 'hostPlugin.sys.hotkey.suspect.wechatOpen.app',
+      modifyGuideKey: 'hostPlugin.sys.hotkey.suspect.wechatOpen.guide'
     },
     {
       comboUpper: 'CTRL+ALT+Z',
       processNames: ['qq.exe', 'tim.exe'],
-      appName: 'QQ 提取消息',
-      modifyGuide: 'QQ 设置 -> 热键 -> 提取消息'
+      appNameKey: 'hostPlugin.sys.hotkey.suspect.qqFetch.app',
+      modifyGuideKey: 'hostPlugin.sys.hotkey.suspect.qqFetch.guide'
     },
     {
       comboUpper: 'F1',
       processNames: ['snipaste.exe', 'pixpin.exe'],
-      appName: 'Snipaste / PixPin 贴图截图',
-      modifyGuide: '任务栏托盘右键 Snipaste/PixPin -> 首选项 -> 热键控制'
+      appNameKey: 'hostPlugin.sys.hotkey.suspect.snipaste.app',
+      modifyGuideKey: 'hostPlugin.sys.hotkey.suspect.snipaste.guide'
     }
   ]
 
@@ -4128,7 +4142,7 @@ export class SystemRegistryHostPluginHandler {
     params: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<unknown> {
-    if (process.platform === 'darwin') return { ok: false, success: false, error: '请更新热键侦测插件，通过 Mac 热键探测接口重新检测；旧接口不支持 Mac 探测或结束进程' }
+    if (process.platform === 'darwin') return { ok: false, success: false, errorCode: 'UPGRADE_REQUIRED', error: t('hostPlugin.sys.hotkey.macUpgradeRequired') }
     const lowerFn = (fn ?? '').trim().toLowerCase()
 
     if (lowerFn === 'probehotkeys' || lowerFn === 'scanhotkeys' || lowerFn === 'probe') {
@@ -4209,10 +4223,10 @@ export class SystemRegistryHostPluginHandler {
           try {
             parsed = JSON.parse(await this.#sys.runPowerShell(ps, 15_000, signal)) as { results?: unknown }
           } catch (err) {
-            return { ok: false, success: false, errorCode: 'PROBE_FAILED', error: `PROBE_FAILED: 热键探测未完成，不能判断是否空闲：${err instanceof Error ? err.message : String(err)}` }
+            return { ok: false, success: false, errorCode: 'PROBE_FAILED', error: t('hostPlugin.sys.hotkey.probeFailed', { detail: err instanceof Error ? err.message : String(err) }) }
           }
           if (!parsed || !Array.isArray(parsed.results)) {
-            return { ok: false, success: false, errorCode: 'PROBE_FAILED', error: 'PROBE_FAILED: 热键探测结果格式无效' }
+            return { ok: false, success: false, errorCode: 'PROBE_FAILED', error: t('hostPlugin.sys.hotkey.probeInvalid') }
           }
           for (const item of parsed.results as Array<Record<string, unknown>>) {
             const status = String(item?.status ?? '')
@@ -4243,16 +4257,16 @@ export class SystemRegistryHostPluginHandler {
           isSystemReserved,
           // 系统不提供占用者信息：以下只是按常见软件推测的“可能来源”，不能作为结束进程的依据
           suspectApp: isSystemReserved
-            ? 'Windows 系统保留'
+            ? t('hostPlugin.sys.hotkey.winReserved')
             : status === 'occupied'
-              ? (matchedProc && suspectRule ? `可能是 ${suspectRule.appName}` : '未知程序（系统不提供占用者）')
+              ? (matchedProc && suspectRule ? t('hostPlugin.sys.hotkey.probablyApp', { appName: t(suspectRule.appNameKey) }) : t('hostPlugin.sys.hotkey.unknownApp'))
               : null,
           suspectProcess: matchedProc?.name ?? null,
           suspectPid: null,
-          ...(invalidCombo ? { probeNote: '组合键只能由字母、数字和 + 组成（如 Ctrl+Shift+F12），包含其他字符的无法检测' } : {}),
+          ...(invalidCombo ? { probeNote: t('hostPlugin.sys.hotkey.invalidComboNote') } : {}),
           modifyGuide: isSystemReserved
-            ? '操作系统内核级保留热键，不支持第三方软件覆盖'
-            : suspectRule?.modifyGuide ?? '请检查当前后台运行的聊天、输入法、音乐或显卡驱动软件设置'
+            ? t('hostPlugin.sys.hotkey.kernelReservedGuide')
+            : (suspectRule ? t(suspectRule.modifyGuideKey) : t('hostPlugin.sys.hotkey.defaultGuide'))
         }
       })
 
@@ -4265,7 +4279,7 @@ export class SystemRegistryHostPluginHandler {
 
     if (lowerFn === 'killsuspectprocess' || lowerFn === 'terminateprocess') {
       // 系统不提供热键占用者，“嫌疑进程”只是按进程名推测，不能据此强制结束进程
-      return { ok: false, success: false, errorCode: 'UNSUPPORTED_ACTION', error: 'UNSUPPORTED_ACTION: 系统无法确认热键占用者，已不再提供按推测结束进程；请在对应软件的设置中修改快捷键' }
+      return { ok: false, success: false, errorCode: 'UNSUPPORTED_ACTION', error: t('hostPlugin.sys.hotkey.killUnsupported') }
     }
 
     return {
@@ -4290,7 +4304,7 @@ export class SystemRegistryHostPluginHandler {
         ok: false,
         success: false,
         errorCode: 'UNSUPPORTED_ACTION',
-        error: '请更新最近项目插件，通过新版接口读取和打开最近项目'
+        error: t('hostPlugin.sys.recent.upgradeRequired')
       }
     }
 
@@ -4309,7 +4323,7 @@ export class SystemRegistryHostPluginHandler {
       ok: false,
       success: false,
       errorCode: 'UNSUPPORTED_ACTION',
-      error: '请更新环境变量插件，通过新版接口读取和修改环境变量'
+      error: t('hostPlugin.sys.env.upgradeRequired')
     }
 
     if (lowerFn === 'load' || lowerFn === 'loadallenvvariables') return unsupported
@@ -4320,14 +4334,14 @@ export class SystemRegistryHostPluginHandler {
       const key = String(params.key ?? '').trim()
       const value = String(params.value ?? '')
       if (!key) {
-        return { ok: false, success: false, errorCode: 'INVALID_ENV_KEY', error: '变量名不能为空' }
+        return { ok: false, success: false, errorCode: 'INVALID_ENV_KEY', error: t('hostPlugin.sys.env.emptyKey') }
       }
       if (key.toUpperCase() === 'PATH' && value.length > 2048) {
         return {
           ok: false,
           success: false,
           errorCode: 'PATH_TOO_LONG',
-          error: 'PATH_TOO_LONG: PATH 长度超过 Windows 2048 字符安全阈值，已拦截写入防止截断'
+          error: t('hostPlugin.sys.env.pathTooLong')
         }
       }
       // 预览只校验参数、不写入（结果带 dryRun 标记，不能当作已保存）；真实写入一律要求新版接口

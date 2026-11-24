@@ -8,6 +8,7 @@
  */
 
 import { WorkerPool, PooledWorker } from './worker-pool.js'
+import { setLocale, t } from '../i18n/index.js'
 
 interface ProcessParentPort {
   postMessage(data: unknown): void
@@ -76,6 +77,9 @@ parentChannel.on(async (rawMsg: unknown) => {
             cacheDir,
             locale
           } = payload || {}
+          if (typeof locale === 'string' && locale.trim()) {
+            setLocale(locale)
+          }
           const worker = await pool.getFromPool()
           if (typeof sessionId === 'string' && sessionId) {
             activeSessions.set(sessionId, worker)
@@ -115,6 +119,9 @@ parentChannel.on(async (rawMsg: unknown) => {
 
         case 'updateLocale': {
           const nextLocale = typeof payload?.locale === 'string' ? payload.locale : ''
+          if (nextLocale.trim()) {
+            setLocale(nextLocale)
+          }
           const workers = [...activeSessions.values()].filter(worker => !worker.isTerminated)
           await Promise.allSettled(
             workers.map(worker => worker.postRequest('updateLocale', { locale: nextLocale }))
@@ -136,7 +143,10 @@ parentChannel.on(async (rawMsg: unknown) => {
               type: 'result',
               id,
               success: false,
-              error: { code: 'SESSION_NOT_FOUND', message: `未找到活跃会话: ${String(sessionId ?? '')}` }
+              error: {
+                code: 'SESSION_NOT_FOUND',
+                message: t('extensionHost.error.sessionNotFound', { sessionId: String(sessionId ?? '') })
+              }
             })
             return
           }
@@ -187,7 +197,10 @@ parentChannel.on(async (rawMsg: unknown) => {
             type: 'result',
             id,
             success: false,
-            error: { code: 'UNKNOWN_ACTION', message: `未知的宿主指令: ${String(action ?? '')}` }
+            error: {
+              code: 'UNKNOWN_ACTION',
+              message: t('extensionHost.error.unknownAction', { action: String(action ?? '') })
+            }
           })
           return
         }

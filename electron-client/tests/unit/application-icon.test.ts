@@ -173,7 +173,7 @@ test('loadApplicationIcon throws explicit error when all icon sources are empty 
       getFileIcon: async () => mockImage(true),
       setDockIcon: () => {}
     }),
-    /无法加载 ZTools 应用图标/
+    /Failed to load ZTools application icon/
   )
 })
 

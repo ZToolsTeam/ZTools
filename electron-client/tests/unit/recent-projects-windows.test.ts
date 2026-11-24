@@ -68,14 +68,14 @@ test('Windows JetBrains 查找：固定目录优先，再按前缀匹配带版�
   const toolbox = 'C:\\Users\\u\\AppData\\Local\\Programs\\PyCharm Professional 2025.1\\bin\\pycharm64.exe'
   assert.equal(await findWindowsEditor('pycharm', deps({ files: [toolbox], dirEntries: { 'C:\\Users\\u\\AppData\\Local\\Programs': ['PyCharm Professional 2025.1', 'Microsoft VS Code'] } }).value), toolbox)
   // 同名路径是目录而不是可执行文件时不算找到
-  await assert.rejects(findWindowsEditor('rider', deps({ dirs: ['C:\\Program Files\\JetBrains Rider\\bin\\rider64.exe'] }).value), /未找到 JetBrains Rider 的安装位置，请确认已安装对应编辑器/)
+  await assert.rejects(findWindowsEditor('rider', deps({ dirs: ['C:\\Program Files\\JetBrains Rider\\bin\\rider64.exe'] }).value), /Could not find installation location for JetBrains Rider/)
 })
 
 test('Windows 编辑器找不到时明确报错，不启动任何进程', async () => {
   const none = deps()
-  await assert.rejects(launchWindowsProject(project(), 'open', signal(), { ...none.value, stat: async file => file === project().path ? dirStat : none.value.stat(file) }), /未找到 Microsoft VS Code 的安装位置/)
+  await assert.rejects(launchWindowsProject(project(), 'open', signal(), { ...none.value, stat: async file => file === project().path ? dirStat : none.value.stat(file) }), /Could not find installation location for Microsoft VS Code/)
   assert.equal(none.spawns.length, 0)
-  await assert.rejects(findWindowsEditor('windsurf', deps({ env: {} }).value), /未找到 Windsurf 的安装位置/)
+  await assert.rejects(findWindowsEditor('windsurf', deps({ env: {} }).value), /Could not find installation location for Windsurf/)
 })
 
 test('Windows 打开项目：编辑器可执行文件直接启动，项目路径原样作为单个参数，不经 shell', async () => {
@@ -111,7 +111,7 @@ test('Windows 打开终端：UNC 项目不作为 cwd（cmd 会退回 C:\\Windows
   // 不带空格的 & / ^ / % 等会被 cmd 当成命令或变量：一律拒绝，不启动终端
   for (const bad of ['\\\\srv\\s\\x&calc', '\\\\srv\\s\\R^D', '\\\\srv\\s\\%PATH%', '\\\\srv\\s\\a|b', '\\\\srv\\s\\a>b', '\\\\srv\\s\\x!y']) {
     const p = project({ path: bad }), d = deps({ dirs: [bad] })
-    await assert.rejects(launchWindowsProject(p, 'terminal', signal(), d.value), /网络路径含/)
+    await assert.rejects(launchWindowsProject(p, 'terminal', signal(), d.value), /Network path contains unsafe shell characters/)
     assert.equal(d.spawns.length, 0, bad)
   }
   // 工作区文件在 UNC 共享上：pushd 到所在目录；ComSpec 缺失时同样使用绝对路径
@@ -123,30 +123,30 @@ test('Windows 打开终端：UNC 项目不作为 cwd（cmd 会退回 C:\\Windows
   await launchWindowsProject(project(), 'terminal', signal(), local.value)
   assert.deepEqual(local.spawns[0]!.args, ['/K'])
   // 故障注入：UNC 分支 spawn 异步报错 / 同步抛错同样如实失败
-  await assert.rejects(launchWindowsProject(unc, 'terminal', signal(), deps({ dirs: [unc.path], spawnMode: 'error' }).value), /^Error: 启动失败：spawn UNKNOWN$/)
+  await assert.rejects(launchWindowsProject(unc, 'terminal', signal(), deps({ dirs: [unc.path], spawnMode: 'error' }).value), /^Error: Launch failed: spawn UNKNOWN$/)
   await assert.rejects(launchWindowsProject(unc, 'terminal', signal(), deps({ dirs: [unc.path], spawnMode: 'throw' }).value), /spawn EINVAL/)
 })
 
 test('Windows 启动故障注入：spawn 异步报错、同步抛错、路径类型改变、路径不存在、预先取消均如实失败', async () => {
   const exe = 'C:\\Program Files\\Microsoft VS Code\\Code.exe'
-  await assert.rejects(launchWindowsProject(project(), 'open', signal(), deps({ files: [exe], dirs: [project().path], spawnMode: 'error' }).value), /^Error: 启动失败：spawn UNKNOWN$/)
-  await assert.rejects(launchWindowsProject(project(), 'terminal', signal(), deps({ dirs: [project().path], spawnMode: 'error' }).value), /启动失败/)
+  await assert.rejects(launchWindowsProject(project(), 'open', signal(), deps({ files: [exe], dirs: [project().path], spawnMode: 'error' }).value), /^Error: Launch failed: spawn UNKNOWN$/)
+  await assert.rejects(launchWindowsProject(project(), 'terminal', signal(), deps({ dirs: [project().path], spawnMode: 'error' }).value), /Launch failed/)
   await assert.rejects(launchWindowsProject(project(), 'terminal', signal(), deps({ dirs: [project().path], spawnMode: 'throw' }).value), /spawn EINVAL/)
   // 文件夹项目变成了文件 / 工作区文件变成了目录
   const changed = deps({ files: [project().path, exe] })
-  await assert.rejects(launchWindowsProject(project(), 'open', signal(), changed.value), /项目路径类型已改变：记录的是文件夹.*请重新扫描/); assert.equal(changed.spawns.length, 0)
-  await assert.rejects(launchWindowsProject(project({ kind: 'workspace' }), 'terminal', signal(), deps({ dirs: [project().path] }).value), /类型已改变/)
+  await assert.rejects(launchWindowsProject(project(), 'open', signal(), changed.value), /Project path type changed: expected a folder.*rescan/); assert.equal(changed.spawns.length, 0)
+  await assert.rejects(launchWindowsProject(project({ kind: 'workspace' }), 'terminal', signal(), deps({ dirs: [project().path] }).value), /Project path type changed/)
   const missing = deps({ files: [exe] })
-  // 路径不存在：给出中文原因，不把 Node 原始错误（ENOENT: no such file...）透给插件，原始错误保留在 cause
+  // 路径不存在：给出明确原因，不把 Node 原始错误（ENOENT: no such file...）透给插件，原始错误保留在 cause
   await assert.rejects(launchWindowsProject(project(), 'open', signal(), missing.value), (e: Error) =>
-    /^项目路径不存在/.test(e.message) && !/ENOENT|no such file/.test(e.message) && (e.cause as NodeJS.ErrnoException).code === 'ENOENT'); assert.equal(missing.spawns.length, 0)
-  // 无权限、上级不是目录、未知错误码均转成中文
-  for (const [code, pattern] of [['EACCES', /没有权限访问项目路径/], ['EPERM', /没有权限/], ['ENOTDIR', /上级不是文件夹/], ['ELOOP', /循环的符号链接/], ['EIO', /无法读取/], ['EWHATEVER', /无法读取项目路径（EWHATEVER）/]] as const) {
+    /^Project path does not exist/.test(e.message) && !/ENOENT|no such file/.test(e.message) && (e.cause as NodeJS.ErrnoException).code === 'ENOENT'); assert.equal(missing.spawns.length, 0)
+  // 无权限、上级不是目录、未知错误码均转成友好原因
+  for (const [code, pattern] of [['EACCES', /Permission denied accessing project path/], ['EPERM', /Permission denied/], ['ENOTDIR', /Parent of project path is not a folder/], ['ELOOP', /symbolic link loop/], ['EIO', /unreadable/], ['EWHATEVER', /Unable to read project path \(EWHATEVER\)/]] as const) {
     const failing = { ...deps({ files: [exe] }).value, stat: async () => { throw Object.assign(new Error(`${code}: raw node message`), { code }) } }
     await assert.rejects(launchWindowsProject(project(), 'open', signal(), failing), (e: Error) => pattern.test(e.message) && !/raw node message/.test(e.message))
   }
   const noCode = { ...deps({ files: [exe] }).value, stat: async () => { throw new Error('raw') } }
-  await assert.rejects(launchWindowsProject(project(), 'open', signal(), noCode), /^Error: 无法读取项目路径，请重新扫描$/)
+  await assert.rejects(launchWindowsProject(project(), 'open', signal(), noCode), /^Error: Unable to read project path; please rescan$/)
   const aborted = new AbortController(); aborted.abort(new Error('已取消')); const pre = deps({ files: [exe], dirs: [project().path] })
   await assert.rejects(launchWindowsProject(project(), 'open', aborted.signal, pre.value), /已取消/); assert.equal(pre.spawns.length, 0); assert.equal(pre.statCalls.length, 0)
 })
@@ -170,9 +170,9 @@ test('Windows 路径解析（path.win32）：VS Code 盘符 URI、JetBrains 盘�
   // 老版 lastOpenedProject 同样按 Windows 路径解析，已有的不重复
   assert.deepEqual(parseJetBrainsHistory(jetbrainsXml(['C:/work/proj'], 'E:/legacy'), 'C:\\Users\\u', undefined, win).map(r => `${r.path}|${r.timestamp}`), ['C:\\work\\proj|1700000000000', 'E:\\legacy|null'])
   // 相对路径、带查询的文件 URI、NUL 字符明确报错
-  assert.throws(() => parseJetBrainsHistory(jetbrainsXml(['proj']), 'C:\\Users\\u', undefined, win), /项目路径无效/)
-  assert.throws(() => parseVscHistory('{"entries":[{"folderUri":"file:///c%3A/a?x=1"}]}', 'C:\\Users\\u', win), /非法查询/)
-  assert.throws(() => parseVscHistory('{"entries":[{"folderUri":"file:///c%3A/a%00b"}]}', 'C:\\Users\\u', win), /路径/)
+  assert.throws(() => parseJetBrainsHistory(jetbrainsXml(['proj']), 'C:\\Users\\u', undefined, win), /Invalid project path/)
+  assert.throws(() => parseVscHistory('{"entries":[{"folderUri":"file:///c%3A/a?x=1"}]}', 'C:\\Users\\u', win), /disallowed query/)
+  assert.throws(() => parseVscHistory('{"entries":[{"folderUri":"file:///c%3A/a%00b"}]}', 'C:\\Users\\u', win), /path/i)
   // 同样的输入按 POSIX 解析：盘符路径不当本地路径
   assert.deepEqual(parseJetBrainsHistory(jetbrainsXml(['C:/work/proj']), '/Users/u', undefined, path.posix), [])
   assert.deepEqual(parseVscHistory('{"entries":[{"folderUri":"file:///Users/u/p"}]}', '/Users/u', path.posix).projects.map(p => p.path), ['/Users/u/p'])

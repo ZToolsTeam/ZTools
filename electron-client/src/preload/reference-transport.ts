@@ -32,7 +32,7 @@ export function createReferenceTransportBridge(
     methods[method] = (request: unknown) => {
       try {
         if (!isRecord(request) || Object.keys(request).some(key => !['messageId', 'params', 'timeoutMs'].includes(key))) {
-          throw new Error('文件请求无效或包含未知字段')
+          throw new Error('Invalid file request or unknown fields')
         }
         return port.invoke(IPC_CALL_CHANNEL, parseReferenceRequest({ ...request, method }))
       } catch (error) { return Promise.reject(error) }
@@ -40,7 +40,7 @@ export function createReferenceTransportBridge(
     cancellations[method] = (request: unknown) => {
       try {
         if (!isRecord(request) || Object.keys(request).some(key => !['messageId', 'reason'].includes(key))) {
-          throw new Error('文件取消请求无效或包含未知字段')
+          throw new Error('Invalid file cancel request or unknown fields')
         }
         return port.invoke(REFERENCE_CANCEL_CHANNEL, parseReferenceCancellation({ ...request, method }))
       } catch (error) { return Promise.reject(error) }

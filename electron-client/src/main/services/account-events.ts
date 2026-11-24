@@ -17,6 +17,6 @@ export function publishAccountChanged(
   try {
     events.publishHostToMain(type, {})
   } catch (error) {
-    warn(`发布 ${type} 事件失败:`, error)
+    warn(`Failed to publish ${type} event:`, error)
   }
 }

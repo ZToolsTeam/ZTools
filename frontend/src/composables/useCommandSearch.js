@@ -9,13 +9,17 @@
  */
 
 import { ref, computed, watch, getCurrentScope, onScopeDispose } from 'vue'
-import { usePluginsStore } from '@/stores/plugins'
+import { BUNDLED_VISIBILITY_SIGNAL, usePluginsStore } from '@/stores/plugins'
 import { i18n, t, getCurrentLocale } from '@/i18n'
 import {
   getLocalizedPluginField,
   getLocalizedPluginName,
   getLocalizedPluginDescription,
-  getLocalizedPluginAltNames
+  getLocalizedPluginAltNames,
+  getLocalizedPluginKeywords,
+  getLocalizedFeatureExplain,
+  getLocalizedFeatureCmds,
+  getLocalizedFeatureAltNames
 } from '@/utils/pluginI18n'
 import {
   MATCH_TIERS,
@@ -28,6 +32,12 @@ import { openSettings } from '@/utils/internalPlugins'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
+import { resolveErrorMessage } from '@/utils/errorMessage'
+import {
+  BUILTIN_COMMAND_ZH_EXTRA_ALT_NAMES,
+  BUILTIN_COMMAND_ZH_KEYWORDS,
+  COMMAND_FA_ICON_RULES
+} from './commandSearch.zh-data'
 import { track } from '@edition'
 // 与内置计算器插件同一份计算引擎（由 scripts/sync-bundled-plugins.mjs 同步）
 import { evaluateCalculatorQuery, addCalculatorHistory } from '@/vendor/calculator-engine.js'
@@ -149,15 +159,18 @@ export function evaluateInlineCommandItem(rawQuery) {
 // 内置快捷工具条目定义（宿主内置指令，处于最低分类权重；按当前 locale 动态生成主显示名，另一语言写入 altNames / keywords）
 export function getBuiltinCommandItems(locale = getCurrentLocale()) {
   const isEn = locale === 'en-US'
+  const altLocale = isEn ? 'zh-CN' : 'en-US'
+  const translate = (key) => (locale === getCurrentLocale() ? t(key) : i18n.global.t(key, {}, { locale }))
+  const translateAlt = (key) => i18n.global.t(key, {}, { locale: altLocale })
   return [
     {
       key: 'system-settings',
-      name: t('launcher.builtins.systemSettingsName'),
-      altNames: isEn ? ['系统设置'] : ['System Settings'],
-      keywords: ['settings', 'preferences', 'config', '偏好设置'],
-      description: t('launcher.builtins.systemSettingsDesc'),
-      badge: t('launcher.badges.system'),
-      actionLabel: t('launcher.builtins.systemSettingsAction'),
+      name: translate('launcher.builtins.systemSettingsName'),
+      altNames: [translateAlt('launcher.builtins.systemSettingsName')],
+      keywords: ['settings', 'preferences', 'config', ...BUILTIN_COMMAND_ZH_KEYWORDS['system-settings']],
+      description: translate('launcher.builtins.systemSettingsDesc'),
+      badge: translate('launcher.badges.system'),
+      actionLabel: translate('launcher.builtins.systemSettingsAction'),
       faIcon: 'fa-sliders',
       action: async () => {
         const res = await openSettings()
@@ -169,12 +182,14 @@ export function getBuiltinCommandItems(locale = getCurrentLocale()) {
     },
     {
       key: 'system-dashboard',
-      name: t('launcher.builtins.dashboardName'),
-      altNames: isEn ? ['打开插件中心', '工作台'] : ['Open Plugin Hub', 'Workspace'],
-      keywords: ['workspace', 'dashboard', 'hub', '工作台', '插件中心'],
-      description: t('launcher.builtins.dashboardDesc'),
-      badge: t('launcher.badges.workbench'),
-      actionLabel: t('launcher.builtins.dashboardAction'),
+      name: translate('launcher.builtins.dashboardName'),
+      altNames: isEn
+        ? [translateAlt('launcher.builtins.dashboardName'), ...BUILTIN_COMMAND_ZH_EXTRA_ALT_NAMES['system-dashboard']]
+        : ['Open Plugin Hub', 'Workspace'],
+      keywords: ['workspace', 'dashboard', 'hub', ...BUILTIN_COMMAND_ZH_KEYWORDS['system-dashboard']],
+      description: translate('launcher.builtins.dashboardDesc'),
+      badge: translate('launcher.badges.workbench'),
+      actionLabel: translate('launcher.builtins.dashboardAction'),
       faIcon: 'fa-th-large',
       action: () => {
         switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn('[useCommandSearch] 切换窗口模式失败:', err))
@@ -182,12 +197,12 @@ export function getBuiltinCommandItems(locale = getCurrentLocale()) {
     },
     {
       key: 'developer-create-extension',
-      name: t('launcher.builtins.createExtensionName'),
-      altNames: isEn ? ['创建新扩展'] : ['Create Extension'],
-      keywords: ['extension', 'plugin', 'dev', '扩展', '插件开发'],
-      description: t('launcher.builtins.createExtensionDesc'),
-      badge: t('launcher.badges.developer'),
-      actionLabel: t('launcher.builtins.createExtensionAction'),
+      name: translate('launcher.builtins.createExtensionName'),
+      altNames: [translateAlt('launcher.builtins.createExtensionName')],
+      keywords: ['extension', 'plugin', 'dev', ...BUILTIN_COMMAND_ZH_KEYWORDS['developer-create-extension']],
+      description: translate('launcher.builtins.createExtensionDesc'),
+      badge: translate('launcher.badges.developer'),
+      actionLabel: translate('launcher.builtins.createExtensionAction'),
       faIcon: 'fa-code',
       action: () => {
         if (window.ztools?.shell?.openExternal) {
@@ -199,12 +214,12 @@ export function getBuiltinCommandItems(locale = getCurrentLocale()) {
     },
     {
       key: 'developer-github-repo',
-      name: t('launcher.builtins.githubRepoName'),
-      altNames: isEn ? ['开源插件生态大仓'] : ['ZTools Extensions'],
-      keywords: ['github', 'extensions', 'open source', '开源', '插件仓库'],
-      description: t('launcher.builtins.githubRepoDesc'),
-      badge: t('launcher.badges.openSource'),
-      actionLabel: t('launcher.builtins.githubRepoAction'),
+      name: translate('launcher.builtins.githubRepoName'),
+      altNames: isEn ? [translateAlt('launcher.builtins.githubRepoName')] : ['ZTools Extensions'],
+      keywords: ['github', 'extensions', 'open source', ...BUILTIN_COMMAND_ZH_KEYWORDS['developer-github-repo']],
+      description: translate('launcher.builtins.githubRepoDesc'),
+      badge: translate('launcher.badges.openSource'),
+      actionLabel: translate('launcher.builtins.githubRepoAction'),
       faIcon: 'fa-github',
       action: () => {
         if (window.ztools?.shell?.openExternal) {
@@ -217,9 +232,14 @@ export function getBuiltinCommandItems(locale = getCurrentLocale()) {
   ]
 }
 
-export const BUILTIN_COMMAND_ITEMS = Object.freeze(getBuiltinCommandItems())
+const BUILTIN_COMMAND_KEYS = Object.freeze([
+  'system-settings',
+  'system-dashboard',
+  'developer-create-extension',
+  'developer-github-repo'
+])
 
-const BUILTIN_COMMAND_KEY_SET = new Set(BUILTIN_COMMAND_ITEMS.map((item) => item.key))
+const BUILTIN_COMMAND_KEY_SET = new Set(BUILTIN_COMMAND_KEYS)
 
 /**
  * 归一化固定文件路径用于唯一键生成：
@@ -439,22 +459,14 @@ export function getCategoryWeight(item) {
   return CATEGORY_WEIGHTS[getCategoryRank(item)] ?? 0
 }
 
-// 语义矢量图标智能匹配
+// 语义矢量图标智能匹配（关键词表维护在 commandSearch.zh-data.js）
 export function resolveCommandFaIcon(name, category) {
   const str = `${name || ''} ${category || ''}`.toLowerCase()
-  if (str.includes('音频') || str.includes('音乐') || str.includes('music')) return 'fa-music'
-  if (str.includes('视频') || str.includes('film') || str.includes('video')) return 'fa-film'
-  if (str.includes('重命名') || str.includes('rename')) return 'fa-i-cursor'
-  if (str.includes('文本') || str.includes('txt') || str.includes('text')) return 'fa-file-text-o'
-  if (str.includes('录屏') || str.includes('录制')) return 'fa-video-camera'
-  if (str.includes('截图') || str.includes('剪切')) return 'fa-scissors'
-  if (str.includes('搜索') || str.includes('search') || str.includes('everything')) return 'fa-search'
-  if (str.includes('清理') || str.includes('垃圾') || str.includes('clean')) return 'fa-trash-o'
-  if (str.includes('设置') || str.includes('setting') || str.includes('配置')) return 'fa-cog'
-  if (str.includes('剪贴板') || str.includes('clipboard')) return 'fa-clipboard'
-  if (str.includes('pdf')) return 'fa-file-pdf-o'
-  if (str.includes('图片') || str.includes('图像') || str.includes('image')) return 'fa-picture-o'
-  if (str.includes('代码') || str.includes('开发') || str.includes('code')) return 'fa-code'
+  for (const rule of COMMAND_FA_ICON_RULES) {
+    if (rule.keywords.some((kw) => str.includes(kw))) {
+      return rule.icon
+    }
+  }
   return 'fa-cube'
 }
 
@@ -741,7 +753,7 @@ export function isDeclarativePluginItem(plugin) {
 /**
  * 规范化解析插件声明的 features 子命令列表（防御性校验外部 manifest 数据）
  */
-export function normalizePluginFeatures(plugin) {
+export function normalizePluginFeatures(plugin, locale = getCurrentLocale()) {
   if (!plugin || typeof plugin !== 'object') return []
   const rawFeatures = Array.isArray(plugin.features)
     ? plugin.features
@@ -752,23 +764,51 @@ export function normalizePluginFeatures(plugin) {
   const seenCodes = new Set()
   const result = []
 
+  const hasText = (val) => typeof val === 'string' && val.trim().length > 0
+  const pickFeatureMeta = (p, code) =>
+    p?.i18n?.[locale]?.features?.[code] || p?.manifest?.i18n?.[locale]?.features?.[code] || null
+
   for (const feat of rawFeatures) {
     if (!feat || typeof feat !== 'object') continue
     const code = String(feat.code || '').trim()
-    const explain = (
-      getLocalizedPluginField(feat, 'explain') ||
-      getLocalizedPluginField(feat, 'title') ||
-      getLocalizedPluginField(feat, 'name') ||
-      String(feat.explain || feat.title || feat.name || '').trim()
-    )
-    if (!code || !explain || seenCodes.has(code)) continue
+    if (!code || seenCodes.has(code)) continue
+
+    const localizedEntry = pickFeatureMeta(plugin, code)
+    const hasExplicitExplain =
+      hasText(localizedEntry?.explain) ||
+      hasText(localizedEntry?.title) ||
+      hasText(localizedEntry?.name) ||
+      hasText(localizedEntry?.label) ||
+      hasText(feat.i18n?.[locale]?.explain) ||
+      hasText(feat.i18n?.[locale]?.title) ||
+      hasText(feat.i18n?.[locale]?.name) ||
+      hasText(feat.i18n?.[locale]?.label) ||
+      hasText(feat.explain) ||
+      hasText(feat.title) ||
+      hasText(feat.name) ||
+      hasText(feat.label)
+    if (!hasExplicitExplain) continue
+
+    const localizedExplain = getLocalizedFeatureExplain(plugin, feat, locale)
+    const explain =
+      localizedExplain && localizedExplain !== code
+        ? localizedExplain
+        : (
+            (hasText(localizedEntry?.title) ? localizedEntry.title.trim() : '') ||
+            (hasText(localizedEntry?.name) ? localizedEntry.name.trim() : '') ||
+            getLocalizedPluginField(feat, 'title', locale) ||
+            getLocalizedPluginField(feat, 'name', locale) ||
+            localizedExplain
+          )
+    if (!explain) continue
     seenCodes.add(code)
 
     const rawMode = String(feat.mode || plugin.mode || plugin.manifest?.mode || 'view').trim()
     const mode = ['view', 'no-view'].includes(rawMode) ? rawMode : 'view'
     const alias = typeof feat.alias === 'string' ? feat.alias.trim() : ''
     const shortcut = typeof feat.shortcut === 'string' ? feat.shortcut.trim() : ''
-    const cmds = Array.isArray(feat.cmds) ? feat.cmds : []
+    const cmds = getLocalizedFeatureCmds(plugin, feat, locale)
+    const altNames = getLocalizedFeatureAltNames(plugin, feat, explain)
 
     result.push({
       code,
@@ -777,7 +817,8 @@ export function normalizePluginFeatures(plugin) {
       alias,
       shortcut,
       icon: typeof feat.icon === 'string' ? feat.icon : '',
-      cmds
+      cmds,
+      altNames
     })
   }
 
@@ -897,6 +938,23 @@ function isFileRecord(f) {
   return Boolean(f) && typeof f.path === 'string' && typeof f.name === 'string'
 }
 
+/** 按当前应用语言重新计算文件/应用条目的展示 badge 与 actionLabel，保留图标、固定态等缓存字段 */
+function localizeFileItem(item) {
+  if (!item || typeof item !== 'object') return item
+  const nextBadge = item.isApplication
+    ? t('launcher.badges.app')
+    : item.isDir
+      ? t('launcher.badges.folder')
+      : t('launcher.badges.file')
+  const nextActionLabel = t('launcher.commandActions.open')
+  if (item.badge === nextBadge && item.actionLabel === nextActionLabel) return item
+  return {
+    ...item,
+    badge: nextBadge,
+    actionLabel: nextActionLabel
+  }
+}
+
 /** 主进程返回的文件记录转成列表条目；程序带上英文原名、文件带上去掉扩展名的名字，都参与匹配 */
 function toFileItem(f) {
   const isApplication = f.kind === 'application'
@@ -939,19 +997,20 @@ function buildCommandCandidates(pluginsStore) {
     if (!p || typeof p !== 'object') continue
     const key = String(p.pluginId || p.id || '').trim()
     if (!key) continue
-    if (p.revoked === true || p.enabled === false || pluginsStore.isRevoked?.(key)) {
+    if (p.revoked === true || p.enabled === false || pluginsStore.isRevoked?.(key) || pluginsStore.isBundledHidden?.(key)) {
       continue
     }
 
     const rawMode = String(p.mode || p.manifest?.mode || 'view').trim()
     const mode = ['view', 'no-view'].includes(rawMode) ? rawMode : 'view'
     const alias = String(p.alias || p.manifest?.alias || '').trim()
-    const features = normalizePluginFeatures(p)
-    const isDeclarative = isDeclarativePluginItem(p)
     const locale = getCurrentLocale()
+    const features = normalizePluginFeatures(p, locale)
+    const isDeclarative = isDeclarativePluginItem(p)
     const pluginName = getLocalizedPluginName(p, locale) || p.name || p.title || key
     const pluginDesc = getLocalizedPluginDescription(p, locale) || p.description || ''
     const altNames = getLocalizedPluginAltNames(p, pluginName)
+    const keywords = getLocalizedPluginKeywords(p, locale)
 
     installed.push({
       ...p,
@@ -962,6 +1021,7 @@ function buildCommandCandidates(pluginsStore) {
       title: pluginName,
       description: pluginDesc,
       altNames,
+      keywords,
       mode,
       alias,
       features,
@@ -974,6 +1034,9 @@ function buildCommandCandidates(pluginsStore) {
     features.forEach((feat, index) => {
       // 与插件同名的默认子命令只保留插件这一条，避免结果里出现两条一样的名字
       if (index === 0 && feat.mode === mode && sameText(feat.explain, pluginName)) return
+      const featureKeywords = feat.cmds
+        .map((cmd) => (typeof cmd === 'string' ? cmd : (cmd && typeof cmd === 'object' ? String(cmd.label || cmd.value || cmd.name || '').trim() : '')))
+        .filter(Boolean)
       featureItems.push({
         key: `${key}:${feat.code}`,
         type: 'plugin-feature',
@@ -982,6 +1045,8 @@ function buildCommandCandidates(pluginsStore) {
         featureCode: feat.code,
         name: feat.explain,
         title: feat.explain,
+        altNames: feat.altNames,
+        keywords: featureKeywords,
         description: `${pluginName || key}${feat.alias ? t('launcher.commandActions.aliasSuffix', { alias: feat.alias }) : ''}`,
         subtitle: pluginName || key,
         alias: feat.alias,
@@ -1415,7 +1480,7 @@ export function useCommandSearch(options = {}) {
           hasStructuredPinnedEntries.value = prevStructured
           return {
             success: false,
-            error: data?.error?.message || data?.error || res?.error?.message || res?.error || t('launcher.pinnedErrors.togglePinFailed')
+            error: resolveErrorMessage(data?.error ? data : res, 'launcher.pinnedErrors.togglePinFailed')
           }
         }
         if (Array.isArray(data?.pinnedEntries)) {
@@ -1433,7 +1498,7 @@ export function useCommandSearch(options = {}) {
         panelRawItems.value = prevRawItems
         hasStructuredPinnedEntries.value = prevStructured
         console.warn('[useCommandSearch] 设置固定状态失败:', err)
-        return { success: false, error: err?.message || t('launcher.pinnedErrors.togglePinFailed') }
+        return { success: false, error: resolveErrorMessage(err, 'launcher.pinnedErrors.togglePinFailed') }
       }
     }
 
@@ -1449,7 +1514,7 @@ export function useCommandSearch(options = {}) {
         panelRawItems.value = prevRawItems
         hasStructuredPinnedEntries.value = prevStructured
         console.warn('[useCommandSearch] 切换固定状态失败:', err)
-        return { success: false, error: err?.message || t('launcher.pinnedErrors.togglePinFailed') }
+        return { success: false, error: resolveErrorMessage(err, 'launcher.pinnedErrors.togglePinFailed') }
       }
     }
 
@@ -1530,7 +1595,10 @@ export function useCommandSearch(options = {}) {
           return {
             success: false,
             stale: Boolean(data?.stale),
-            error: data?.error?.message || data?.error || res?.error?.message || res?.error || (data?.stale ? t('launcher.pinnedErrors.orderStale') : t('launcher.pinnedErrors.reorderFailed')),
+            error: resolveErrorMessage(
+              data?.error ? data : res,
+              data?.stale ? 'launcher.pinnedErrors.orderStale' : 'launcher.pinnedErrors.reorderFailed'
+            ),
             pinnedEntries: pinnedEntries.value
           }
         }
@@ -1543,7 +1611,7 @@ export function useCommandSearch(options = {}) {
       } catch (err) {
         pinnedEntries.value = prevEntries
         console.warn('[useCommandSearch] 调整固定排序失败:', err)
-        return { success: false, error: err?.message || t('launcher.pinnedErrors.reorderFailed'), pinnedEntries: pinnedEntries.value }
+        return { success: false, error: resolveErrorMessage(err, 'launcher.pinnedErrors.reorderFailed'), pinnedEntries: pinnedEntries.value }
       }
     }
 
@@ -1577,7 +1645,7 @@ export function useCommandSearch(options = {}) {
       try {
         const res = await bridge.searchFiles('', fileSearchLimit, { scope: 'applications' })
         if (disposed) return
-        if (res?.success === false) throw new Error(res.error?.message || '读取程序列表失败')
+        if (res?.success === false) throw new Error(res.error?.message || 'Failed to read application list')
         const data = res?.data ?? res
         if (data?.scope !== 'applications' || !Array.isArray(data.files)) return
         const previousIcons = new Map(applicationResults.value.map((item) => [item.path, item.icon]))
@@ -1614,7 +1682,7 @@ export function useCommandSearch(options = {}) {
     const trimmed = text.trim()
     try {
       const bridge = launcherBridge()
-      if (!bridge) throw new Error('当前客户端没有可用的文件搜索接口')
+      if (!bridge) throw new Error('File search bridge is unavailable in current host')
       const res = applicationsAvailable.value
         ? await bridge.searchFiles(trimmed, fileSearchLimit, { scope: 'files' })
         : await bridge.searchFiles(trimmed, fileSearchLimit)
@@ -1622,7 +1690,7 @@ export function useCommandSearch(options = {}) {
       // 防乱序检查：如果当前请求已过时，坚决丢弃结果
       if (currentReq !== searchRequestId) return
 
-      if (res?.success === false) throw new Error(res.error?.message || '本地文件搜索失败')
+      if (res?.success === false) throw new Error(res.error?.message || 'Local file search failed')
       const data = res?.data ?? res
       const rawFiles = Array.isArray(data?.files) ? data.files : []
       fileSearchDegraded.value = data?.degraded === true
@@ -1725,6 +1793,9 @@ export function useCommandSearch(options = {}) {
   }
 
   const onWindowFocus = () => {
+    if (!pluginsStore._hiddenBundledLoaded && typeof window.ztools?.config?.get === 'function') {
+      void pluginsStore.fetchInstalledPlugins()
+    }
     // 重新取当前时间计算衰减分，并读取另一个窗口期间写入的使用记录
     frecencyVersion.value++
     void refreshApplications()
@@ -1732,6 +1803,9 @@ export function useCommandSearch(options = {}) {
   }
   // 悬浮条与工作台是两个窗口，共用同一份 localStorage：另一个窗口写入使用记录时重新排序
   const onStorage = (event) => {
+    if (event.key === BUNDLED_VISIBILITY_SIGNAL && typeof window.ztools?.config?.get === 'function') {
+      void pluginsStore.fetchInstalledPlugins(true)
+    }
     if (event.key === null || event.key === STORAGE_KEY_FRECENCY || event.key === STORAGE_KEY_QUERY_CHOICES) {
       frecencyVersion.value++
     }
@@ -1801,6 +1875,28 @@ export function useCommandSearch(options = {}) {
     }
   })
 
+  // 语言热切换时立即重算缓存的本地应用/文件条目展示文案，并向主进程重新拉取本地化的系统工具列表
+  watch(
+    () => i18n.global.locale.value,
+    () => {
+      if (applicationResults.value.length > 0) {
+        applicationResults.value = applicationResults.value.map(localizeFileItem)
+      }
+      if (fileResults.value.length > 0) {
+        fileResults.value = fileResults.value.map(localizeFileItem)
+      }
+      if (fileSearchError.value) {
+        fileSearchError.value = t('launcher.pinnedErrors.fileSearchUnavailable')
+      }
+      void refreshPanelData({ force: true })
+    }
+  )
+
+  const builtinSystemItems = computed(() => {
+    void i18n.global.locale.value
+    return getBuiltinCommandItems(getCurrentLocale())
+  })
+
   const panelSystemToolItems = computed(() => {
     void i18n.global.locale.value
     return panelRawItems.value
@@ -1839,19 +1935,21 @@ export function useCommandSearch(options = {}) {
 
   /** 已安装程序：去掉与系统工具同名的那一份，并独立染色 */
   const installedApps = computed(() => {
+    void i18n.global.locale.value
     const deduped = dedupeInstalledApps(
       applicationsAvailable.value ? applicationResults.value : [],
       panelSystemToolItems.value
     )
     const pinKeys = pinnedKeySet.value
     return {
-      apps: deduped.apps.map((app) => withPinState(app, pinKeys)),
+      apps: deduped.apps.map((app) => withPinState(localizeFileItem(app), pinKeys)),
       aliases: deduped.aliases
     }
   })
 
   /** 首屏置顶磁贴列表（严格按 pinnedEntries 顺序还原 5 类条目并过滤隐藏/禁用/下架/不支持平台项） */
   const pinnedItems = computed(() => {
+    void i18n.global.locale.value
     void iconVersion.value
     const candidateByPinKey = new Map()
     for (const candidate of commandCandidates.value) {
@@ -1901,6 +1999,7 @@ export function useCommandSearch(options = {}) {
    * 排序结果：上段是即时计算、插件、子命令、内置命令与程序的混排，下段是普通文件
    */
   const ranking = computed(() => {
+    void i18n.global.locale.value
     void frecencyVersion.value
     const rawQuery = query.value
     const q = normalizeSearchQuery(rawQuery)
@@ -2067,7 +2166,7 @@ export function useCommandSearch(options = {}) {
     return {
       commands: [...prefixItems, ...commands],
       top: [...prefixItems, ...ranked],
-      files: fileEntries.map((entry) => withPinState(entry.item, pinKeys)),
+      files: fileEntries.map((entry) => withPinState(localizeFileItem(entry.item), pinKeys)),
       ranges
     }
   })
@@ -2128,6 +2227,6 @@ export function useCommandSearch(options = {}) {
     reorderPinned,
     swapPinnedKeys,
     restorePinnedEntries,
-    builtinSystemItems: getBuiltinCommandItems()
+    builtinSystemItems
   }
 }

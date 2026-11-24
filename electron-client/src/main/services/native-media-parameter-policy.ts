@@ -30,7 +30,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 function finiteNumber(name: string, minimum: number, maximum: number): ParameterValidator {
   return (value) => {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum) {
-      invalid(`${name} 必须是 ${minimum} 到 ${maximum} 之间的有限数值`)
+      invalid(`${name} must be a finite number between ${minimum} and ${maximum}`)
     }
     return value
   }
@@ -39,7 +39,7 @@ function finiteNumber(name: string, minimum: number, maximum: number): Parameter
 function integer(name: string, minimum: number, maximum: number): ParameterValidator {
   return (value) => {
     if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) {
-      invalid(`${name} 必须是 ${minimum} 到 ${maximum} 之间的整数`)
+      invalid(`${name} must be an integer between ${minimum} and ${maximum}`)
     }
     return value
   }
@@ -47,7 +47,7 @@ function integer(name: string, minimum: number, maximum: number): ParameterValid
 
 function boolean(name: string): ParameterValidator {
   return (value) => {
-    if (typeof value !== 'boolean') invalid(`${name} 必须是布尔值`)
+    if (typeof value !== 'boolean') invalid(`${name} must be a boolean`)
     return value
   }
 }
@@ -60,7 +60,7 @@ function stringValue(name: string, maximumLength: number, allowEmpty = true): Pa
       value.length > maximumLength ||
       CONTROL_CHARACTERS.test(value)
     ) {
-      invalid(`${name} 格式或长度无效`)
+      invalid(`${name} has invalid format or length`)
     }
     return value
   }
@@ -69,9 +69,9 @@ function stringValue(name: string, maximumLength: number, allowEmpty = true): Pa
 function enumValue(name: string, values: readonly string[], normalizeLowercase = false): ParameterValidator {
   const allowed = new Set(values)
   return (value) => {
-    if (typeof value !== 'string') invalid(`${name} 必须是受支持的字符串选项`)
+    if (typeof value !== 'string') invalid(`${name} must be a supported string option`)
     const normalized = normalizeLowercase ? value.toLowerCase() : value
-    if (!allowed.has(normalized)) invalid(`${name} 包含不受支持的选项`)
+    if (!allowed.has(normalized)) invalid(`${name} contains an unsupported option`)
     return normalized
   }
 }
@@ -85,10 +85,10 @@ function numericSelect(name: string, values: readonly number[]): ParameterValida
     } else if (typeof value === 'string' && /^\d+$/.test(value)) {
       normalized = Number(value)
     } else {
-      invalid(`${name} 必须是受支持的数字选项`)
+      invalid(`${name} must be a supported numeric option`)
     }
     if (!Number.isSafeInteger(normalized) || !allowed.has(normalized)) {
-      invalid(`${name} 包含不受支持的数字选项`)
+      invalid(`${name} contains an unsupported numeric option`)
     }
     return normalized
   }
@@ -96,23 +96,23 @@ function numericSelect(name: string, values: readonly number[]): ParameterValida
 
 function pathString(name: string): ParameterValidator {
   return (value) => {
-    if (typeof value !== 'string' || value.length === 0) invalid(`${name} 必须是路径字符串`)
+    if (typeof value !== 'string' || value.length === 0) invalid(`${name} must be a path string`)
     return value
   }
 }
 
 function fileList(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_INPUT_ITEMS) {
-    invalid(`files 必须是 1 到 ${MAX_INPUT_ITEMS} 项的路径数组`)
+    invalid(`files must be an array of 1 to ${MAX_INPUT_ITEMS} paths`)
   }
   const ownKeys = Reflect.ownKeys(value)
   if (ownKeys.some((key) => key !== 'length' && (typeof key !== 'string' || !/^(?:0|[1-9]\d*)$/.test(key) || Number(key) >= value.length))) {
-    invalid('files 必须是普通路径数组')
+    invalid('files must be a plain array of paths')
   }
   for (let index = 0; index < value.length; index += 1) {
     const item = value[index]
     if (!Object.hasOwn(value, index) || typeof item !== 'string' || item.length === 0) {
-      invalid('files 中每一项都必须是路径字符串')
+      invalid('Every entry in files must be a path string')
     }
   }
   return [...value]
@@ -137,11 +137,11 @@ function parseTimeSeconds(value: unknown, name: string, positive: boolean): numb
           Number(hourMinuteSecond[2]) * 60 +
           Number(hourMinuteSecond[3])
       } else {
-        invalid(`${name} 必须是秒数或完整的 MM:SS / HH:MM:SS 时间`)
+        invalid(`${name} must be seconds or a valid MM:SS / HH:MM:SS time string`)
       }
     }
   } else {
-    invalid(`${name} 必须是秒数或时间字符串`)
+    invalid(`${name} must be a number of seconds or a time string`)
   }
 
   if (
@@ -150,7 +150,7 @@ function parseTimeSeconds(value: unknown, name: string, positive: boolean): numb
     seconds > MAX_MEDIA_SECONDS ||
     (positive && seconds === 0)
   ) {
-    invalid(`${name} 超出允许时间范围`)
+    invalid(`${name} is outside the allowed time range`)
   }
   return seconds
 }
@@ -161,30 +161,30 @@ function timeValue(name: string, positive: boolean): ParameterValidator {
 
 function clipsValue(value: unknown): Array<{ startTime: number; duration: number }> {
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_INPUT_ITEMS) {
-    invalid(`clips 必须是 1 到 ${MAX_INPUT_ITEMS} 项的数组`)
+    invalid(`clips must be an array of 1 to ${MAX_INPUT_ITEMS} items`)
   }
   const ownKeys = Reflect.ownKeys(value)
   if (ownKeys.some((key) => key !== 'length' && (typeof key !== 'string' || !/^(?:0|[1-9]\d*)$/.test(key) || Number(key) >= value.length))) {
-    invalid('clips 必须是普通数组')
+    invalid('clips must be a plain array')
   }
   for (let index = 0; index < value.length; index += 1) {
-    if (!Object.hasOwn(value, index)) invalid(`clips[${index}] 不允许为空项`)
+    if (!Object.hasOwn(value, index)) invalid(`clips[${index}] must not be empty`)
   }
   return value.map((clip, index) => {
     if (!isPlainRecord(clip) || Reflect.ownKeys(clip).some((key) => typeof key !== 'string')) {
-      invalid(`clips[${index}] 必须是普通对象`)
+      invalid(`clips[${index}] must be a plain object`)
     }
     const keys = Reflect.ownKeys(clip) as string[]
     if (keys.some((key) => key !== 'startTime' && key !== 'duration')) {
-      invalid(`clips[${index}] 只允许 startTime 和 duration`)
+      invalid(`clips[${index}] only allows startTime and duration`)
     }
     if (!Object.hasOwn(clip, 'startTime') || !Object.hasOwn(clip, 'duration')) {
-      invalid(`clips[${index}] 缺少 startTime 或 duration`)
+      invalid(`clips[${index}] is missing startTime or duration`)
     }
     const startTime = parseTimeSeconds(clip.startTime, `clips[${index}].startTime`, false)
     const duration = parseTimeSeconds(clip.duration, `clips[${index}].duration`, true)
     if (startTime + duration > MAX_MEDIA_SECONDS) {
-      invalid(`clips[${index}] 结束时间超过 7 天上限`)
+      invalid(`clips[${index}] end time exceeds the 7-day limit`)
     }
     return { startTime, duration }
   })
@@ -193,13 +193,13 @@ function clipsValue(value: unknown): Array<{ startTime: number; duration: number
 function validateSegmentBounds(params: Record<string, unknown>): void {
   const startTime = (params.startTime as number | undefined) ?? 0
   const duration = params.duration as number
-  if (startTime + duration > MAX_MEDIA_SECONDS) invalid('片段终点超过 7 天上限')
+  if (startTime + duration > MAX_MEDIA_SECONDS) invalid('Segment end time exceeds the 7-day limit')
 }
 
 const filesField = fileList
 const outputDirField = pathString('outputDir')
 const taskIdField: ParameterValidator = (value) => {
-  if (typeof value !== 'string' || !TASK_ID_PATTERN.test(value)) invalid('taskId 格式无效')
+  if (typeof value !== 'string' || !TASK_ID_PATTERN.test(value)) invalid('Invalid taskId format')
   return value
 }
 
@@ -255,10 +255,10 @@ const audioMethods: MethodTable = {
     insertSilence: boolean('insertSilence'),
     silenceDuration: finiteNumber('silenceDuration', 0, MAX_MEDIA_SECONDS)
   }, { validate: (params) => {
-    if ((params.files as string[]).length < 2) invalid('BatchMergeAudio 至少需要 2 个输入文件')
+    if ((params.files as string[]).length < 2) invalid('BatchMergeAudio requires at least 2 input files')
     if (params.insertSilence === true && params.silenceDuration !== undefined &&
         ((params.silenceDuration as number) < 0.1 || (params.silenceDuration as number) > 60)) {
-      invalid('启用合并静音时 silenceDuration 必须为 0.1–60 秒')
+      invalid('silenceDuration must be between 0.1 and 60 seconds when insertSilence is enabled')
     }
   } }),
   BatchAddWatermark: batch({
@@ -298,11 +298,11 @@ const watermarkSettingsFields: Readonly<Record<string, ParameterValidator>> = {
   text: stringValue('text', MAX_TEXT_LENGTH),
   fontSize: integer('fontSize', 8, 200),
   fontColor: (value) => {
-    if (typeof value !== 'string') invalid('fontColor 必须是安全颜色值')
+    if (typeof value !== 'string') invalid('fontColor must be a safe color string')
     const normalized = value.toLowerCase()
     const named = new Set(['white', 'black', 'red', 'green', 'blue', 'yellow', 'orange', 'purple', 'gray', 'grey'])
     if (!named.has(normalized) && !/^#[0-9a-f]{6}$/.test(normalized)) {
-      invalid('fontColor 必须是受支持的颜色名或 #RRGGBB')
+      invalid('fontColor must be a supported color name or #RRGGBB')
     }
     return normalized
   },
@@ -360,10 +360,10 @@ const videoMethods: MethodTable = {
   }, { validate: (params) => {
     const type = params.watermarkType ?? 'image'
     if (type === 'text' && Object.hasOwn(params, 'watermarkFile')) {
-      invalid('文字水印不能同时包含 watermarkFile')
+      invalid('Text watermark must not include watermarkFile')
     }
     if (type === 'image' && Object.hasOwn(params, 'text')) {
-      invalid('图片水印不能包含未使用的 text')
+      invalid('Image watermark must not include unused text')
     }
   } }),
   BatchResizeVideo: batch({
@@ -371,7 +371,7 @@ const videoMethods: MethodTable = {
     height: integer('height', 0, MAX_DIMENSION)
   }, { validate: (params) => {
     if ((params.width ?? 0) === 0 && (params.height ?? 0) === 0) {
-      invalid('BatchResizeVideo 至少需要一个正尺寸')
+      invalid('BatchResizeVideo requires at least one positive dimension')
     }
   } }),
   BatchSetThumbnail: batch({ thumbnailFile: pathString('thumbnailFile') }, { required: ['thumbnailFile'] }),
@@ -380,7 +380,7 @@ const videoMethods: MethodTable = {
   BatchRotateVideo: batch({
     angle: (value) => {
       const result = integer('angle', -360, 360)(value)
-      if ((result as number) % 90 !== 0) invalid('angle 必须是 90 度的整数倍')
+      if ((result as number) % 90 !== 0) invalid('angle must be an integer multiple of 90 degrees')
       return result
     }
   }, { required: ['angle'] }),
@@ -394,10 +394,10 @@ const videoMethods: MethodTable = {
     const hasIntroOrOutro = Object.hasOwn(params, 'introFile') || Object.hasOwn(params, 'outroFile')
     if (hasIntroOrOutro) {
       if (Object.hasOwn(params, 'position') || Object.hasOwn(params, 'outputFile') || Object.hasOwn(params, 'checkFormat')) {
-        invalid('片头/片尾合并模式不接受 position、outputFile 或 checkFormat')
+        invalid('Intro/outro merge mode does not accept position, outputFile, or checkFormat')
       }
     } else if ((params.files as string[]).length < 2) {
-      invalid('BatchMergeVideo 至少需要 2 个主视频文件')
+      invalid('BatchMergeVideo requires at least 2 primary video files')
     }
   } }),
   BatchRemoveAudio: batch(),
@@ -420,21 +420,21 @@ export class NativeMediaParameterPolicy {
     if (!Object.hasOwn(METHOD_TABLES, dllKey)) return params
     const methods = METHOD_TABLES[dllKey]!
     if (!Object.hasOwn(methods, functionName)) {
-      throw new ZToolsError(errorCodes.methodNotFound, '媒体 DLL 方法未获参数策略授权')
+      throw new ZToolsError(errorCodes.methodNotFound, 'Media DLL method is not authorized by parameter policy')
     }
     if (!isPlainRecord(params) || Reflect.ownKeys(params).some((key) => typeof key !== 'string')) {
-      invalid('媒体 DLL 参数必须是普通对象')
+      invalid('Media DLL parameters must be a plain object')
     }
 
     const method = methods[functionName]!
     const normalized: Record<string, unknown> = {}
     const ownKeys = Reflect.ownKeys(params) as string[]
     for (const key of ownKeys) {
-      if (!Object.hasOwn(method.fields, key)) invalid(`媒体 DLL 参数不接受字段 ${key}`)
+      if (!Object.hasOwn(method.fields, key)) invalid(`Media DLL parameters do not accept field ${key}`)
       normalized[key] = method.fields[key]!(params[key])
     }
     for (const key of method.required ?? []) {
-      if (!Object.hasOwn(normalized, key)) invalid(`媒体 DLL 参数缺少 ${key}`)
+      if (!Object.hasOwn(normalized, key)) invalid(`Media DLL parameters missing required field ${key}`)
     }
     method.validate?.(normalized)
     return normalized

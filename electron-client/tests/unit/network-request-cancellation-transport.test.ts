@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import test from 'node:test'
 import vm from 'node:vm'
 import { NetworkRequestCancellationService } from '../../src/main/services/network-request-cancellation-service.js'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 
 const owner = { type: 'plugin' as const, webContentsId: 51, pluginId: 'exchange-rate', pluginInstanceId: 'instance-51' }
 
@@ -16,8 +16,7 @@ function createTransport(bridge: unknown, timerCalls: Array<{ id: number; callba
     return id
   }
   const clearTimer = (id: number) => { timers.delete(id) }
-  const source = fs.readFileSync('../frontend/public/js/cef-ipc/src/core/transport.js', 'utf8')
-    .replace(/^export default Transport\s*$/m, '')
+  const source = loadCefIpcSources(['core/transport'])
   const Transport = vm.runInNewContext(`${source}\nTransport`, {
     MockProvider: class {},
     environment: {

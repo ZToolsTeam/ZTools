@@ -28,6 +28,7 @@ import {
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { getResolvedLocale, ZTOOLS_LOCALE_ENV_KEY } from '../i18n/index.js'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import {
   encodeNativeHostFrame,
@@ -210,14 +211,14 @@ function emptyShutdownResult(overrides: Partial<NativeHostShutdownResult> = {}):
 function decodeShutdownResult(payload: Buffer): NativeHostShutdownResult {
   let value: unknown
   try {
-    value = JSON.parse(decodeUtf8(payload, 'NativeHost32 退出响应不是有效 UTF-8'))
+    value = JSON.parse(decodeUtf8(payload, 'NativeHost32 exit response is not valid UTF-8'))
   } catch (error) {
     if (error instanceof ZToolsError) throw error
-    throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 退出响应不是有效 JSON')
+    throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 exit response is not valid JSON')
   }
   if (!isRecord(value) || typeof value.completed !== 'boolean' ||
       typeof value.timedOut !== 'boolean') {
-    throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 退出响应无效')
+    throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 exit response')
   }
   const countNames = [
     'cancelAttempted',
@@ -232,7 +233,7 @@ function decodeShutdownResult(payload: Buffer): NativeHostShutdownResult {
   ] as const
   for (const name of countNames) {
     if (!Number.isSafeInteger(value[name]) || (value[name] as number) < 0) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 退出计数无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 exit counts')
     }
   }
   return {
@@ -261,16 +262,16 @@ function decodeUtf8(payload: Uint8Array, message: string): string {
 
 function decodeDllCallResult(response: Buffer): NativeDllCallResult {
   if (response.length < 5) {
-    throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 调用响应无效')
+    throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL call response')
   }
   const hasResult = response.readUInt8(4)
   if (hasResult > 1 || (hasResult === 0 && response.length !== 5)) {
-    throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 调用响应无效')
+    throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL call response')
   }
   return {
     code: response.readInt32LE(0),
     result: hasResult === 1
-      ? decodeUtf8(response.subarray(5), 'NativeHost32 DLL 调用结果不是有效 UTF-8')
+      ? decodeUtf8(response.subarray(5), 'NativeHost32 DLL call result is not valid UTF-8')
       : null
   }
 }
@@ -326,7 +327,7 @@ function virtualKey(value: string): number {
   const key = value.trim().toUpperCase()
   const code = VIRTUAL_KEYS[key]
   if (code === undefined) {
-    throw new ZToolsError(errorCodes.invalidRequest, `按键不受支持: ${value}`)
+    throw new ZToolsError(errorCodes.invalidRequest, `Unsupported key: ${value}`)
   }
   return code
 }
@@ -340,7 +341,7 @@ function encodeVirtualKey(value: string): Buffer {
 function encodeVirtualKeyCombo(value: string): Buffer {
   const keys = value.split('+').map((item) => item.trim()).filter(Boolean)
   if (keys.length < 1 || keys.length > 32) {
-    throw new ZToolsError(errorCodes.invalidRequest, '组合键数量无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid key combination count')
   }
   const payload = Buffer.alloc(1 + keys.length * 2)
   payload[0] = keys.length
@@ -370,13 +371,13 @@ function encodeDllTaskCall(
   params: unknown
 ): Buffer {
   if (!isRecord(params)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 DLL 任务参数必须是对象')
+    throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 DLL task parameters must be an object')
   }
   let paramsJson: string
   try {
     paramsJson = JSON.stringify({ ...params, taskId })
   } catch {
-    throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 DLL 任务参数不可序列化')
+    throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 DLL task parameters are not serializable')
   }
   const taskBytes = Buffer.from(taskId, 'utf8')
   const functionBytes = Buffer.from(functionName, 'utf8')
@@ -452,7 +453,7 @@ function decodeHostError(frame: NativeHostFrame): ZToolsError {
   } catch {
     // Invalid host errors are reduced to a stable public failure.
   }
-  return new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 返回无效错误')
+  return new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 returned an invalid error')
 }
 
 export class NativeHostClient implements NativeDllClientPort, NativeInputInjectionAdapter {
@@ -530,12 +531,12 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     if (this.#pendingTaskStarts.size > 0) {
       throw new ZToolsError(
         errorCodes.nativeHostUnavailable,
-        'NativeHost32 仍在确认上一次回调任务启动状态'
+        'NativeHost32 is still confirming the previous callback task start state'
       )
     }
     if (this.#launchInFlight ||
         (this.#state !== 'idle' && this.#state !== 'closed' && this.#state !== 'crashed')) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 状态不允许启动')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 state does not allow starting')
     }
     const generation = ++this.#launchGeneration
     this.#launchInFlight = true
@@ -577,7 +578,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     }
     const resolved = path.resolve(this.executable)
     if (path.basename(resolved).toLocaleLowerCase('en-US') !== 'ztoolsnativehost32.exe') {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 路径无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 executable path')
     }
     try {
       const stats = await fs.stat(resolved)
@@ -586,7 +587,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       if (signal?.aborted || generation !== this.#launchGeneration) {
         throw new ZToolsError(errorCodes.appStopping, 'NativeHost32 startup cancelled')
       }
-      throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 不存在')
+      throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 executable not found')
     }
     if (signal?.aborted || generation !== this.#launchGeneration) {
       throw new ZToolsError(errorCodes.appStopping, 'NativeHost32 startup cancelled')
@@ -610,7 +611,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       (configuredResourcesDigest !== undefined && configuredResourcesRoot === undefined) ||
       (configuredResourcesRoot !== undefined && configuredResourcesDigest === undefined)
     ) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 可信目录配置无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid NativeHost32 trusted directory configuration')
     }
 
     this.#state = 'awaiting-hello'
@@ -639,6 +640,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       childEnvironment.ZTOOLS_NATIVE_MANIFEST_SHA256 = configuredDigest.toLowerCase()
     }
     childEnvironment.ZTOOLS_NATIVE_HOST_TOKEN = secret.toString('hex')
+    childEnvironment[ZTOOLS_LOCALE_ENV_KEY] = getResolvedLocale()
     if (signal?.aborted || generation !== this.#launchGeneration) {
       secret.fill(0)
       clientNonce.fill(0)
@@ -667,7 +669,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
         payload: Buffer.concat([clientNonce, clientProof])
       }, NativeHostFrameType.HelloAck, timeoutMs)
       if (response.method !== 'hello_ack' || response.payload.length !== NATIVE_HOST_NONCE_BYTES + NATIVE_HOST_PROOF_BYTES) {
-        throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 握手响应无效')
+        throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 handshake response')
       }
       const serverNonce = response.payload.subarray(0, NATIVE_HOST_NONCE_BYTES)
       const suppliedProof = response.payload.subarray(NATIVE_HOST_NONCE_BYTES)
@@ -679,19 +681,19 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
         serverNonce
       ])
       if (!timingSafeEqual(suppliedProof, expectedProof)) {
-        throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 服务端认证失败')
+        throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 server authentication failed')
       }
       if (generation !== this.#launchGeneration ||
           this.#child !== child || this.#state !== 'awaiting-hello') {
         throw new ZToolsError(
           this.#recovering ? errorCodes.nativeHostCrashed : errorCodes.nativeHostUnavailable,
-          'NativeHost32 在握手完成前退出'
+          'NativeHost32 exited before completing handshake'
         )
       }
       this.#state = 'ready'
     } catch (error) {
       if (generation === this.#launchGeneration && this.#child === child) {
-        this.#terminate(error instanceof Error ? error : new Error('NativeHost32 启动失败'))
+        this.#terminate(error instanceof Error ? error : new Error('NativeHost32 failed to start'))
       }
       if (signal?.aborted || generation !== this.#launchGeneration) {
         throw new ZToolsError(errorCodes.appStopping, 'NativeHost32 startup cancelled')
@@ -711,15 +713,15 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
   ): Promise<Buffer> {
     if (this.#state !== 'ready') {
       if (this.#state === 'stopping') {
-        throw new ZToolsError(errorCodes.appStopping, 'NativeHost32 正在退出')
+        throw new ZToolsError(errorCodes.appStopping, 'NativeHost32 is stopping')
       }
       if (this.#recovering || this.#state === 'crashed' || this.#state === 'restarting') {
-        throw new ZToolsError(errorCodes.nativeHostCrashed, 'NativeHost32 崩溃后尚未恢复')
+        throw new ZToolsError(errorCodes.nativeHostCrashed, 'NativeHost32 has crashed and has not recovered')
       }
-      throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 尚未就绪')
+      throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 is not ready')
     }
     if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/.test(method)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 method 格式无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid NativeHost32 method format')
     }
     const identities: ReadonlyArray<readonly [string, string]> = [
       ['pluginId', options.pluginId ?? ''],
@@ -727,13 +729,13 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     ]
     for (const [name, value] of identities) {
       if (value !== '' && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) {
-        throw new ZToolsError(errorCodes.invalidRequest, `NativeHost32 ${name} 格式无效`)
+        throw new ZToolsError(errorCodes.invalidRequest, `Invalid NativeHost32 ${name} format`)
       }
     }
     if (payload.byteLength > MAX_NATIVE_HOST_PAYLOAD_BYTES) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 payload 过大')
+      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 payload exceeds size limit')
     }
-    if (options.signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'NativeHost32 调用已取消')
+    if (options.signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'NativeHost32 call was cancelled')
 
     const requestId = randomUUID()
     const exchange = this.#exchange({
@@ -755,7 +757,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
           clearTimeout(pending.timer)
           this.#pending.delete(requestId)
           this.#ignoreResponse(requestId)
-          pending.reject(new ZToolsError(errorCodes.callerDestroyed, 'NativeHost32 调用已取消'))
+          pending.reject(new ZToolsError(errorCodes.callerDestroyed, 'NativeHost32 call was cancelled'))
         }
       }
       options.signal?.addEventListener('abort', onAbort, { once: true })
@@ -774,7 +776,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
 
   async checkDllAccess(pluginId: string, dllId: string, functionName: string): Promise<void> {
     if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/.test(functionName)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 function 格式无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid NativeHost32 function format')
     }
     const response = await this.request('manifest_check', Buffer.from(functionName, 'utf8'), {
       pluginId,
@@ -784,13 +786,13 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     try {
       value = JSON.parse(response.toString('utf8'))
     } catch {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 清单响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 manifest response')
     }
     if (
       typeof value !== 'object' || value === null ||
       !('success' in value) || value.success !== true || Object.keys(value).length !== 1
     ) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 清单响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 manifest response')
     }
   }
 
@@ -806,10 +808,10 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     const payload = config === null ? Buffer.alloc(5) : Buffer.alloc(6)
     if (config !== null) {
       if (!Number.isInteger(config.longPressMs) || config.longPressMs < 200 || config.longPressMs > 500) {
-        throw new ZToolsError(errorCodes.invalidRequest, '鼠标长按阈值无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid mouse long-press threshold')
       }
       if (config.fullscreenDnd !== undefined && typeof config.fullscreenDnd !== 'boolean') {
-        throw new ZToolsError(errorCodes.invalidRequest, '鼠标触发全屏免打扰配置无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid mouse trigger fullscreen DND configuration')
       }
       payload[0] = 1
       payload[1] = buttonValues[config.button]
@@ -822,10 +824,10 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     try {
       value = JSON.parse(response.toString('utf8'))
     } catch {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 鼠标钩子响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 mouse hook response')
     }
     if (!isRecord(value) || value.success !== true || value.enabled !== (config !== null)) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 鼠标钩子响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 mouse hook response')
     }
   }
 
@@ -835,16 +837,16 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
   ): Promise<void> {
     const values: Record<NativeKeyboardModifier, number> = { ctrl: 1, alt: 2, shift: 4 }
     if (modifiers.length > 3 || new Set(modifiers).size !== modifiers.length) {
-      throw new ZToolsError(errorCodes.invalidRequest, '键盘双击修饰键配置无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid keyboard double-tap modifier configuration')
     }
     if (typeof fullscreenDnd !== 'boolean') {
-      throw new ZToolsError(errorCodes.invalidRequest, '键盘双击全屏免打扰配置无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid keyboard double-tap fullscreen DND configuration')
     }
     let mask = 0
     for (const modifier of modifiers) {
       const value = values[modifier]
       if (value === undefined) {
-        throw new ZToolsError(errorCodes.invalidRequest, '键盘双击修饰键无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid keyboard double-tap modifier')
       }
       mask |= value
     }
@@ -857,50 +859,50 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     try {
       value = JSON.parse(response.toString('utf8'))
     } catch {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 键盘钩子响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 keyboard hook response')
     }
     if (!isRecord(value) || value.success !== true || value.enabled !== (modifiers.length > 0)) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 键盘钩子响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 keyboard hook response')
     }
   }
 
   async getForegroundWindow(signal?: AbortSignal): Promise<bigint> {
     const response = await this.request('input_get_foreground', Buffer.alloc(0), requestOptions(signal))
     if (response.length !== 8) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 前台窗口响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 foreground window response')
     }
     const handle = response.readBigUInt64LE(0)
-    if (handle === 0n) throw new ZToolsError(errorCodes.notSupported, '没有可用的外部目标窗口')
+    if (handle === 0n) throw new ZToolsError(errorCodes.notSupported, 'No available external target window')
     return handle
   }
 
   async restoreForegroundWindow(handle: bigint, signal?: AbortSignal): Promise<void> {
     if (handle <= 0n || handle > 0xffffffffffffffffn) {
-      throw new ZToolsError(errorCodes.invalidRequest, '窗口句柄无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid window handle')
     }
     const payload = Buffer.alloc(8)
     payload.writeBigUInt64LE(handle, 0)
     const response = await this.request('input_restore_foreground', payload, requestOptions(signal))
-    assertNativeSuccess(response, 'NativeHost32 前台窗口恢复响应无效')
+    assertNativeSuccess(response, 'Invalid NativeHost32 foreground window restore response')
   }
 
   async injectKeyPress(key: string, signal?: AbortSignal): Promise<void> {
     const response = await this.request('input_key_press', encodeVirtualKey(key), requestOptions(signal))
-    assertNativeSuccess(response, 'NativeHost32 按键注入响应无效')
+    assertNativeSuccess(response, 'Invalid NativeHost32 key injection response')
   }
 
   async injectKeyCombo(keys: string, signal?: AbortSignal): Promise<void> {
     const response = await this.request('input_key_combo', encodeVirtualKeyCombo(keys), requestOptions(signal))
-    assertNativeSuccess(response, 'NativeHost32 组合键注入响应无效')
+    assertNativeSuccess(response, 'Invalid NativeHost32 key combo injection response')
   }
 
   async injectText(text: string, signal?: AbortSignal): Promise<void> {
     const payload = Buffer.from(text, 'utf8')
     if (payload.length === 0 || payload.length > 256 * 1024) {
-      throw new ZToolsError(errorCodes.invalidRequest, '输入文本长度无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid input text length')
     }
     const response = await this.request('input_text', payload, requestOptions(signal))
-    assertNativeSuccess(response, 'NativeHost32 文本注入响应无效')
+    assertNativeSuccess(response, 'Invalid NativeHost32 text injection response')
   }
 
   async injectMouseMove(x: number, y: number, signal?: AbortSignal): Promise<void> {
@@ -908,7 +910,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     payload.writeInt32LE(x, 0)
     payload.writeInt32LE(y, 4)
     const response = await this.request('input_mouse_move', payload, requestOptions(signal))
-    assertNativeSuccess(response, 'NativeHost32 鼠标移动响应无效')
+    assertNativeSuccess(response, 'Invalid NativeHost32 mouse move response')
   }
 
   async injectMouseClick(
@@ -920,7 +922,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     const buttonValues = { left: 1, right: 2, middle: 3 } as const
     const hasPosition = x !== undefined || y !== undefined
     if (hasPosition !== (y !== undefined)) {
-      throw new ZToolsError(errorCodes.invalidRequest, '鼠标点击坐标必须同时提供')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Mouse click coordinates x and y must both be provided')
     }
     const payload = Buffer.alloc(hasPosition ? 10 : 2)
     payload[0] = buttonValues[button]
@@ -930,14 +932,14 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       payload.writeInt32LE(y as number, 6)
     }
     const response = await this.request('input_mouse_click', payload, requestOptions(signal))
-    assertNativeSuccess(response, 'NativeHost32 鼠标点击响应无效')
+    assertNativeSuccess(response, 'Invalid NativeHost32 mouse click response')
   }
 
   async injectMouseWheel(delta: number, signal?: AbortSignal): Promise<void> {
     const payload = Buffer.alloc(4)
     payload.writeInt32LE(delta, 0)
     const response = await this.request('input_mouse_wheel', payload, requestOptions(signal))
-    assertNativeSuccess(response, 'NativeHost32 鼠标滚轮响应无效')
+    assertNativeSuccess(response, 'Invalid NativeHost32 mouse scroll response')
   }
 
   async getDllInfo(
@@ -956,7 +958,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     try {
       value = JSON.parse(response.toString('utf8'))
     } catch {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 元信息响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL metadata response')
     }
     if (
       !isRecord(value) ||
@@ -966,7 +968,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       typeof value.supportsAsync !== 'boolean' || typeof value.supportsCallback !== 'boolean' ||
       typeof value.supportsCancel !== 'boolean' || typeof value.supportsStopManagedProcesses !== 'boolean'
     ) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 元信息响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL metadata response')
     }
     return value as unknown as NativeDllInfo
   }
@@ -981,16 +983,16 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
   ): Promise<NativeDllCallResult> {
     void context
     if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/.test(functionName)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 function 格式无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid NativeHost32 function format')
     }
     let paramsJson: string | undefined
     try {
       paramsJson = JSON.stringify(params)
     } catch {
-      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 DLL 参数不可序列化')
+      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 DLL parameters are not serializable')
     }
     if (paramsJson === undefined) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 DLL 参数不可序列化')
+      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 DLL parameters are not serializable')
     }
     const functionBytes = Buffer.from(functionName, 'utf8')
     const paramsBytes = Buffer.from(paramsJson, 'utf8')
@@ -1063,38 +1065,38 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
   ): NativeDllTaskStartAttempt {
     void context
     if (signal?.aborted) {
-      throw new ZToolsError(errorCodes.callerDestroyed, 'NativeHost32 调用已取消')
+      throw new ZToolsError(errorCodes.callerDestroyed, 'NativeHost32 call was cancelled')
     }
     if (this.#state !== 'ready') {
       if (this.#state === 'stopping') {
-        throw new ZToolsError(errorCodes.appStopping, 'NativeHost32 正在退出')
+        throw new ZToolsError(errorCodes.appStopping, 'NativeHost32 is stopping')
       }
       if (this.#recovering || this.#state === 'crashed' || this.#state === 'restarting') {
-        throw new ZToolsError(errorCodes.nativeHostCrashed, 'NativeHost32 崩溃后尚未恢复')
+        throw new ZToolsError(errorCodes.nativeHostCrashed, 'NativeHost32 has crashed and has not recovered')
       }
-      throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 尚未就绪')
+      throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 is not ready')
     }
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(pluginId) ||
         !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(dllId) ||
         !/^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/.test(functionName)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 DLL 任务标识无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid NativeHost32 DLL task ID')
     }
     if (this.#pendingTaskStarts.size >= MAX_PENDING_TASK_STARTS) {
       throw new ZToolsError(
         errorCodes.nativeHostUnavailable,
-        'NativeHost32 DLL 任务启动队列已满'
+        'NativeHost32 DLL task start queue is full'
       )
     }
     const child = this.#child
     if (!child) {
-      throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 尚未就绪')
+      throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 is not ready')
     }
 
     const taskId = preassignedTaskId ?? `task_${randomUUID()}`
     this.#validateTaskId(taskId)
     const payload = encodeDllTaskCall(taskId, functionName, params)
     if (payload.byteLength > MAX_NATIVE_HOST_PAYLOAD_BYTES) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 payload 过大')
+      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 payload exceeds size limit')
     }
     const requestId = randomUUID()
     const frame: NativeHostFrame = {
@@ -1119,7 +1121,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
         if (error && this.#pendingTaskStarts.has(requestId)) this.#terminate(error)
       })
     } catch (error) {
-      this.#terminate(error instanceof Error ? error : new Error('NativeHost32 写入失败'))
+      this.#terminate(error instanceof Error ? error : new Error('NativeHost32 write failed'))
     }
     return { taskId, outcome }
   }
@@ -1146,7 +1148,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     let timer: NodeJS.Timeout | undefined
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
-        reject(new ZToolsError(errorCodes.requestTimeout, 'NativeHost32 调用超时'))
+        reject(new ZToolsError(errorCodes.requestTimeout, 'NativeHost32 call timed out'))
       }, timeoutMs)
     })
     let outcome: NativeDllTaskStartOutcome
@@ -1175,10 +1177,10 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     })
     let value: unknown
     try {
-      value = JSON.parse(decodeUtf8(response, 'NativeHost32 DLL 任务状态不是有效 UTF-8'))
+      value = JSON.parse(decodeUtf8(response, 'NativeHost32 DLL task status is not valid UTF-8'))
     } catch (error) {
       if (error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 任务状态无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL task status')
     }
     const modes = new Set(['async', 'callback'])
     const states = new Set(['invoking', 'running', 'completed', 'cancelled', 'error'])
@@ -1192,13 +1194,13 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
         (typeof value.result !== 'string' ||
           !['completed', 'cancelled', 'error'].includes(String(value.status))))
     ) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 任务状态无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL task status')
     }
     if (value.resultReady !== undefined && typeof value.resultReady !== 'boolean') {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 任务结果状态无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL task result status')
     }
     if (value.result !== undefined && value.result !== null && typeof value.result !== 'string') {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 任务结果无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL task result')
     }
     return value as unknown as NativeDllTaskStatus
   }
@@ -1219,7 +1221,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     })
     const call = decodeDllCallResult(response)
     if (call.result !== null) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 取消响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL cancel response')
     }
     return call.code
   }
@@ -1239,13 +1241,13 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       ...requestOptions(signal)
     })
     if (response.toString('utf8') !== '{"success":true}') {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 任务清理响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL task cleanup response')
     }
   }
 
   #validateTaskId(taskId: string): void {
     if (!/^task_[A-Za-z0-9_-]{1,123}$/.test(taskId)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 taskId 格式无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid NativeHost32 taskId format')
     }
   }
 
@@ -1266,14 +1268,14 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       ...requestOptions(signal)
     })
     if (response.toString('utf8') !== '{"success":true}') {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 卸载响应无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL unload response')
     }
   }
 
   stop(timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS): Promise<NativeHostShutdownResult> {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
       return Promise.reject(
-        new ZToolsError(errorCodes.invalidRequest, 'NativeHost32 退出 deadline 无效')
+        new ZToolsError(errorCodes.invalidRequest, 'Invalid NativeHost32 exit deadline')
       )
     }
     if (this.#stopPromise) return this.#stopPromise
@@ -1374,7 +1376,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       try {
         for (const frame of this.#decoder.push(chunk)) this.#handleFrame(frame)
       } catch (error) {
-        this.#terminate(error instanceof Error ? error : new Error('NativeHost32 协议错误'))
+        this.#terminate(error instanceof Error ? error : new Error('NativeHost32 protocol error'))
       }
     })
     child.stderr.on('data', (chunk: Buffer) => {
@@ -1384,13 +1386,13 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     })
     child.once('error', () => {
       if (this.#child !== child) return
-      this.#terminate(new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 启动失败'))
+      this.#terminate(new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 failed to start'))
     })
     child.once('exit', (exitCode, signal) => {
       const isCurrentChild = this.#child === child
       const exitError = this.#state === 'stopping'
-        ? new ZToolsError(errorCodes.appStopping, 'NativeHost32 正在退出')
-        : new ZToolsError(errorCodes.nativeHostCrashed, 'NativeHost32 已退出，回调任务启动状态未知')
+        ? new ZToolsError(errorCodes.appStopping, 'NativeHost32 is stopping')
+        : new ZToolsError(errorCodes.nativeHostCrashed, 'NativeHost32 exited; callback task start state is unknown')
       this.#settleTaskStartsForChild(child, exitError)
       if (isCurrentChild) this.#pluginMaintenance.hostExited()
       if (!isCurrentChild) return
@@ -1404,7 +1406,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
         if (this.#pending.size > 0) {
           this.#rejectAll(new ZToolsError(
             previousState === 'stopping' ? errorCodes.appStopping : errorCodes.nativeHostUnavailable,
-            previousState === 'stopping' ? 'NativeHost32 正在退出' : 'NativeHost32 已退出'
+            previousState === 'stopping' ? 'NativeHost32 is stopping' : 'NativeHost32 exited'
           ))
         }
         if (previousState !== 'restarting') this.#state = 'closed'
@@ -1415,8 +1417,8 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
           ? errorCodes.nativeHostCrashed
           : errorCodes.nativeHostUnavailable,
         previousState === 'ready' || this.#recovering
-          ? 'NativeHost32 意外退出'
-          : 'NativeHost32 启动失败'
+          ? 'NativeHost32 exited unexpectedly'
+          : 'NativeHost32 failed to start'
       )
       this.#state = previousState === 'ready' ? 'crashed' : 'closed'
       this.#rejectAll(error)
@@ -1436,7 +1438,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
 
   #handleFrame(frame: NativeHostFrame): void {
     if (frame.protocolVersion !== NATIVE_HOST_PROTOCOL_VERSION || frame.sessionId !== this.#sessionId) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 协议或会话不匹配')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 protocol or session mismatch')
     }
     if (frame.type === NativeHostFrameType.Event) {
       if (frame.method === 'mouse_trigger' || frame.method === 'keyboard_double_tap') {
@@ -1452,7 +1454,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       // do not echo the request's plugin/DLL. Error frames use method "error".
       const expectedMethod = frame.type === NativeHostFrameType.Error ? 'error' : pendingTaskStart.method
       if (frame.pluginId !== '' || frame.dllId !== '' || frame.method !== expectedMethod) {
-        this.#terminate(new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 启动响应身份无效'))
+        this.#terminate(new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL start response identity'))
         return
       }
       if (frame.type === NativeHostFrameType.Error) {
@@ -1473,7 +1475,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       if (frame.type !== NativeHostFrameType.Response) {
         this.#terminate(new ZToolsError(
           errorCodes.nativeHostProtocol,
-          'NativeHost32 回调任务启动响应类型无效'
+          'Invalid NativeHost32 callback task start response type'
         ))
         return
       }
@@ -1481,16 +1483,16 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       try {
         acknowledgedTaskId = decodeUtf8(
           frame.payload,
-          'NativeHost32 DLL 任务响应不是有效 UTF-8'
+          'NativeHost32 DLL task response is not valid UTF-8'
         )
       } catch (error) {
-        this.#terminate(error instanceof Error ? error : new Error('NativeHost32 回调任务启动响应无效'))
+        this.#terminate(error instanceof Error ? error : new Error('Invalid NativeHost32 callback task start response'))
         return
       }
       if (acknowledgedTaskId !== pendingTaskStart.taskId) {
         this.#terminate(new ZToolsError(
           errorCodes.nativeHostProtocol,
-          'NativeHost32 DLL 任务响应无效'
+          'Invalid NativeHost32 DLL task response'
         ))
         return
       }
@@ -1501,7 +1503,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     const pending = this.#pending.get(frame.requestId)
     if (!pending) {
       if (this.#ignoredResponses.delete(frame.requestId)) return
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 返回未知请求')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 returned an unknown request ID')
     }
     clearTimeout(pending.timer)
     this.#pending.delete(frame.requestId)
@@ -1510,7 +1512,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       return
     }
     if (frame.type !== pending.expectedType) {
-      pending.reject(new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 响应类型无效'))
+      pending.reject(new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 response type'))
       return
     }
     pending.resolve(frame)
@@ -1522,7 +1524,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
         frame.requestId !== 'keyboard_double_tap' || frame.pluginId !== '' || frame.dllId !== '' ||
         frame.payload.length !== 1
       ) {
-        throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 键盘事件身份无效')
+        throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 keyboard event identity')
       }
       const modifiers: Record<number, NativeKeyboardModifier | undefined> = {
         1: 'ctrl',
@@ -1531,7 +1533,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       }
       const modifier = modifiers[frame.payload[0] ?? 0]
       if (!modifier) {
-        throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 键盘事件载荷无效')
+        throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 keyboard event payload')
       }
       const event: NativeInputEvent = { type: 'keyboard-double-tap', modifier }
       for (const listener of this.#inputEventListeners) {
@@ -1554,7 +1556,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       frame.requestId !== 'mouse_trigger' || frame.pluginId !== '' || frame.dllId !== '' ||
       frame.payload.length !== 4
     ) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 鼠标事件身份无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 mouse event identity')
     }
     const buttonValue = frame.payload[0]
     const actionValue = frame.payload[1]
@@ -1562,7 +1564,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     const button = buttonValue === undefined ? undefined : buttons[buttonValue]
     const action = actionValue === undefined ? undefined : actions[actionValue]
     if (!button || !action || threshold < 200 || threshold > 500) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 鼠标事件载荷无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 mouse event payload')
     }
     const event: NativeInputEvent = {
       type: 'mouse-trigger',
@@ -1579,32 +1581,32 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
 
   #handleDllEvent(frame: NativeHostFrame): void {
     if (!/^task_[A-Za-z0-9_-]{1,123}$/.test(frame.requestId)) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 事件 taskId 无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL event taskId')
     }
     if (frame.pluginId.length === 0 || frame.dllId.length === 0) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 事件身份无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL event identity')
     }
     const base = { pluginId: frame.pluginId, dllId: frame.dllId, taskId: frame.requestId }
     let event: NativeDllEvent
     if (frame.method === 'dll_progress') {
       if (frame.payload.length < 4) {
-        throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 进度事件无效')
+        throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL progress event')
       }
       const percent = frame.payload.readInt32LE(0)
       if (percent < -1 || percent > 100) {
-        throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 进度范围无效')
+        throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL progress range')
       }
       event = {
         ...base,
         type: 'progress',
         percent,
-        message: decodeUtf8(frame.payload.subarray(4), 'NativeHost32 DLL 进度消息不是有效 UTF-8')
+        message: decodeUtf8(frame.payload.subarray(4), 'NativeHost32 DLL progress message is not valid UTF-8')
       }
     } else if (frame.method === 'dll_callback_result') {
       event = {
         ...base,
         type: 'callback-result',
-        result: decodeUtf8(frame.payload, 'NativeHost32 DLL 回调结果不是有效 UTF-8')
+        result: decodeUtf8(frame.payload, 'NativeHost32 DLL callback result is not valid UTF-8')
       }
     } else if (frame.method === 'dll_async_return' || frame.method === 'dll_callback_return') {
       event = {
@@ -1615,17 +1617,17 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     } else if (frame.method === 'dll_cancelled') {
       const call = decodeDllCallResult(frame.payload)
       if (call.result !== null) {
-        throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 取消事件无效')
+        throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL cancel event')
       }
       event = { ...base, type: 'cancelled', code: call.code }
     } else if (frame.method === 'dll_task_error') {
       event = {
         ...base,
         type: 'task-error',
-        error: decodeUtf8(frame.payload, 'NativeHost32 DLL 任务错误不是有效 UTF-8')
+        error: decodeUtf8(frame.payload, 'NativeHost32 DLL task error is not valid UTF-8')
       }
     } else {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 DLL 事件类型无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 DLL event type')
     }
     for (const [requestId, pending] of this.#pendingTaskStarts) {
       if (pending.child !== this.#child || pending.taskId !== event.taskId ||
@@ -1655,7 +1657,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     const child = this.#child
     if (!child || (timeoutMs !== 'infinite' &&
       (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000))) {
-      throw new ZToolsError(errorCodes.nativeHostProtocol, 'NativeHost32 请求状态或超时无效')
+      throw new ZToolsError(errorCodes.nativeHostProtocol, 'Invalid NativeHost32 request state or timeout')
     }
     const encoded = encodeNativeHostFrame(frame)
     this.#pluginMaintenance.sent(frame.requestId, frame.pluginId, frame.method)
@@ -1663,7 +1665,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       const timer = timeoutMs === 'infinite' ? undefined : setTimeout(() => {
         this.#pending.delete(frame.requestId)
         this.#ignoreResponse(frame.requestId)
-        reject(new ZToolsError(errorCodes.requestTimeout, 'NativeHost32 调用超时'))
+        reject(new ZToolsError(errorCodes.requestTimeout, 'NativeHost32 call timed out'))
       }, timeoutMs)
       this.#pending.set(frame.requestId, { expectedType, timer, resolve, reject })
     })
@@ -1676,7 +1678,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       if (pending) {
         clearTimeout(pending.timer)
         this.#pending.delete(frame.requestId)
-        pending.reject(error instanceof Error ? error : new Error('NativeHost32 写入失败'))
+        pending.reject(error instanceof Error ? error : new Error('NativeHost32 write failed'))
       }
     })
     return await response
@@ -1779,7 +1781,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
   }
 
   #rejectPendingForStop(): void {
-    const error = new ZToolsError(errorCodes.appStopping, 'NativeHost32 正在退出')
+    const error = new ZToolsError(errorCodes.appStopping, 'NativeHost32 is stopping')
     for (const [requestId, pending] of this.#pending) {
       clearTimeout(pending.timer)
       this.#ignoreResponse(requestId)

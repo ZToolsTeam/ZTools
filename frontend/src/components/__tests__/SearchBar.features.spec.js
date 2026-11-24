@@ -310,4 +310,29 @@ describe('工作台搜索子命令到宿主加载链路', () => {
     }
     expect(mocks.setItemPinned).not.toHaveBeenCalled()
   })
+
+  it('搜索框内不再显示 Ctrl+F 快捷键提示，但 Ctrl+F 聚焦快捷键效果仍保留', async () => {
+    const focusSpy = vi.fn()
+    wrapper = mount(SearchBar, {
+      global: {
+        plugins: [router],
+        stubs: {
+          RcSquircle: true,
+          ShortcutKeys: true,
+          'a-input': {
+            props: ['value'],
+            emits: ['update:value', 'focus'],
+            methods: { focus: focusSpy },
+            template: '<div><slot name="prefix" /><input :value="value" @input="$emit(\'update:value\', $event.target.value)" @focus="$emit(\'focus\')" /><slot name="suffix" /></div>'
+          }
+        }
+      }
+    })
+    // 搜索框内不渲染 Ctrl+F 快捷键徽标
+    expect(wrapper.findAllComponents({ name: 'ShortcutKeys' })).toHaveLength(0)
+    expect(wrapper.html()).not.toContain('Ctrl+F')
+    // 全局 Ctrl+F 快捷键仍可触发输入框聚焦
+    expect(mocks.keys.global['Ctrl+F']()).toBe(true)
+    expect(focusSpy).toHaveBeenCalledOnce()
+  })
 })

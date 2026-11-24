@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { MacAppUpdater, type MacAutoUpdater, type MacUpdateCommand } from '../../src/main/platform/macos/app-update.js'
+import { getLocaleSetting, setLocale } from '../../src/main/i18n/index.js'
 import { runtimePathsForBusinessDataRoot } from '../../src/main/runtime/runtime-paths.js'
 import { UpdateService } from '../../src/main/services/update-service.js'
 import { WebResourceService } from '../../src/main/services/web-resource-service.js'
@@ -40,6 +41,8 @@ async function fixture(t: test.TestContext, options: {
   releaseVersion?: string; shortVersion?: string; buildVersion?: string; bundleId?: string
   failTool?: string; nativeTimeoutMs?: number
 } = {}) {
+  const previousLocale = getLocaleSetting()
+  setLocale('zh-CN')
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-mac-update-'))
   const current = path.join(root, 'ZTools.app')
   await fs.mkdir(current)
@@ -85,7 +88,7 @@ async function fixture(t: test.TestContext, options: {
   let fetches = 0
   const service = new UpdateService({ platform: 'darwin', runtimePaths, appVersion: '1.1.8.8', webVersion: '1.1.8.8', macUpdater: updater,
     fetchImpl: async () => { fetches++; return new Response(payload, { headers: { 'content-length': String(payload.length) } }) } })
-  t.after(async () => { await service.stop(); updater.dispose(); await fs.rm(root, { recursive: true, force: true }) })
+  t.after(async () => { await service.stop(); updater.dispose(); await fs.rm(root, { recursive: true, force: true }); setLocale(previousLocale, 'zh-CN') })
   return { root, current, runtimePaths, params, service, updater, native, commands, get fetches() { return fetches }, get quitRequests() { return quitRequests } }
 }
 

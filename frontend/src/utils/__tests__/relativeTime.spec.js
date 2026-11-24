@@ -1,5 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { formatRelativeTime } from '@/utils/relativeTime'
+import {
+  formatRelativeTime,
+  formatLocalizedDate,
+  formatLocalizedDateTime,
+  formatRelativeTimeWithinDays
+} from '@/utils/relativeTime'
 import { getCurrentLocale, setI18nLocale } from '@/i18n'
 
 describe('formatRelativeTime', () => {
@@ -50,5 +55,22 @@ describe('formatRelativeTime', () => {
       expect(formatRelativeTime(value, now, 'en-US')).toBe('')
     }
     expect(formatRelativeTime(now - 60_000, NaN, 'en-US')).toBe('')
+  })
+
+  it('formatLocalizedDate 与 formatLocalizedDateTime 按中英双语本地化并容错空格分隔日期与非法输入', () => {
+    expect(formatLocalizedDate('2026-10-27 16:22:00', 'zh-CN')).toBe('2026年10月27日')
+    expect(formatLocalizedDate('2026-10-27 16:22:00', 'en-US')).toBe('Oct 27, 2026')
+    expect(formatLocalizedDateTime('2026-10-27 16:22:00', 'zh-CN')).toContain('16:22')
+    expect(formatLocalizedDateTime('2026-10-27 16:22:00', 'en-US')).toContain('Oct 27, 2026')
+    expect(formatLocalizedDate('', 'en-US')).toBe('')
+    expect(formatLocalizedDate('not-a-date', 'en-US')).toBe('')
+    expect(formatLocalizedDateTime(null, 'zh-CN')).toBe('')
+  })
+
+  it('formatRelativeTimeWithinDays 支持 30 天内相对时间与超期回落本地化年月日', () => {
+    expect(formatRelativeTimeWithinDays('2026-10-14 09:00:00', { now, maxDays: 30, locale: 'zh-CN' })).toBe('前天')
+    expect(formatRelativeTimeWithinDays('2026-10-14 09:00:00', { now, maxDays: 30, locale: 'en-US' })).toBe('2 days ago')
+    expect(formatRelativeTimeWithinDays('2026-09-01 09:00:00', { now, maxDays: 30, locale: 'zh-CN' })).toBe('2026年9月1日')
+    expect(formatRelativeTimeWithinDays('2026-09-01 09:00:00', { now, maxDays: 30, locale: 'en-US' })).toBe('Sep 1, 2026')
   })
 })

@@ -13,7 +13,7 @@ export interface TlsInspection extends TlsCertificateSummary {
 export type TlsInspectRequest = { action: 'cancel'; operationId: string } |
   { action: 'inspect'; operationId: string; domain: string; port?: number; timeoutMs?: number }
 export function validateTlsInspectRequest(value: unknown): asserts value is TlsInspectRequest {
-  const bad = () => { throw new ZToolsError(errorCodes.invalidRequest, '证书探测参数无效') }
+  const bad = () => { throw new ZToolsError(errorCodes.invalidRequest, 'Invalid TLS inspection parameters') }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return bad()
   const v = value as Record<string, unknown>
   if (!['inspect', 'cancel'].includes(String(v.action)) || typeof v.action !== 'string' || typeof v.operationId !== 'string' || !/^[a-f0-9-]{36}$/.test(v.operationId)) return bad()

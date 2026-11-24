@@ -65,17 +65,20 @@ test('源码比 dist 新时重新编译', () => {
   try {
     const later = new Date(Date.now() + 120_000)
     fs.utimesSync(path.join(f.root, 'src', 'index.ts'), later, later)
-    assert.deepEqual(needsBuild(f.root), { build: true, reason: '源码比 dist 新' })
+    assert.deepEqual(needsBuild(f.root), { build: true, reason: 'source is newer than dist' })
     const tsc = fakeTsc(f.root)
     assert.equal(ensureDist({ root: f.root, repo: f.repo, run: tsc.run, log: () => {} }).built, true)
   } finally { f.cleanup() }
 })
 
-test('[破坏性] 找不到 TypeScript 时给出可操作的中文提示', () => {
+test('[破坏性] 找不到 TypeScript 时给出可操作的英文提示', () => {
   const f = fixture({ withTsc: false })
   try {
     assert.equal(findTsc(f.root, f.repo), '')
-    assert.throws(() => ensureDist({ root: f.root, repo: f.repo, log: () => {} }), /electron-client 目录执行 npm install/)
+    assert.throws(
+      () => ensureDist({ root: f.root, repo: f.repo, log: () => {} }),
+      /Run `npm install` in the electron-client directory/
+    )
   } finally { f.cleanup() }
 })
 
@@ -83,9 +86,15 @@ test('[破坏性] 编译失败与「成功但无产物」都明确报错', () =>
   const f = fixture()
   try {
     const failing = fakeTsc(f.root, { status: 2 })
-    assert.throws(() => ensureDist({ root: f.root, repo: f.repo, run: failing.run, log: () => {} }), /编译失败（退出码 2）/)
+    assert.throws(
+      () => ensureDist({ root: f.root, repo: f.repo, run: failing.run, log: () => {} }),
+      /build failed \(exit code 2\)/
+    )
     const empty = fakeTsc(f.root, { writeDist: false })
-    assert.throws(() => ensureDist({ root: f.root, repo: f.repo, run: empty.run, log: () => {} }), /缺少 dist\/index\.js/)
+    assert.throws(
+      () => ensureDist({ root: f.root, repo: f.repo, run: empty.run, log: () => {} }),
+      /dist\/index\.js is missing/
+    )
   } finally { f.cleanup() }
 })
 

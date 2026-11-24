@@ -44,14 +44,14 @@ macTest('真实服务链路绑定扫描窗口，写入后清除旧记录，关�
   try {
     const result = await service.handle({ action: 'scan', operationId: 'scan' }, caller, signal()) as { items: { id: string }[] }
     const id = result.items[0]!.id, toggle = { action: 'set-enabled', id, enabled: false, operationId: 'write' }
-    await assert.rejects(service.handle(toggle, { ...caller, webContentsId: 2 }, signal()), /当前窗口/)
+    await assert.rejects(service.handle(toggle, { ...caller, webContentsId: 2 }, signal()), /current window/i)
     assert.equal(f.state().writes, 0)
     await service.handle(toggle, caller, signal()); assert.equal(f.state().writes, 1)
-    await assert.rejects(service.handle(toggle, caller, signal()), /当前窗口/)
+    await assert.rejects(service.handle(toggle, caller, signal()), /current window/i)
     await service.handle({ action: 'scan', operationId: 'scan2' }, caller, signal())
     service.closeOwner(1)
-    await assert.rejects(service.handle({ ...toggle, enabled: true }, caller, signal()), /当前窗口/)
-    await service.stop(); await assert.rejects(service.handle({ action: 'scan', operationId: 'scan3' }, caller, signal()), /不可用/)
+    await assert.rejects(service.handle({ ...toggle, enabled: true }, caller, signal()), /current window/i)
+    await service.stop(); await assert.rejects(service.handle({ action: 'scan', operationId: 'scan3' }, caller, signal()), /unavailable/i)
   } finally { await service.stop(); await f.close() }
 })
 test('Windows 没有 getuid 仍可构造路由依赖，Mac 操作才被平台检查拒绝', async () => {
@@ -60,7 +60,7 @@ test('Windows 没有 getuid 仍可构造路由依赖，Mac 操作才被平台检
   try {
     Object.defineProperty(process, 'getuid', { value: undefined, configurable: true })
     service = new StartupManagerService(new StartupBackupStore('/unused'), async () => {}, { apply: async () => { throw new Error('不应调用') } }, undefined, 'win32')
-    await assert.rejects(service.handle({ action: 'scan', operationId: 'windows' }, { type: 'main', webContentsId: 2 }, signal()), /不可用/)
+    await assert.rejects(service.handle({ action: 'scan', operationId: 'windows' }, { type: 'main', webContentsId: 2 }, signal()), /unavailable/i)
   } finally {
     if (descriptor) Object.defineProperty(process, 'getuid', descriptor)
     else Reflect.deleteProperty(process, 'getuid')
@@ -145,8 +145,8 @@ macTest('空的 plist（<dict/>，常见于屏蔽更新代理）不算启动项�
     await f.put('bad.plist', { Program: '/bin/echo' })
     const { result } = await f.reader.scan(signal())
     assert.equal(result.items.length, 1)
-    assert.deepEqual(result.warnings, ['bad.plist：启动配置缺少有效 Label'])
-    await assert.rejects(parseStartupPlist(Buffer.from(buildPlist({})), signal(), runStartupCommand), /空的启动配置/)
+    assert.deepEqual(result.warnings, ['bad.plist: Startup plist is missing a valid Label'])
+    await assert.rejects(parseStartupPlist(Buffer.from(buildPlist({})), signal(), runStartupCommand), /Empty startup plist/)
     const onlyEmpty = await fixture()
     try {
       await onlyEmpty.put('com.google.keystone.xpcservice.plist', {})
@@ -157,9 +157,9 @@ macTest('空的 plist（<dict/>，常见于屏蔽更新代理）不算启动项�
 })
 macTest('缺系统权限不能显示为没有启动项；只有指定的未加载错误可视为未加载', async () => {
   const run: StartupCommand = async () => ({ code: 1, stdout: '', stderr: 'Operation not permitted' })
-  await assert.rejects(new MacStartupReader(undefined, run).scan(signal()), /无法读取系统启动状态/)
+  await assert.rejects(new MacStartupReader(undefined, run).scan(signal()), /Failed to read system startup state/)
   await assert.rejects(readStartupLoaded('system', 'cn.test', signal(), run), /Operation not permitted/)
-  await assert.rejects(readStartupLoaded('system', 'cn.test', signal(), async () => ({ code: 0, stdout: 'unknown', stderr: '' })), /无法确认/)
+  await assert.rejects(readStartupLoaded('system', 'cn.test', signal(), async () => ({ code: 0, stdout: 'unknown', stderr: '' })), /Unable to determine/)
 })
 macTest('相同 Label、Apple 保护项、旧改名文件、加载路径不一致禁止写入', async () => {
   const f = await fixture()
@@ -182,9 +182,9 @@ macTest('异常输入：FIFO、符号链接、硬链接、巨型文件不会阻�
     const file = await f.put('good.plist', { Label: 'cn.test', Program: '/bin/echo' })
     const link = path.join(f.home, 'symlink'), fifo = path.join(f.home, 'pipe'), huge = path.join(f.home, 'huge')
     await fs.symlink(file, link); await assert.rejects(readStartupBytes(link))
-    execFileSync('/usr/bin/mkfifo', [fifo]); await assert.rejects(readStartupBytes(fifo), /普通单链接文件/)
-    await fs.writeFile(huge, Buffer.alloc(1024 * 1024 + 1)); await assert.rejects(readStartupBytes(huge), /超过/)
-    await fs.link(file, path.join(f.home, 'hard')); await assert.rejects(readStartupBytes(file), /单链接/)
+    execFileSync('/usr/bin/mkfifo', [fifo]); await assert.rejects(readStartupBytes(fifo), /single-link regular file/)
+    await fs.writeFile(huge, Buffer.alloc(1024 * 1024 + 1)); await assert.rejects(readStartupBytes(huge), /exceeding 1 MiB/)
+    await fs.link(file, path.join(f.home, 'hard')); await assert.rejects(readStartupBytes(file), /single-link/)
   } finally { await f.close() }
 })
 macTest('取消扫描停止，不返回空列表冒充成功', async () => {
@@ -197,7 +197,7 @@ macTest('所有文件损坏时整体失败；真正空目录才能返回空列�
   try {
     assert.equal((await f.reader.scan(signal())).result.items.length, 0)
     await f.put('bad.plist', { Program: '/bin/echo' })
-    await assert.rejects(f.reader.scan(signal()), /无法读取启动配置/)
+    await assert.rejects(f.reader.scan(signal()), /Failed to read startup configurations/)
   } finally { await f.close() }
 })
 
@@ -242,14 +242,14 @@ macTest('备份不可写/不安全时零系统修改；损坏备份不能用于�
   const f = await transactionalFixture()
   try {
     await fs.mkdir(f.store.directory, { mode: 0o700 }); await fs.chmod(f.store.directory, 0o777)
-    await assert.rejects(f.transactions.toggle(await f.snapshot(), false, signal()), /备份目录权限/)
+    await assert.rejects(f.transactions.toggle(await f.snapshot(), false, signal()), /backup directory permissions/i)
     assert.equal(f.state().writes, 0)
     await fs.chmod(f.store.directory, 0o700)
     const result = await f.transactions.toggle(await f.snapshot(), false, signal())
     const backupFile = path.join(f.store.directory, result.backupId + '.json')
     const backup = JSON.parse(await fs.readFile(backupFile, 'utf8')); backup.beforeEnabled = false
     await fs.writeFile(backupFile, JSON.stringify(backup))
-    await assert.rejects(f.store.load(result.backupId), /损坏/)
+    await assert.rejects(f.store.load(result.backupId), /corrupted/i)
     assert.equal(f.state().writes, 1)
   } finally { await f.close() }
 })
@@ -264,14 +264,14 @@ macTest('备份期间配置变化和恢复前后续修改均阻断，不覆盖�
       }
     }
     const changing = new StartupTransactions(f.reader, new ChangingStore(f.store.directory), f.writer)
-    await assert.rejects(changing.toggle(await f.snapshot(), false, signal()), /已变化/)
+    await assert.rejects(changing.toggle(await f.snapshot(), false, signal()), /changed/i)
     assert.equal(f.state().writes, 0)
     // 写入前核对失败，没有发出写入：本次恢复记录无效，已被删除
     assert.equal((await f.store.list()).length, 0)
     const result = await f.transactions.toggle(await f.snapshot(), false, signal())
     const backup = await f.store.load(result.backupId)
     await fs.appendFile(f.file, '\n')
-    await assert.rejects(f.transactions.restore(backup, signal()), /保留后续改动/)
+    await assert.rejects(f.transactions.restore(backup, signal()), /preserve later changes/i)
     assert.equal(f.state().writes, 1)
   } finally { await f.close() }
 })
@@ -279,16 +279,16 @@ macTest('命令返回 0 但系统状态不变时必须失败，且复查确认�
   const f = await transactionalFixture()
   try {
     f.denyWrite()
-    await assert.rejects(f.transactions.toggle(await f.snapshot(), false, signal()), /自启状态未修改.*与请求不一致/)
+    await assert.rejects(f.transactions.toggle(await f.snapshot(), false, signal()), /Autostart state unchanged.*does not match/)
     assert.equal(f.state().disabled, false); assert.equal((await f.store.list()).length, 0)
   } finally { await f.close() }
 })
 macTest('用户取消管理员授权（写入未执行）时删除恢复记录，并透出原错误', async () => {
   const f = await transactionalFixture()
   try {
-    const cancelled: StartupWriter = { async apply() { throw new Error('系统未确认修改：CANCELLED_OR_EXPIRED') } }
+    const cancelled: StartupWriter = { async apply() { throw new Error('System did not confirm modification: CANCELLED_OR_EXPIRED') } }
     const transactions = new StartupTransactions(f.reader, f.store, cancelled)
-    await assert.rejects(transactions.toggle(await f.snapshot(), false, signal()), /自启状态未修改.*CANCELLED_OR_EXPIRED/)
+    await assert.rejects(transactions.toggle(await f.snapshot(), false, signal()), /Autostart state unchanged.*CANCELLED_OR_EXPIRED/)
     assert.equal(f.state().writes, 0); assert.equal((await f.store.list()).length, 0)
   } finally { await f.close() }
 })
@@ -297,10 +297,10 @@ macTest('写入已改动系统状态后才报错时保留恢复记录', async ()
   try {
     const partial: StartupWriter = { async apply(input, abort) {
       await f.writer.apply(input, abort)
-      throw new Error('系统写入结果无法验证')
+      throw new Error('Unable to verify system write result')
     } }
     const transactions = new StartupTransactions(f.reader, f.store, partial)
-    await assert.rejects(transactions.toggle(await f.snapshot(), false, signal()), /恢复记录 .* 已保留.*无法验证/)
+    await assert.rejects(transactions.toggle(await f.snapshot(), false, signal()), /Recovery record .* preserved.*Unable to verify/)
     assert.equal(f.state().disabled, true); assert.equal((await f.store.list()).length, 1)
   } finally { await f.close() }
 })
@@ -314,7 +314,7 @@ macTest('写入失败后复查读不到系统状态时保留恢复记录，不�
     })
     const failing: StartupWriter = { async apply() { failRecheck = true; throw new Error('osascript 退出码 1') } }
     const transactions = new StartupTransactions(reader, f.store, failing)
-    await assert.rejects(transactions.toggle((await reader.scan(signal())).snapshots[0]!, false, signal()), /已保留.*osascript/)
+    await assert.rejects(transactions.toggle((await reader.scan(signal())).snapshots[0]!, false, signal()), /preserved.*osascript/)
     assert.equal((await f.store.list()).length, 1)
   } finally { await f.close() }
 })
@@ -326,7 +326,7 @@ macTest('未修改但删除恢复记录失败时报告删除失败，同时保�
     }
     const cancelled: StartupWriter = { async apply() { throw new Error('用户取消了授权') } }
     const transactions = new StartupTransactions(f.reader, new UndeletableStore(f.store.directory), cancelled)
-    await assert.rejects(transactions.toggle(await f.snapshot(), false, signal()), /删除失败.*用户取消了授权/)
+    await assert.rejects(transactions.toggle(await f.snapshot(), false, signal()), /failed to discard.*用户取消了授权/)
     assert.equal((await f.store.list()).length, 1)
   } finally { await f.close() }
 })
@@ -338,7 +338,7 @@ macTest('外部移除 override 即使有效状态相同也不能覆盖；临时�
     const backup = await f.store.load(result.backupId)
     f.clearOverride()
     assert.equal((await f.snapshot()).item.enabled, true)
-    await assert.rejects(f.transactions.restore(backup, signal()), /保留后续改动/)
+    await assert.rejects(f.transactions.restore(backup, signal()), /preserve later changes/i)
     assert.equal(f.state().writes, 2)
     await fs.writeFile(path.join(f.store.directory, 'incomplete.tmp'), '{')
     assert.equal((await f.store.list()).length, 2)

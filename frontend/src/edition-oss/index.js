@@ -7,6 +7,7 @@
  * 官方发行版在同一套接口上提供这些在线能力。
  */
 import { computed } from 'vue'
+import { t } from '@/i18n'
 
 export { useUserStore } from './userStore.js'
 
@@ -37,7 +38,9 @@ export const layoutExtraComponents = Object.freeze([])
 /** 侧栏「反馈建议」入口：开源版在浏览器打开 GitHub Issues（routeName 与 externalUrl 二选一） */
 export const feedbackEntry = Object.freeze({
   visible: true,
-  title: '反馈建议',
+  get title() {
+    return t('nav.feedback')
+  },
   titleKey: 'nav.feedback',
   routeName: '',
   externalUrl: 'https://github.com/ZToolsTeam/ZTools/issues'

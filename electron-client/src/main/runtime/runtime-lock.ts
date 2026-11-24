@@ -57,11 +57,11 @@ export class RuntimeLock {
         if (existing && await isLockOwnerAlive(existing)) {
           throw new ZToolsError(
             errorCodes.databaseLocked,
-            `ZTools 数据目录正在被进程 ${existing.pid} 使用`
+            `ZTools data directory is in use by process ${existing.pid}`
           )
         }
         if (attempt === 1) {
-          throw new ZToolsError(errorCodes.databaseLocked, 'ZTools 数据目录锁无法恢复')
+          throw new ZToolsError(errorCodes.databaseLocked, 'Unable to recover ZTools data directory lock')
         }
         const stalePath = `${lockPath}.stale-${process.pid}-${randomUUID()}`
         try {
@@ -71,7 +71,7 @@ export class RuntimeLock {
         }
       }
     }
-    throw new ZToolsError(errorCodes.databaseLocked, 'ZTools 数据目录锁无法获取')
+    throw new ZToolsError(errorCodes.databaseLocked, 'Unable to acquire ZTools data directory lock')
   }
 
   get lockPath(): string {
@@ -97,8 +97,8 @@ function errorCode(error: unknown): string | undefined {
 }
 
 function lockFailure(error: unknown): ZToolsError {
-  const detail = error instanceof Error ? error.message.slice(0, 256) : '未知锁错误'
-  return new ZToolsError(errorCodes.storageError, `创建 ZTools 数据锁失败: ${detail}`)
+  const detail = error instanceof Error ? error.message.slice(0, 256) : 'unknown lock error'
+  return new ZToolsError(errorCodes.storageError, `Failed to create ZTools data lock: ${detail}`)
 }
 
 async function readLockRecord(lockPath: string): Promise<RuntimeLockRecord | undefined> {

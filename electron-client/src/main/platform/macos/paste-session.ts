@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { errorCodes, ZToolsError } from '../../../contracts/errors.js'
+import { getResolvedLocale, t, ZTOOLS_LOCALE_ENV_KEY } from '../../i18n/index.js'
 import type { ClipboardMacPasteAdapter } from '../../services/clipboard-service.js'
 import { macClipboardExecutable } from './file-clipboard.js'
 
@@ -12,19 +13,33 @@ const REJECTED_BEFORE_SEND = new Set(['ACCESSIBILITY_PERMISSION_DENIED', 'PASTE_
   ...TARGET_UNAVAILABLE_REASONS, 'PASTE_EVENT_FAILED', 'PASTE_KEYBOARD_LAYOUT_UNSUPPORTED', 'PASTE_SESSION_CLOSED'])
 
 function failure(reason: string): ZToolsError {
-  if (reason === 'PASTE_EVENT_PERMISSION_DENIED') return new ZToolsError(errorCodes.permissionDenied,
-    '已复制，但系统不允许发送粘贴按键；请手动粘贴，并在系统设置的辅助功能中检查 ZTools 授权', { hostCode: reason })
-  if (reason === 'ACCESSIBILITY_PERMISSION_DENIED') return new ZToolsError(errorCodes.permissionDenied,
-    '已复制，请在系统设置的辅助功能中授权 ZTools 后再粘贴', { hostCode: reason })
-  if (reason === 'PASTE_TARGET_CHANGED' || TARGET_UNAVAILABLE_REASONS.has(reason)) return new ZToolsError(errorCodes.clipboardError,
-    '已复制，但无法确认原来的输入位置；请回到目标文档手动粘贴，或重新唤起 ZTools', { hostCode: reason })
-  return new ZToolsError(errorCodes.nativeHostUnavailable,
-    '已复制，但粘贴辅助进程不可用，请手动粘贴并重新启动客户端', { hostCode: reason })
+  if (reason === 'PASTE_EVENT_PERMISSION_DENIED') {
+    return new ZToolsError(errorCodes.permissionDenied, t('macosPaste.error.eventPermissionDenied'), {
+      hostCode: reason,
+      i18nKey: 'macosPaste.error.eventPermissionDenied'
+    })
+  }
+  if (reason === 'ACCESSIBILITY_PERMISSION_DENIED') {
+    return new ZToolsError(errorCodes.permissionDenied, t('macosPaste.error.accessibilityPermissionDenied'), {
+      hostCode: reason,
+      i18nKey: 'macosPaste.error.accessibilityPermissionDenied'
+    })
+  }
+  if (reason === 'PASTE_TARGET_CHANGED' || TARGET_UNAVAILABLE_REASONS.has(reason)) {
+    return new ZToolsError(errorCodes.clipboardError, t('macosPaste.error.targetUnavailable'), {
+      hostCode: reason,
+      i18nKey: 'macosPaste.error.targetUnavailable'
+    })
+  }
+  return new ZToolsError(errorCodes.nativeHostUnavailable, t('macosPaste.error.helperUnavailable'), {
+    hostCode: reason,
+    i18nKey: 'macosPaste.error.helperUnavailable'
+  })
 }
 
 const launch: HelperSpawner = executable => spawn(executable, ['--paste-session'], {
   stdio: ['pipe', 'pipe', 'pipe'], shell: false,
-  env: { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8' }
+  env: { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8', [ZTOOLS_LOCALE_ENV_KEY]: getResolvedLocale() }
 })
 
 /** 单个宿主拥有一个观察会话。协议错误、取消或超时都会终止子进程，禁止迟到重试。 */
@@ -74,16 +89,28 @@ export class MacPasteSession {
   }
 
   async stop(): Promise<void> {
-    this.#fail(new ZToolsError(errorCodes.callerDestroyed, '粘贴会话已结束'))
+    this.#fail(new ZToolsError(errorCodes.callerDestroyed, t('macosPaste.error.sessionClosed'), {
+      i18nKey: 'macosPaste.error.sessionClosed'
+    }))
     await this.#closed
   }
 
   async #request(mode: 'prepare' | 'paste', signal: AbortSignal, token?: number): Promise<Reply> {
-    if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '粘贴操作已取消')
+    if (signal.aborted) {
+      throw new ZToolsError(errorCodes.callerDestroyed, t('macosPaste.error.cancelled'), {
+        i18nKey: 'macosPaste.error.cancelled'
+      })
+    }
     if (this.#failure) { await this.#closed; throw this.#failure }
-    if (this.#busy) throw new ZToolsError(errorCodes.clipboardError, '粘贴操作正在进行')
+    if (this.#busy) {
+      throw new ZToolsError(errorCodes.clipboardError, t('macosPaste.error.busy'), {
+        i18nKey: 'macosPaste.error.busy'
+      })
+    }
     this.#busy = true
-    const abort = () => this.#fail(new ZToolsError(errorCodes.callerDestroyed, '粘贴操作已取消'))
+    const abort = () => this.#fail(new ZToolsError(errorCodes.callerDestroyed, t('macosPaste.error.cancelled'), {
+      i18nKey: 'macosPaste.error.cancelled'
+    }))
     signal.addEventListener('abort', abort, { once: true })
     let timer: NodeJS.Timeout | undefined
     try {
@@ -143,7 +170,10 @@ export class MacPasteSession {
     if (this.#failure) return
     const pending = this.#pending
     this.#failure = this.#pasteInFlight
-      ? new ZToolsError(errorCodes.clipboardError, '粘贴发送结果未确认，请先检查目标文档，避免重复发送', { hostCode: 'PASTE_RESULT_UNCONFIRMED' })
+      ? new ZToolsError(errorCodes.clipboardError, t('macosPaste.error.resultUnconfirmed'), {
+        hostCode: 'PASTE_RESULT_UNCONFIRMED',
+        i18nKey: 'macosPaste.error.resultUnconfirmed'
+      })
       : error
     clearTimeout(this.#startupTimer)
     this.#pending = undefined

@@ -20,12 +20,12 @@ let model: Promise<LoadedModel> | undefined
 
 const fileNamed = (name: string) => {
   const file = FORMULA_MODEL.files.find(item => item.name === name)
-  if (!file) throw new Error(`公式识别模型缺少 ${name}`)
+  if (!file) throw new Error(`Formula OCR model is missing ${name}`)
   return path.join(modelDirectory, file.name)
 }
 
 async function loadModel(): Promise<LoadedModel> {
-  if (!modelDirectory) throw new Error('没有指定公式识别模型目录')
+  if (!modelDirectory) throw new Error('Formula OCR model directory is not specified')
   configureOnnxRuntime(ort)
   const [encoderBytes, decoderBytes, tokenizer] = await Promise.all([
     fs.readFile(fileNamed('encoder_model.onnx')),
@@ -42,7 +42,7 @@ async function loadModel(): Promise<LoadedModel> {
       async encode(pixelValues) {
         const result = await encoder.run({ [encoder.inputNames[0]!]: new ort.Tensor('float32', pixelValues, [1, 3, size, size]) })
         const hidden = result[encoder.outputNames[0]!]
-        if (!hidden || hidden.dims.length !== 3) throw new Error('公式识别编码器输出无效')
+        if (!hidden || hidden.dims.length !== 3) throw new Error('Invalid formula OCR encoder output')
         return hidden
       },
       async nextLogits(encoded, tokens) {
@@ -51,7 +51,7 @@ async function loadModel(): Promise<LoadedModel> {
         const logits = result[decoder.outputNames[0]!]
         const vocab = FORMULA_TOKENS.vocabSize
         if (!logits || !(logits.data instanceof Float32Array) || logits.data.length !== tokens.length * vocab) {
-          throw new Error('公式识别解码器输出无效')
+          throw new Error('Invalid formula OCR decoder output')
         }
         return logits.data.slice((tokens.length - 1) * vocab, tokens.length * vocab)
       }
@@ -71,4 +71,4 @@ async function handle(request: OcrWorkerImageRequest): Promise<FormulaOcrWorkerR
   }
 }
 
-serveRequests<FormulaOcrWorkerResponse>('公式识别', handle)
+serveRequests<FormulaOcrWorkerResponse>('Formula OCR', handle)

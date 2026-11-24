@@ -44,14 +44,14 @@ test('runtime diagnostics hide raw helper, pipe, and platform error text', () =>
     nativeHost: {
       state: 'crashed',
       pid: 123,
-      stderr: 'Native Host 原始错误详情已隐藏'
+      stderr: 'Native Host raw error details hidden'
     },
     service: {
       state: 'unavailable',
       protocolVersion: 1,
-      pipe: '已配置',
+      pipe: 'configured',
       lastError: 'SERVICE_UNAVAILABLE',
-      lastErrorMessage: 'ZToolsService 原始错误详情已隐藏'
+      lastErrorMessage: 'ZToolsService raw error details hidden'
     }
   })
 

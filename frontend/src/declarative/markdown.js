@@ -8,6 +8,8 @@
  * 无序 / 有序 / 任务列表、> 引用（含 GFM 提示块 > [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]）、分割线、段落内单换行、行内代码、图片、链接、加粗、斜体、删除线。
  */
 
+import { t } from '@/i18n';
+
 // 块级元素的上下间距统一由 declarative-fluent.css 的 .declarative-markdown 规则控制（标题上大下小），这里只写外观
 const CLS = {
   math: "py-3 overflow-x-auto text-[var(--rc-text-primary)] text-center",
@@ -88,7 +90,13 @@ const QUOTE = /^ {0,3}>\s?(.*)$/;
 const BULLET = /^(\s*)[-*+]\s+(.*)$/;
 const ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/;
 const ALERT = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i;
-const ALERT_TITLES = { NOTE: "注意", TIP: "提示", IMPORTANT: "重要", WARNING: "警告", CAUTION: "小心" };
+const ALERT_TITLE_KEYS = {
+  NOTE: "declarative.markdown.alertNote",
+  TIP: "declarative.markdown.alertTip",
+  IMPORTANT: "declarative.markdown.alertImportant",
+  WARNING: "declarative.markdown.alertWarning",
+  CAUTION: "declarative.markdown.alertCaution"
+};
 const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 
 function splitRow(line) {
@@ -146,7 +154,8 @@ function renderListItem(content, ordered, number) {
   if (task && !ordered) {
     const done = task[1] !== " ";
     // 任务框用带边框的方块表示，不用 ☑ / ☐ 字符（会被当成彩色符号渲染）
-    const box = `<span class="inline-block w-3 h-3 mt-1 rounded-sm border border-[var(--rc-text-muted)]${done ? " bg-[var(--rc-text-muted)]" : ""}" data-task="${done ? "done" : "todo"}" aria-label="${done ? "已完成" : "未完成"}"></span>`;
+    const taskLabel = escapeAttr(done ? t("declarative.markdown.taskDone") : t("declarative.markdown.taskTodo"));
+    const box = `<span class="inline-block w-3 h-3 mt-1 rounded-sm border border-[var(--rc-text-muted)]${done ? " bg-[var(--rc-text-muted)]" : ""}" data-task="${done ? "done" : "todo"}" aria-label="${taskLabel}"></span>`;
     return `<div class="${CLS.li}"><span class="${CLS.bullet}">${box}</span><span class="${done ? "line-through opacity-70" : ""}">${renderInline(task[2])}</span></div>`;
   }
   const marker = ordered ? `${number}.` : "•";
@@ -233,9 +242,10 @@ export function renderMarkdown(markdown) {
         raw.push(QUOTE.exec(lines[i])[1]);
         i++;
       }
-      // GFM 提示块：首行是 [!TIP] 等标记时去掉标记，换成固定的中文小标题（标题是常量，不含插件原文）
+      // GFM 提示块：首行是 [!TIP] 等标记时去掉标记，换成按当前语言实时翻译的小标题（不含插件原文）
       const alert = ALERT.exec(raw[0]);
-      const title = alert ? ALERT_TITLES[alert[1].toUpperCase()] : "";
+      const titleKey = alert ? ALERT_TITLE_KEYS[alert[1].toUpperCase()] : "";
+      const title = titleKey ? escapeHtml(t(titleKey)) : "";
       if (alert) {
         raw[0] = alert[2];
         if (raw[0].trim() === "") raw.shift();

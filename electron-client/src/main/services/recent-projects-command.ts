@@ -13,11 +13,11 @@ export function runProjectCommand(file: string, args: string[], signal: AbortSig
       child.kill('SIGTERM')
       force = setTimeout(() => { child.kill('SIGKILL') }, 300)
     }
-    const abort = () => end(new Error('打开请求已取消，若编辑器已启动请检查其窗口'))
-    const timeout = setTimeout(() => end(new Error('打开请求超时，请检查编辑器是否已启动')), timeoutMs)
+    const abort = () => end(new Error('Open request cancelled; check if the editor window has already started'))
+    const timeout = setTimeout(() => end(new Error('Open request timed out; check if the editor has already started')), timeoutMs)
     const read = (list: Buffer[], chunk: Buffer) => {
       size += chunk.length
-      if (size > 65536) end(new Error('编辑器辅助进程输出超限'))
+      if (size > 65536) end(new Error('Editor helper process output exceeded limit'))
       else list.push(chunk)
     }
     child.stdout.on('data', chunk => read(output, chunk)); child.stderr.on('data', chunk => read(errors, chunk))
@@ -25,7 +25,7 @@ export function runProjectCommand(file: string, args: string[], signal: AbortSig
     child.once('close', (code, exitSignal) => {
       clearTimeout(timeout); if (force) clearTimeout(force); signal.removeEventListener('abort', abort)
       if (failure) reject(failure)
-      else if (code !== 0 || exitSignal) reject(new Error(`系统打开命令失败：${Buffer.concat(errors).toString('utf8').trim().slice(0, 1500) || exitSignal || code}`))
+      else if (code !== 0 || exitSignal) reject(new Error(`System open command failed: ${Buffer.concat(errors).toString('utf8').trim().slice(0, 1500) || exitSignal || code}`))
       else resolve(Buffer.concat(output).toString('utf8'))
     })
     signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort()

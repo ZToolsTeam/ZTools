@@ -1,7 +1,10 @@
+import { tSync } from '../i18n.js'
+
 export interface GistConfig {
   token: string
   gistId?: string
   fetchFn?: typeof fetch
+  locale?: string
 }
 
 export interface GistSyncFile {
@@ -55,15 +58,25 @@ export class GistSyncAdapter {
   #gistId?: string
   readonly #fetch: typeof fetch
   readonly #baseUrl = 'https://api.github.com'
+  #locale?: string
 
   constructor(config: GistConfig) {
+    this.#locale = config.locale
     const trimmedToken = config.token.trim()
     if (!trimmedToken) {
-      throw new Error('GitHub Gist 适配器需要有效的 Personal Access Token')
+      throw new Error(tSync('gist.tokenRequired', undefined, config.locale))
     }
     this.#token = trimmedToken
     this.#gistId = config.gistId?.trim()
     this.#fetch = config.fetchFn ?? globalThis.fetch
+  }
+
+  get locale(): string | undefined {
+    return this.#locale
+  }
+
+  setLocale(locale?: string): void {
+    this.#locale = locale
   }
 
   get gistId(): string | undefined {
@@ -77,10 +90,11 @@ export class GistSyncAdapter {
   /**
    * 读取 Gist 内容与元数据
    */
-  async getGist(targetGistId?: string): Promise<GistReadResult> {
+  async getGist(targetGistId?: string, options?: { locale?: string }): Promise<GistReadResult> {
+    const locale = options?.locale ?? this.#locale
     const id = targetGistId ?? this.#gistId
     if (!id) {
-      throw new GistError('未指定目标 Gist ID')
+      throw new GistError(tSync('gist.missingGistId', undefined, locale))
     }
 
     const url = `${this.#baseUrl}/gists/${id}`
@@ -92,7 +106,14 @@ export class GistSyncAdapter {
     if (!response.ok) {
       const text = await response.text().catch(() => '')
       throw new GistError(
-        `获取 Gist 失败 [${response.status} ${response.statusText}]`,
+        tSync(
+          'gist.getFailed',
+          {
+            status: response.status,
+            statusText: response.statusText
+          },
+          locale
+        ),
         response.status,
         response.statusText,
         text
@@ -100,7 +121,7 @@ export class GistSyncAdapter {
     }
 
     const data = await response.json() as Record<string, unknown>
-    return await this.#parseGistResponse(data, response.headers.get('etag') ?? undefined)
+    return await this.#parseGistResponse(data, response.headers.get('etag') ?? undefined, locale)
   }
 
   /**
@@ -108,8 +129,10 @@ export class GistSyncAdapter {
    */
   async createGist(
     files: Record<string, { content: string }>,
-    description = 'ZTools E2EE Encrypted Sync'
+    description = 'ZTools E2EE Encrypted Sync',
+    options?: { locale?: string }
   ): Promise<GistReadResult> {
+    const locale = options?.locale ?? this.#locale
     const url = `${this.#baseUrl}/gists`
     const body = JSON.stringify({
       description,
@@ -126,7 +149,14 @@ export class GistSyncAdapter {
     if (!response.ok) {
       const text = await response.text().catch(() => '')
       throw new GistError(
-        `创建私有 Gist 失败 [${response.status} ${response.statusText}]`,
+        tSync(
+          'gist.createFailed',
+          {
+            status: response.status,
+            statusText: response.statusText
+          },
+          locale
+        ),
         response.status,
         response.statusText,
         text
@@ -134,7 +164,7 @@ export class GistSyncAdapter {
     }
 
     const data = await response.json() as Record<string, unknown>
-    const result = await this.#parseGistResponse(data, response.headers.get('etag') ?? undefined)
+    const result = await this.#parseGistResponse(data, response.headers.get('etag') ?? undefined, locale)
     this.#gistId = result.id
     return result
   }
@@ -151,14 +181,23 @@ export class GistSyncAdapter {
     options: {
       expectedUpdatedAt?: string
       description?: string
+      locale?: string
     } = {}
   ): Promise<GistReadResult> {
+    const locale = options.locale ?? this.#locale
     // 若开启冲突检测，先拉取最新元数据进行比对
     if (options.expectedUpdatedAt) {
-      const current = await this.getGist(gistId)
+      const current = await this.getGist(gistId, { locale })
       if (current.updatedAt !== options.expectedUpdatedAt) {
         throw new GistConflictError(
-          `检测到 Gist 同步冲突：远程版本已在 ${current.updatedAt} 被更新，本地预期为 ${options.expectedUpdatedAt}`,
+          tSync(
+            'gist.conflict',
+            {
+              remoteUpdatedAt: current.updatedAt,
+              expectedUpdatedAt: options.expectedUpdatedAt
+            },
+            locale
+          ),
           options.expectedUpdatedAt,
           current.updatedAt,
           current.files
@@ -181,7 +220,14 @@ export class GistSyncAdapter {
     if (!response.ok) {
       const text = await response.text().catch(() => '')
       throw new GistError(
-        `更新 Gist 失败 [${response.status} ${response.statusText}]`,
+        tSync(
+          'gist.updateFailed',
+          {
+            status: response.status,
+            statusText: response.statusText
+          },
+          locale
+        ),
         response.status,
         response.statusText,
         text
@@ -189,7 +235,7 @@ export class GistSyncAdapter {
     }
 
     const data = await response.json() as Record<string, unknown>
-    return await this.#parseGistResponse(data, response.headers.get('etag') ?? undefined)
+    return await this.#parseGistResponse(data, response.headers.get('etag') ?? undefined, locale)
   }
 
   #buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
@@ -202,7 +248,12 @@ export class GistSyncAdapter {
     }
   }
 
-  async #parseGistResponse(data: Record<string, unknown>, etag?: string): Promise<GistReadResult> {
+  async #parseGistResponse(
+    data: Record<string, unknown>,
+    etag?: string,
+    locale?: string
+  ): Promise<GistReadResult> {
+    const effectiveLocale = locale ?? this.#locale
     const rawFiles = (data.files ?? {}) as Record<string, Record<string, unknown>>
     const files: Record<string, GistSyncFile> = {}
 
@@ -224,7 +275,15 @@ export class GistSyncAdapter {
         if (!rawResponse.ok) {
           const text = await rawResponse.text().catch(() => '')
           throw new GistError(
-            `拉取截断 Gist 原始文件失败 [${rawResponse.status} ${rawResponse.statusText}]: ${rawUrl}`,
+            tSync(
+              'gist.fetchTruncatedFailed',
+              {
+                status: rawResponse.status,
+                statusText: rawResponse.statusText,
+                rawUrl
+              },
+              effectiveLocale
+            ),
             rawResponse.status,
             rawResponse.statusText,
             text

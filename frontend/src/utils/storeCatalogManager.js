@@ -1,8 +1,27 @@
-import { getStoreOfficialPluginMeta } from './bundledPlugins'
-import { getPluginCategories, normalizeCategoryNames } from './pluginCategories'
+import { OFFICIAL_BADGE_CODE, getStoreOfficialPluginMeta } from './bundledPlugins'
+import {
+  getPluginCategories,
+  getPluginCategoryIds,
+  isAllCategory,
+  normalizeCategoryIds,
+  normalizeCategoryNames
+} from './pluginCategories'
 import { compareMatches, matchItemWithQuery } from './pinyinSearch'
-import { normalizeCatalogScreenshots } from './pluginScreenshots'
-import { t } from '@/i18n'
+import {
+  normalizeCatalogI18nScreenshots,
+  normalizeCatalogScreenshots,
+  resolveCatalogScreenshotBaseUrl,
+  stripI18nScreenshots
+} from './pluginScreenshots'
+import {
+  getLocalizedPluginAltNames,
+  getLocalizedPluginDescription,
+  getLocalizedPluginField,
+  getLocalizedPluginKeywords,
+  getLocalizedPluginName,
+  mergePluginI18n
+} from './pluginI18n'
+import { getCurrentLocale, t } from '@/i18n'
 /**
  * storeCatalogManager.js
  * ZTools 对齐 Raycast 标杆体系的 Local-First 扩展商店数据管理器
@@ -102,16 +121,47 @@ export function isCommunityPluginItem(item) {
 }
 
 /**
- * 插件市场搜索与悬浮条共用同一套匹配规则（名称、拼音、首字母、触发词、标识、描述与作者）
+ * 插件市场搜索与悬浮条共用同一套匹配规则（名称、多语言名、拼音、首字母、触发词、标识、多语言描述与作者）
  * @param {object} plugin - 插件对象
  * @param {string} keyword - 搜索关键词
  * @returns {object} 匹配结果（见 matchItemWithQuery）；keyword 为空时视为命中
  */
 function matchCatalogPlugin(plugin, keyword) {
-  const keywords = Array.isArray(plugin?.keywords)
-    ? plugin.keywords
-    : typeof plugin?.keywords === 'string' ? plugin.keywords.split(/[\s,，]+/) : []
-  return matchItemWithQuery({ ...plugin, keyword: undefined, keywords }, keyword)
+  if (!plugin || typeof plugin !== 'object') {
+    return matchItemWithQuery(plugin, keyword)
+  }
+  const locale = getCurrentLocale()
+  const localizedName = getLocalizedPluginName(plugin, locale) || plugin.name || plugin.title || ''
+  const localizedDescription = getLocalizedPluginDescription(plugin, locale) || plugin.description || ''
+  const altNames = getLocalizedPluginAltNames(plugin, localizedName)
+  const keywords = getLocalizedPluginKeywords(plugin, locale)
+
+  const descParts = []
+  const addDesc = (val) => {
+    if (typeof val !== 'string') return
+    const trimmed = val.trim()
+    if (trimmed && !descParts.includes(trimmed)) descParts.push(trimmed)
+  }
+  addDesc(localizedDescription)
+  addDesc(plugin.description)
+  if (plugin.i18n && typeof plugin.i18n === 'object') {
+    for (const entry of Object.values(plugin.i18n)) {
+      if (entry && typeof entry === 'object') addDesc(entry.description)
+    }
+  }
+
+  return matchItemWithQuery(
+    {
+      ...plugin,
+      name: localizedName,
+      title: localizedName,
+      altNames,
+      description: descParts.join(' '),
+      keyword: undefined,
+      keywords
+    },
+    keyword
+  )
 }
 
 /**
@@ -303,7 +353,7 @@ export class StoreCatalogManager {
         item.officialBadge ||
         builtinMatch?.official_badge ||
         builtinMatch?.officialBadge ||
-        (isOfficial ? '官方' : null)
+        (isOfficial ? OFFICIAL_BADGE_CODE : null)
       const homepageUrl =
         item.homepage_url ||
         item.homepageUrl ||
@@ -317,6 +367,14 @@ export class StoreCatalogManager {
         ? 'official'
         : item.source_type || item.sourceType || 'community'
 
+      const catalogScreenshotBaseUrl = resolveCatalogScreenshotBaseUrl(item)
+      const normalizedItemI18n = normalizeCatalogI18nScreenshots(item.i18n, {
+        baseUrl: catalogScreenshotBaseUrl
+      })
+      const mergedI18n = mergePluginI18n(builtinMatch?.i18n, normalizedItemI18n, storeMeta?.i18n)
+      const defaultLocale = storeMeta?.defaultLocale || item.defaultLocale || builtinMatch?.defaultLocale
+      const categoryId = storeMeta?.categoryId || item.categoryId || builtinMatch?.categoryId
+
       const normalizedItem = {
         ...(builtinMatch || {}),
         ...item,
@@ -327,6 +385,9 @@ export class StoreCatalogManager {
         version: item.version || builtinMatch?.version || '1.0.0',
         description: storeMeta?.description || item.description || builtinMatch?.description || '',
         category: getPluginCategories(storeMeta?.category || item.category),
+        ...(categoryId ? { categoryId } : {}),
+        ...(defaultLocale ? { defaultLocale } : {}),
+        ...(mergedI18n ? { i18n: mergedI18n } : {}),
         isBuiltin: Boolean(item.isBuiltin || builtinMatch?.isBuiltin),
         downloads: Number(item.downloads || item.downloadsCount || 0),
         is_official: isOfficial,
@@ -337,17 +398,29 @@ export class StoreCatalogManager {
         sourceType: sourceType,
         homepage_url: homepageUrl,
         homepageUrl: homepageUrl,
-        // 截图只接受 https 地址（发布脚本写入的 CDN 地址），其它协议与格式不对的条目丢弃
-        screenshots: normalizeCatalogScreenshots(item.screenshots)
+        // 截图只接受 https 地址（发布脚本写入的 CDN 地址，可信 https 基准下允许安全相对路径兜底），其它协议与格式不对的条目丢弃
+        screenshots: normalizeCatalogScreenshots(item.screenshots, { baseUrl: catalogScreenshotBaseUrl })
       }
 
       // 与内置插件同 ID 时，实际打开的是内置插件（openPlugin 优先走内置）。
-      // 名称、描述和平台限制以内置为准，避免显示另一个插件的介绍，或被远程条目的平台声明误隐藏
+      // 名称、描述、多语言元数据与平台限制以内置为准，避免显示另一个插件的介绍，或被远程条目的平台声明误隐藏
       if (builtinMatch) {
         normalizedItem.name = builtinMatch.name || normalizedItem.name
         normalizedItem.title = builtinMatch.title || builtinMatch.name || normalizedItem.title
         normalizedItem.description = builtinMatch.description || normalizedItem.description
         if (normalizeCategoryNames(builtinMatch.category).length) normalizedItem.category = getPluginCategories(builtinMatch.category)
+        if (builtinMatch.categoryId) normalizedItem.categoryId = builtinMatch.categoryId
+        if (builtinMatch.defaultLocale) normalizedItem.defaultLocale = builtinMatch.defaultLocale
+        // 内置插件的多语言截图同样只用随客户端分发的本地副本，先剔除远程网络截图再合并内置 i18n
+        const mergedBuiltinI18n = mergePluginI18n(
+          stripI18nScreenshots(normalizedItem.i18n),
+          builtinMatch.i18n
+        )
+        if (mergedBuiltinI18n) {
+          normalizedItem.i18n = mergedBuiltinI18n
+        } else {
+          delete normalizedItem.i18n
+        }
         if (Array.isArray(builtinMatch.platforms)) normalizedItem.platforms = builtinMatch.platforms
         else delete normalizedItem.platforms
         // 版本、平台声明与图标同样以内置为准；内置插件不从插件市场下载，也不受目录里最低客户端版本的限制。
@@ -366,12 +439,15 @@ export class StoreCatalogManager {
         }
       }
 
-      // 提取下架标记
+      // 提取下架标记（暴露 { revoked: true, reason } 动态 getter，兼顾既有契约与语言热切换实时响应）
       if (item.revoked) {
-        newRevokedMap[pid] = {
-          revoked: true,
-          reason: item.revoked_reason || item.revokedReason || t('pluginCatalog.revokedDisabledReason')
-        }
+        const rawReason = item.revoked_reason || item.revokedReason || ''
+        const mergedI18nEntry = normalizedItem.i18n && typeof normalizedItem.i18n === 'object' ? normalizedItem.i18n : null
+        newRevokedMap[pid.toLowerCase()] = this._createRevocationEntry({
+          rawReason,
+          i18n: mergedI18nEntry,
+          isDefault: !rawReason && !mergedI18nEntry
+        })
       }
 
       if (this.isPlatformSupported(normalizedItem)) {
@@ -388,12 +464,13 @@ export class StoreCatalogManager {
           mergedList.push({
             ...official,
             category: getPluginCategories(official.category),
+            categoryId: official.categoryId || getPluginCategoryIds(official.category),
             id: pid,
             pluginId: pid,
             is_official: true,
             isOfficial: true,
-            official_badge: official.official_badge || official.officialBadge || '官方',
-            officialBadge: official.official_badge || official.officialBadge || '官方',
+            official_badge: official.official_badge || official.officialBadge || OFFICIAL_BADGE_CODE,
+            officialBadge: official.official_badge || official.officialBadge || OFFICIAL_BADGE_CODE,
             source_type: 'official',
             sourceType: 'official',
             homepage_url: official.homepage_url || official.homepageUrl || official.homepage || '',
@@ -450,13 +527,18 @@ export class StoreCatalogManager {
     const rawPageSize = Number(params.pageSize || params.per_page)
     const pageSize = Number.isFinite(rawPageSize) && rawPageSize > 0 ? Math.floor(rawPageSize) : 20
 
-    // 分类筛选适配：all、official（官方）、community（社区）
+    // 分类筛选适配：all、official（官方）、community（社区），兼容旧中文来源筛选别名
     const rawFilter = String(
       params.sourceType || params.filterType || params.sourceFilter || params.filter || ''
     ).trim().toLowerCase()
-    const filterType = (targetCategory === 'official' || targetCategory === '官方自营' || rawFilter === 'official')
+    const normalizedTarget = targetCategory.toLowerCase()
+    // i18n-allow: legacy-category-alias
+    const isOfficialAlias = normalizedTarget === 'official' || targetCategory === '官方自营'
+    // i18n-allow: legacy-category-alias
+    const isCommunityAlias = normalizedTarget === 'community' || targetCategory === '社区精选'
+    const filterType = (isOfficialAlias || rawFilter === 'official')
       ? 'official'
-      : (targetCategory === 'community' || targetCategory === '社区精选' || rawFilter === 'community')
+      : (isCommunityAlias || rawFilter === 'community')
         ? 'community'
         : 'all'
 
@@ -468,6 +550,10 @@ export class StoreCatalogManager {
 
     // 1. 本地极速过滤（有搜索词时顺带记下每个插件的匹配档，排序先看匹配程度）
     const relevance = keyword ? new Map() : null
+    const selectedCategoryIds =
+      targetCategory && !isAllCategory(targetCategory) && !isOfficialAlias && !isCommunityAlias
+        ? normalizeCategoryIds(targetCategory)
+        : null
     let filtered = catalog.filter((item) => {
       // ID 限制（如收藏夹/指定插件批量查询）
       if (targetIds && !targetIds.has(String(item.pluginId).toLowerCase())) {
@@ -483,13 +569,10 @@ export class StoreCatalogManager {
         return false
       }
 
-      // 常规分类过滤（当 category 不是特殊的 official / community / all / 全部 时生效）
-      if (
-        targetCategory &&
-        !['全部', 'all', 'official', '官方自营', 'community', '社区精选'].includes(targetCategory)
-      ) {
-        const selected = normalizeCategoryNames(targetCategory)
-        if (!getPluginCategories(item.category).some((name) => selected.includes(name))) {
+      // 常规分类过滤：统一按标准 categoryId 主键比对（兼容旧中文分类名与多分类数组）
+      if (selectedCategoryIds) {
+        const itemCategoryIds = getPluginCategoryIds(item.categoryId || item.category)
+        if (!itemCategoryIds.some((id) => selectedCategoryIds.includes(id))) {
           return false
         }
       }
@@ -516,11 +599,12 @@ export class StoreCatalogManager {
         return bOfficial - aOfficial // 官方置顶
       }
 
-      let valA = a[sortField]
-      let valB = b[sortField]
+      const currentLocale = getCurrentLocale()
+      let valA = sortField === 'name' ? getLocalizedPluginName(a, currentLocale) : a[sortField]
+      let valB = sortField === 'name' ? getLocalizedPluginName(b, currentLocale) : b[sortField]
 
       if (typeof valA === 'string') {
-        return direction * valA.localeCompare(String(valB || ''))
+        return direction * valA.localeCompare(String(valB || ''), currentLocale)
       }
       const numDiff = direction * ((Number(valA) || 0) - (Number(valB) || 0))
       if (numDiff !== 0) {
@@ -550,11 +634,43 @@ export class StoreCatalogManager {
   }
 
   /**
+   * 构造响应式下架条目：对外仅暴露 `{ revoked: true, reason }`，其中 `reason` 为可枚举动态 getter，
+   * 热切换语言时自动按当前 locale 重新求值，且与直接断言 `{ revoked: true, reason }` 的外部契约完全兼容。
+   * @param {{ rawReason?: string, i18n?: object|null, isDefault?: boolean }} meta
+   * @returns {{ revoked: true, reason: string }}
+   */
+  _createRevocationEntry(meta) {
+    const resolveReason = () => {
+      const localized = getLocalizedPluginField(
+        {
+          revokedReason: meta.rawReason || '',
+          ...(meta.i18n ? { i18n: meta.i18n } : {})
+        },
+        'revokedReason'
+      )
+      if (localized) return localized
+      if (meta.isDefault) return t('pluginCatalog.revokedDisabledReason')
+      return meta.rawReason || t('pluginCatalog.revokedDisabledReason')
+    }
+    const entry = { revoked: true }
+    Object.defineProperty(entry, 'reason', {
+      enumerable: true,
+      configurable: true,
+      get: resolveReason
+    })
+    return entry
+  }
+
+  /**
    * 获取所有被标记下架的插件状态映射
    * @returns {{ [pluginId: string]: { revoked: boolean, reason: string } }}
    */
   getRevocations() {
-    return { ...this._revokedMap }
+    const result = {}
+    for (const [pid, entry] of Object.entries(this._revokedMap)) {
+      result[pid] = entry ? { revoked: Boolean(entry.revoked), reason: entry.reason || '' } : { revoked: false, reason: '' }
+    }
+    return result
   }
 
   /**
@@ -564,7 +680,8 @@ export class StoreCatalogManager {
    */
   isRevoked(pluginId) {
     const pid = normalizePluginId(pluginId).toLowerCase()
-    return this._revokedMap[pid] || { revoked: false, reason: '' }
+    const entry = this._revokedMap[pid]
+    return entry ? { revoked: Boolean(entry.revoked), reason: entry.reason || '' } : { revoked: false, reason: '' }
   }
 
   /**
@@ -572,10 +689,15 @@ export class StoreCatalogManager {
    * @param {string} pluginId
    * @param {string} [reason]
    */
-  markRevoked(pluginId, reason = t('pluginCatalog.revokedDisabledReason')) {
+  markRevoked(pluginId, reason) {
     const pid = normalizePluginId(pluginId).toLowerCase()
     if (!pid) return
-    this._revokedMap[pid] = { revoked: true, reason }
+    const hasCustom = typeof reason === 'string' && reason.trim().length > 0
+    this._revokedMap[pid] = this._createRevocationEntry({
+      rawReason: hasCustom ? reason.trim() : '',
+      i18n: null,
+      isDefault: !hasCustom
+    })
   }
 
   /**

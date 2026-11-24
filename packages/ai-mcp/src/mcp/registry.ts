@@ -6,13 +6,23 @@ import {
   RegisteredTool,
   McpErrorCode
 } from '../types/mcp.js';
+import { AiMcpError, type AiMcpErrorCode, type AiMcpMessageParams, tAiMcp } from '../i18n.js';
 
 export class ToolValidationError extends Error {
   public code: McpErrorCode = McpErrorCode.InvalidParams;
-  constructor(message: string) {
+  public readonly i18nCode?: AiMcpErrorCode;
+  public readonly params?: Readonly<AiMcpMessageParams>;
+
+  constructor(message: string, i18nCode?: AiMcpErrorCode, params?: AiMcpMessageParams) {
     super(message);
     this.name = 'ToolValidationError';
+    if (i18nCode) this.i18nCode = i18nCode;
+    if (params) this.params = Object.freeze({ ...params });
   }
+}
+
+function createValidationError(code: AiMcpErrorCode, params?: AiMcpMessageParams): ToolValidationError {
+  return new ToolValidationError(tAiMcp(code, params), code, params);
 }
 
 export class McpToolRegistry {
@@ -23,7 +33,7 @@ export class McpToolRegistry {
    */
   public registerTool(tool: McpTool, handler: McpToolHandler): void {
     if (!tool.name || tool.name.trim().length === 0) {
-      throw new Error('Tool name cannot be empty');
+      throw new AiMcpError('mcp.registry.emptyToolName');
     }
 
     const schema: McpToolInputSchema = tool.inputSchema || {
@@ -72,16 +82,16 @@ export class McpToolRegistry {
   /**
    * 轻量 JSON Schema 参数校验器
    */
-  public validateArgs(schema: McpToolInputSchema, args: Record<string, any>): void {
+  public validateArgs(schema: McpToolInputSchema, args: Record<string, unknown>): void {
     if (typeof args !== 'object' || args === null) {
-      throw new ToolValidationError('Arguments must be an object');
+      throw createValidationError('mcp.registry.argsMustBeObject');
     }
 
     // 检查必填字段
     if (Array.isArray(schema.required)) {
       for (const reqKey of schema.required) {
         if (!(reqKey in args) || args[reqKey] === undefined || args[reqKey] === null) {
-          throw new ToolValidationError(`Missing required parameter: "${reqKey}"`);
+          throw createValidationError('mcp.registry.missingRequiredParam', { param: reqKey });
         }
       }
     }
@@ -91,7 +101,7 @@ export class McpToolRegistry {
       const propDef = properties[key];
       if (!propDef) {
         if (schema.additionalProperties === false) {
-          throw new ToolValidationError(`Unexpected parameter: "${key}"`);
+          throw createValidationError('mcp.registry.unexpectedParam', { param: key });
         }
         continue;
       }
@@ -99,29 +109,31 @@ export class McpToolRegistry {
       // 类型校验
       if (val !== undefined && val !== null) {
         if (propDef.type === 'string' && typeof val !== 'string') {
-          throw new ToolValidationError(`Parameter "${key}" must be a string`);
+          throw createValidationError('mcp.registry.paramMustBeString', { param: key });
         }
         if (propDef.type === 'number' && typeof val !== 'number') {
-          throw new ToolValidationError(`Parameter "${key}" must be a number`);
+          throw createValidationError('mcp.registry.paramMustBeNumber', { param: key });
         }
         if (propDef.type === 'integer' && (!Number.isInteger(val))) {
-          throw new ToolValidationError(`Parameter "${key}" must be an integer`);
+          throw createValidationError('mcp.registry.paramMustBeInteger', { param: key });
         }
         if (propDef.type === 'boolean' && typeof val !== 'boolean') {
-          throw new ToolValidationError(`Parameter "${key}" must be a boolean`);
+          throw createValidationError('mcp.registry.paramMustBeBoolean', { param: key });
         }
         if (propDef.type === 'array' && !Array.isArray(val)) {
-          throw new ToolValidationError(`Parameter "${key}" must be an array`);
+          throw createValidationError('mcp.registry.paramMustBeArray', { param: key });
         }
         if (propDef.type === 'object' && (typeof val !== 'object' || Array.isArray(val))) {
-          throw new ToolValidationError(`Parameter "${key}" must be an object`);
+          throw createValidationError('mcp.registry.paramMustBeObject', { param: key });
         }
 
         // enum 校验
         if (Array.isArray(propDef.enum) && !propDef.enum.includes(val)) {
-          throw new ToolValidationError(
-            `Parameter "${key}" must be one of: [${propDef.enum.join(', ')}], got: "${val}"`
-          );
+          throw createValidationError('mcp.registry.paramMustBeEnum', {
+            param: key,
+            allowed: propDef.enum.join(', '),
+            actual: String(val)
+          });
         }
       }
     }
@@ -130,10 +142,10 @@ export class McpToolRegistry {
   /**
    * 执行指定工具
    */
-  public async executeTool(name: string, args: Record<string, any> = {}): Promise<McpToolResult> {
+  public async executeTool(name: string, args: Record<string, unknown> = {}): Promise<McpToolResult> {
     const registered = this.tools.get(name);
     if (!registered) {
-      throw new Error(`Tool "${name}" not found`);
+      throw new AiMcpError('mcp.registry.toolNotFound', { name });
     }
 
     try {
@@ -150,7 +162,7 @@ export class McpToolRegistry {
       }
 
       if (typeof output === 'object' && output !== null) {
-        if ('content' in output && Array.isArray((output as any).content)) {
+        if ('content' in output && Array.isArray((output as { content?: unknown }).content)) {
           return output as McpToolResult;
         }
         return {
@@ -163,9 +175,10 @@ export class McpToolRegistry {
         content: [{ type: 'text', text: String(output) }],
         isError: false
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.message : String(err);
       return {
-        content: [{ type: 'text', text: `Tool execution failed: ${err.message || String(err)}` }],
+        content: [{ type: 'text', text: tAiMcp('mcp.registry.toolExecutionFailed', { reason }) }],
         isError: true
       };
     }

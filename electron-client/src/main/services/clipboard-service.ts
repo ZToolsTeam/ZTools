@@ -134,12 +134,12 @@ function isPrivateMacClipboard(formats: string[], clipboard: ClipboardAdapter): 
 function waitFor(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
-      reject(new ZToolsError(errorCodes.callerDestroyed, '输入操作已取消'))
+      reject(new ZToolsError(errorCodes.callerDestroyed, 'Input operation cancelled'))
       return
     }
     const onAbort = () => {
       clearTimeout(timer)
-      reject(new ZToolsError(errorCodes.callerDestroyed, '输入操作已取消'))
+      reject(new ZToolsError(errorCodes.callerDestroyed, 'Input operation cancelled'))
     }
     const timer = setTimeout(() => {
       signal.removeEventListener('abort', onAbort)
@@ -154,11 +154,11 @@ function clipboardFailure(error: unknown): ZToolsError {
     if (error.code === errorCodes.clipboardError && !['CLIPBOARD_BUSY', 'CLIPBOARD_CHANGED', 'CLIPBOARD_RICH_TEXT_UNCONFIRMED', 'PASTE_TARGET_CHANGED',
       'PASTE_TARGET_UNAVAILABLE', 'PASTE_RESULT_UNCONFIRMED', 'PASTE_HOST_NOT_ACTIVE', 'PASTE_TARGET_APP_UNAVAILABLE',
       'PASTE_TARGET_WINDOW_UNAVAILABLE', 'PASTE_TARGET_ELEMENT_UNAVAILABLE', 'PASTE_FOCUS_OBSERVER_UNAVAILABLE'].includes(error.details?.hostCode || '')) {
-      return new ZToolsError(errorCodes.clipboardError, '剪贴板操作失败')
+      return new ZToolsError(errorCodes.clipboardError, 'Clipboard operation failed')
     }
     return error
   }
-  return new ZToolsError(errorCodes.clipboardError, '剪贴板操作失败')
+  return new ZToolsError(errorCodes.clipboardError, 'Clipboard operation failed')
 }
 
 function isFileClipboard(formats: string[], clipboard: ClipboardAdapter): boolean {
@@ -180,13 +180,13 @@ function limitedHash(parts: Array<string | Buffer>): string {
 function clipboardImageSize(image: ClipboardImage): { width: number; height: number } {
   const size = image.getSize(1)
   if (!Number.isSafeInteger(size.width) || !Number.isSafeInteger(size.height) || size.width <= 0 || size.height <= 0 ||
-      size.width * size.height > MAX_IMAGE_PIXELS) throw new ZToolsError(errorCodes.fileTooLarge, '剪贴板图片尺寸超出上限')
+      size.width * size.height > MAX_IMAGE_PIXELS) throw new ZToolsError(errorCodes.fileTooLarge, 'Clipboard image dimensions exceed the limit')
   return size
 }
 
 export function decodeBmp(buffer: Buffer): { bitmap: Buffer; width: number; height: number } {
   if (buffer.byteLength < 54 || buffer[0] !== 0x42 || buffer[1] !== 0x4d) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'BMP 文件头无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid BMP header')
   }
   const pixelOffset = buffer.readUInt32LE(10)
   const dibSize = buffer.readUInt32LE(14)
@@ -210,13 +210,13 @@ export function decodeBmp(buffer: Buffer): { bitmap: Buffer; width: number; heig
     !Number.isSafeInteger(pixels) ||
     pixels > MAX_IMAGE_PIXELS
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, '只支持有界的无压缩 24/32 位 BMP')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Only bounded uncompressed 24/32-bit BMP images are supported')
   }
   const bytesPerPixel = bitsPerPixel / 8
   const rowBytes = Math.ceil((width * bitsPerPixel) / 32) * 4
   const requiredBytes = pixelOffset + rowBytes * height
   if (!Number.isSafeInteger(requiredBytes) || requiredBytes > buffer.byteLength) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'BMP 像素数据不完整')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Incomplete BMP pixel data')
   }
   const bitmap = Buffer.alloc(pixels * 4)
   for (let targetY = 0; targetY < height; targetY += 1) {
@@ -293,15 +293,15 @@ export class ClipboardService {
 
   async copyRichText(data: { text: string; html: string }, signal?: AbortSignal): Promise<{ success: true }> {
     return this.#withClipboardOperation(signal, async activeSignal => {
-      if (!this.clipboard.write || !this.clipboard.readHTML) throw new ZToolsError(errorCodes.notSupported, '当前剪贴板不支持富文本复制')
+      if (!this.clipboard.write || !this.clipboard.readHTML) throw new ZToolsError(errorCodes.notSupported, 'Rich text copy is not supported on this clipboard')
       if (Buffer.byteLength(data.text, 'utf8') + Buffer.byteLength(data.html, 'utf8') > MAX_TEXT_BYTES) {
-        throw new ZToolsError(errorCodes.responseTooLarge, '富文本剪贴板内容超过 8 MiB 上限')
+        throw new ZToolsError(errorCodes.responseTooLarge, 'Rich text clipboard content exceeds the 8 MiB limit')
       }
       this.#assertTextWriteActive(activeSignal)
       this.clipboard.write(data)
       if (this.clipboard.readText() !== data.text || !this.clipboard.availableFormats().includes('text/html') ||
           !this.clipboard.readHTML().replace(/\r\n/g, '\n').includes(data.html.replace(/\r\n/g, '\n'))) {
-        throw new ZToolsError(errorCodes.clipboardError, '未能确认富文本已写入剪贴板', { hostCode: 'CLIPBOARD_RICH_TEXT_UNCONFIRMED' })
+        throw new ZToolsError(errorCodes.clipboardError, 'Failed to confirm rich text was written to the clipboard', { hostCode: 'CLIPBOARD_RICH_TEXT_UNCONFIRMED' })
       }
       this.#cancelSensitiveCopy()
       this.#rememberCurrentClipboard()
@@ -316,7 +316,7 @@ export class ClipboardService {
         ? (await this.files.readFile({ path: params.tempFile, encoding: 'utf8' }, caller, signal)).content
         : params.text as string
       if (Buffer.byteLength(text, 'utf8') > MAX_TEXT_BYTES) {
-        throw new ZToolsError(errorCodes.responseTooLarge, '剪贴板文本超过 8 MiB 上限')
+        throw new ZToolsError(errorCodes.responseTooLarge, 'Clipboard text exceeds the 8 MiB limit')
       }
       // 写入前登记：即使写入后的系统读回失败，也保留到期清除和采集屏蔽。
       this.#assertTextWriteActive(signal)
@@ -326,7 +326,7 @@ export class ClipboardService {
         const pending = this.#sensitiveCopy!
         const formats = this.clipboard.availableFormats().slice().sort((a, b) => a.localeCompare(b))
         const fingerprint = `text:${limitedHash([formats.join('\n'), text])}`
-        if (this.#fingerprint() !== fingerprint) throw new ZToolsError(errorCodes.clipboardError, '敏感内容已被其他剪贴板内容替换')
+        if (this.#fingerprint() !== fingerprint) throw new ZToolsError(errorCodes.clipboardError, 'Sensitive content was replaced by other clipboard content')
         pending.fingerprint = fingerprint
         pending.pendingHashes.clear()
         pending.attempts = 0
@@ -356,7 +356,7 @@ export class ClipboardService {
         : params.image
       const buffer = Buffer.from(encoded, 'base64')
       if (buffer.byteLength > MAX_IMAGE_BYTES) {
-        throw new ZToolsError(errorCodes.fileTooLarge, '剪贴板图片超过 16 MiB 编码上限')
+        throw new ZToolsError(errorCodes.fileTooLarge, 'Clipboard image exceeds the 16 MiB encoded size limit')
       }
       const image = buffer[0] === 0x42 && buffer[1] === 0x4d
         ? (() => {
@@ -372,10 +372,10 @@ export class ClipboardService {
           : this.images.createFromBuffer(buffer)
       const size = image.getSize()
       if (image.isEmpty() || size.width < 1 || size.height < 1) {
-        throw new ZToolsError(errorCodes.invalidRequest, '剪贴板图片解码失败')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Failed to decode clipboard image')
       }
       if (size.width * size.height > MAX_IMAGE_PIXELS) {
-        throw new ZToolsError(errorCodes.fileTooLarge, '剪贴板图片超过 32 Mi 像素上限')
+        throw new ZToolsError(errorCodes.fileTooLarge, 'Clipboard image exceeds the 32 Mi pixels limit')
       }
       this.clipboard.writeImage(image)
       this.#rememberCurrentClipboard()
@@ -400,7 +400,7 @@ export class ClipboardService {
         const target = await this.files.resolveAuthorizedPath(item, caller, 'read', false)
         const stats = await fs.stat(target)
         if (!stats.isFile() && !stats.isDirectory()) {
-          throw new ZToolsError(errorCodes.invalidRequest, '文件剪贴板只接受文件或目录')
+          throw new ZToolsError(errorCodes.invalidRequest, 'File clipboard only accepts files or directories')
         }
         resolved.push(target)
       }
@@ -479,7 +479,7 @@ export class ClipboardService {
       } else {
         try {
           if (Buffer.byteLength(entry.text, 'utf8') > MAX_TEXT_BYTES) {
-            throw new ZToolsError(errorCodes.responseTooLarge, '剪贴板文本超过 8 MiB 上限')
+            throw new ZToolsError(errorCodes.responseTooLarge, 'Clipboard text exceeds the 8 MiB limit')
           }
           this.#writeVerifiedText(entry.text, signal)
         } catch (error) {
@@ -495,17 +495,17 @@ export class ClipboardService {
   }
 
   async #writeHistoryFiles(files: string[], signal: AbortSignal): Promise<string[]> {
-    if (files.length === 0) throw new ZToolsError(errorCodes.invalidRequest, '剪贴板文件列表为空')
+    if (files.length === 0) throw new ZToolsError(errorCodes.invalidRequest, 'Clipboard file list is empty')
     const resolved: string[] = []
     for (const file of files) {
       this.#assertTextWriteActive(signal)
       try {
         const target = await fs.realpath(file)
         const stats = await fs.stat(target)
-        if (!stats.isFile() && !stats.isDirectory()) throw new Error('不是文件或目录')
+        if (!stats.isFile() && !stats.isDirectory()) throw new Error('Target is not a file or directory')
         resolved.push(target)
       } catch (error) {
-        throw new ZToolsError(errorCodes.fileError, error instanceof Error ? `剪贴板中的文件已不存在或无法访问：${error.message}` : '剪贴板中的文件已不存在或无法访问')
+        throw new ZToolsError(errorCodes.fileError, error instanceof Error ? `Clipboard file does not exist or is inaccessible: ${error.message}` : 'Clipboard file does not exist or is inaccessible')
       }
     }
     this.#assertTextWriteActive(signal)
@@ -532,7 +532,7 @@ export class ClipboardService {
     try {
       const text = this.clipboard.readText()
       if (Buffer.byteLength(text, 'utf8') > MAX_TEXT_BYTES) {
-        throw new ZToolsError(errorCodes.responseTooLarge, '剪贴板文本超过 8 MiB 返回上限')
+        throw new ZToolsError(errorCodes.responseTooLarge, 'Clipboard text exceeds the 8 MiB response limit')
       }
       return { success: true, text }
     } catch (error) {
@@ -574,23 +574,23 @@ export class ClipboardService {
   }
 
   async #copyImageReference(value: unknown, caller: CallerIdentity, signal: AbortSignal): Promise<{ success: true }> {
-    const active = () => { if (this.#stopped || signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '剪贴板操作已取消') }
+    const active = () => { if (this.#stopped || signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Clipboard operation cancelled') }
     active()
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new ZToolsError(errorCodes.invalidRequest, '剪贴板图片参数无效')
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid clipboard image parameters')
     const params = value as Record<string, unknown>, keys = Object.keys(params)
-    if (keys.length !== 1) throw new ZToolsError(errorCodes.invalidRequest, '请提供图片或文件引用')
+    if (keys.length !== 1) throw new ZToolsError(errorCodes.invalidRequest, 'Provide either an image or a file reference')
     if (keys[0] === 'image') {
       validateMethodParams('clipboard_copy_image', value)
-      if (typeof params.image !== 'string' || Buffer.byteLength(params.image) > 700 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, '大图请使用FileRef')
+      if (typeof params.image !== 'string' || Buffer.byteLength(params.image) > 700 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, 'Use FileRef for large images')
       active(); return this.#copyImage(value as ClipboardImageParams)
     }
-    if (keys[0] !== 'fileGrantId') throw new ZToolsError(errorCodes.invalidRequest, '请使用图片FileRef而非路径')
+    if (keys[0] !== 'fileGrantId') throw new ZToolsError(errorCodes.invalidRequest, 'Use an image FileRef instead of a file path')
     const id = grantId(params.fileGrantId)
-    if (!this.referenceStorage) throw new ZToolsError(errorCodes.nativeHostUnavailable, '剪贴板图片引用读取不可用')
+    if (!this.referenceStorage) throw new ZToolsError(errorCodes.nativeHostUnavailable, 'Clipboard image reference reader is unavailable')
     try {
       const bytes = await this.referenceStorage.grants.read(caller.webContentsId, id, '', MAX_IMAGE_BYTES, signal)
       active(); const header = imageHeader(bytes), image = this.images.createFromBuffer(bytes), size = image.getSize()
-      if (image.isEmpty() || size.width !== header.width || size.height !== header.height) throw new ZToolsError(errorCodes.fileError, '图片解码结果无效')
+      if (image.isEmpty() || size.width !== header.width || size.height !== header.height) throw new ZToolsError(errorCodes.fileError, 'Invalid decoded image result')
       active(); this.clipboard.writeImage(image); this.#rememberCurrentClipboard()
       return { success: true }
     } catch (error) { throw clipboardFailure(error) }
@@ -607,13 +607,13 @@ export class ClipboardService {
       let text: string
       if ('text' in params) text = params.text
       else {
-        if (!this.referenceStorage) throw new ZToolsError(errorCodes.nativeHostUnavailable, '剪贴板引用读取不可用')
+        if (!this.referenceStorage) throw new ZToolsError(errorCodes.nativeHostUnavailable, 'Clipboard reference reader is unavailable')
         const bytes = await this.referenceStorage.grants.read(caller.webContentsId, params.fileGrantId, '', MAX_TEXT_BYTES, signal)
         try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) }
-        catch { throw new ZToolsError(errorCodes.fileError, '文本引用不是有效UTF-8') }
+        catch { throw new ZToolsError(errorCodes.fileError, 'Text reference is not valid UTF-8') }
       }
       this.#assertTextWriteActive(signal)
-      if (Buffer.byteLength(text) > MAX_TEXT_BYTES) throw new ZToolsError(errorCodes.responseTooLarge, '剪贴板文本超过8MiB上限')
+      if (Buffer.byteLength(text) > MAX_TEXT_BYTES) throw new ZToolsError(errorCodes.responseTooLarge, 'Clipboard text exceeds the 8 MiB limit')
       this.#writeVerifiedText(text, signal)
       return { success: true }
     } catch (error) { throw clipboardFailure(error) }
@@ -621,16 +621,16 @@ export class ClipboardService {
 
   async readImageReference(caller: CallerIdentity, signal: AbortSignal) {
     try {
-      if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '剪贴板操作已取消')
+      if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Clipboard operation cancelled')
       const snapshot = this.#imageSnapshot()
       if (!snapshot) return { success: true as const, image: '', useReference: false as const }
       const { size, png } = snapshot
       if (png.byteLength <= DIRECT_IMAGE_BYTES) return { success: true as const, image: 'data:image/png;base64,' + png.toString('base64'), useReference: false as const }
-      if (!this.referenceStorage) throw new ZToolsError(errorCodes.nativeHostUnavailable, '剪贴板图片引用存储不可用')
+      if (!this.referenceStorage) throw new ZToolsError(errorCodes.nativeHostUnavailable, 'Clipboard image reference storage is unavailable')
       const generated = await this.referenceStorage.cache.writeGeneratedCacheFile(png, caller, 'png', signal)
       if (signal.aborted) {
         try { await this.referenceStorage.cache.revokeReference(generated.reference, caller) }
-        finally { throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '剪贴板图片缓存已写入，但引用未交付') }
+        finally { throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Clipboard image cache was written, but the reference was not delivered') }
       }
       return { success: true as const, useReference: true as const, reference: generated.reference,
         fileUrl: generated.fileUrl, size: generated.size, width: size.width, height: size.height }
@@ -642,7 +642,7 @@ export class ClipboardService {
     if (image.isEmpty()) return undefined
     const size = clipboardImageSize(image)
     const png = image.toPNG({ scaleFactor: 1 })
-    if (!Buffer.isBuffer(png) || png.byteLength > MAX_IMAGE_BYTES) throw new ZToolsError(errorCodes.fileTooLarge, '剪贴板图片超过16MiB上限')
+    if (!Buffer.isBuffer(png) || png.byteLength > MAX_IMAGE_BYTES) throw new ZToolsError(errorCodes.fileTooLarge, 'Clipboard image exceeds the 16 MiB limit')
     return { size, png }
   }
 
@@ -704,7 +704,7 @@ export class ClipboardService {
     try {
       this.clipboard.clear()
       if (this.#sensitiveCopy && this.#isSensitiveClipboard(this.#fingerprint())) {
-        throw new ZToolsError(errorCodes.clipboardError, '无法确认敏感内容已清除')
+        throw new ZToolsError(errorCodes.clipboardError, 'Failed to confirm sensitive content was cleared')
       }
       this.#cancelSensitiveCopy()
       this.#rememberCurrentClipboard()
@@ -715,7 +715,7 @@ export class ClipboardService {
   }
 
   unsupported(method: string): never {
-    throw new ZToolsError(errorCodes.notSupported, `${method} 需要 M5 NativeHost 输入注入能力`)
+    throw new ZToolsError(errorCodes.notSupported, `${method} requires M5 NativeHost input injection capability`)
   }
 
   #prepareSensitiveCopy(text: string): void {
@@ -724,7 +724,7 @@ export class ClipboardService {
       timer.unref()
       this.#sensitiveCopy = { pendingHashes: new Set(), attempts: 0, timer }
     }
-    if (this.#sensitiveCopy.pendingHashes.size >= 32) throw new ZToolsError(errorCodes.clipboardError, '系统剪贴板持续不可用，请稍后重试')
+    if (this.#sensitiveCopy.pendingHashes.size >= 32) throw new ZToolsError(errorCodes.clipboardError, 'System clipboard remains unavailable; please retry later')
     this.#sensitiveCopy.pendingHashes.add(limitedHash([text]))
     if (!this.#sensitiveCopy.timer) {
       this.#sensitiveCopy.attempts = 0
@@ -761,7 +761,7 @@ export class ClipboardService {
     try {
       if (this.#isSensitiveClipboard(this.#fingerprint())) {
         this.clipboard.clear()
-        if (this.#isSensitiveClipboard(this.#fingerprint())) throw new Error('无法确认敏感内容已清除')
+        if (this.#isSensitiveClipboard(this.#fingerprint())) throw new Error('Failed to confirm sensitive content was cleared')
       }
       this.#cancelSensitiveCopy()
       this.#rememberCurrentClipboard()
@@ -781,7 +781,7 @@ export class ClipboardService {
     const verifyClipboard = (): void => {
       this.#assertTextWriteActive(signal)
       if (this.#fingerprint() !== fingerprint) {
-        throw new ZToolsError(errorCodes.clipboardError, '剪贴板已变化，已停止自动粘贴，请重新选择内容', { hostCode: 'CLIPBOARD_CHANGED' })
+        throw new ZToolsError(errorCodes.clipboardError, 'Clipboard changed; auto-paste stopped, please reselect the content', { hostCode: 'CLIPBOARD_CHANGED' })
       }
     }
     if (!this.input && this.macPaste) return this.#hideAndPasteOnMac(this.macPaste, caller, signal, verifyClipboard)
@@ -793,7 +793,7 @@ export class ClipboardService {
 
   #beginClipboardOperation(signal?: AbortSignal): () => void {
     this.#assertTextWriteActive(signal)
-    if (this.#clipboardBusy) throw new ZToolsError(errorCodes.clipboardError, '剪贴板操作正在进行，请完成后重试', { hostCode: 'CLIPBOARD_BUSY' })
+    if (this.#clipboardBusy) throw new ZToolsError(errorCodes.clipboardError, 'A clipboard operation is already in progress; please retry after it finishes', { hostCode: 'CLIPBOARD_BUSY' })
     this.#clipboardBusy = true
     let settled: () => void = () => {}
     this.#pendingClipboardOperation = new Promise<void>(resolve => { settled = resolve })
@@ -818,11 +818,11 @@ export class ClipboardService {
       ? (mac.resolveWindow ? mac.resolveWindow(contents) : BrowserWindow.fromWebContents(contents))
       : null
     if (!window || window.isDestroyed()) return this.unsupported('clipboard.hideAndInput')
-    if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '输入操作已取消')
+    if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Input operation cancelled')
     if (!mac.isTrusted()) {
       throw new ZToolsError(
         errorCodes.permissionDenied,
-        '已复制，但无法自动粘贴：请在系统设置 -> 隐私与安全性 -> 辅助功能中授权 ZTools',
+        'Copied, but unable to auto-paste: grant Accessibility permission to ZTools in System Settings -> Privacy & Security -> Accessibility',
         { hostCode: 'ACCESSIBILITY_PERMISSION_DENIED' }
       )
     }
@@ -855,7 +855,7 @@ export class ClipboardService {
     if (!input || !window || window.isDestroyed()) {
       return this.unsupported('clipboard.hideAndInput')
     }
-    if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '输入操作已取消')
+    if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Input operation cancelled')
     window.hide()
     try {
       await new Promise<void>((resolve) => setImmediate(resolve))
@@ -974,7 +974,7 @@ export class ClipboardService {
 
   #assertTextWriteActive(signal?: AbortSignal): void {
     if (this.#stopped || signal?.aborted) {
-      throw new ZToolsError(errorCodes.callerDestroyed, '剪贴板操作已取消')
+      throw new ZToolsError(errorCodes.callerDestroyed, 'Clipboard operation cancelled')
     }
   }
 
@@ -984,7 +984,7 @@ export class ClipboardService {
     // The native write returns void even when the OS does not retain the text.
     // Do not retry: a different application may have changed clipboard ownership.
     if (this.clipboard.readText() !== text || !this.clipboard.availableFormats().includes('text/plain')) {
-      throw new ZToolsError(errorCodes.clipboardError, '未能确认剪贴板文本写入')
+      throw new ZToolsError(errorCodes.clipboardError, 'Failed to confirm clipboard text write')
     }
     this.#rememberCurrentClipboard()
   }
@@ -1032,12 +1032,12 @@ export class ClipboardService {
       for (const format of ['FileNameW', 'FileDrop']) {
         if (this.clipboard.has(format) && !fileFormats.includes(format)) fileFormats.push(format)
       }
-      if (!this.clipboard.readBuffer) throw new ZToolsError(errorCodes.clipboardError, '文件剪贴板缺少变化检测数据')
+      if (!this.clipboard.readBuffer) throw new ZToolsError(errorCodes.clipboardError, 'File clipboard is missing change detection data')
       let bytes = 0
       const data = fileFormats.map(format => {
         const buffer = this.clipboard.readBuffer!(format)
         bytes += buffer.byteLength
-        if (bytes > 128 * 1024) throw new ZToolsError(errorCodes.responseTooLarge, '文件剪贴板变化检测数据超过上限')
+        if (bytes > 128 * 1024) throw new ZToolsError(errorCodes.responseTooLarge, 'File clipboard change detection data exceeds the size limit')
         return buffer
       })
       return `files:${limitedHash([...formats, ...data])}`
@@ -1048,7 +1048,7 @@ export class ClipboardService {
       // 每次重新读取完整像素，保留即时变化检测；不要在轮询中反复压缩未变化的大图。
       const bitmap = image.toBitmap({ scaleFactor: 1 })
       if (!Buffer.isBuffer(bitmap) || bitmap.byteLength === 0 || bitmap.byteLength > MAX_IMAGE_PIXELS * 4) {
-        throw new ZToolsError(errorCodes.clipboardError, '剪贴板图片像素数据无效或超过上限')
+        throw new ZToolsError(errorCodes.clipboardError, 'Clipboard image pixel data is invalid or exceeds the limit')
       }
       return `image:${limitedHash([formats.join('\n'), String(size.width), String(size.height), bitmap])}`
     }
@@ -1113,15 +1113,15 @@ export class ClipboardService {
 
   async #readFilePaths(signal?: AbortSignal): Promise<string[]> {
     const files = await this.fileClipboard.readFiles(signal)
-    if (files.length > 256) throw new ZToolsError(errorCodes.responseTooLarge, '文件剪贴板条目超过 256 上限')
+    if (files.length > 256) throw new ZToolsError(errorCodes.responseTooLarge, 'File clipboard entries exceed the 256 limit')
     let bytes = 0
     for (const item of files) {
       if (item.length === 0 || item.length > 32 * 1024 || item.includes('\0')) {
-        throw new ZToolsError(errorCodes.clipboardError, '文件剪贴板包含无效路径')
+        throw new ZToolsError(errorCodes.clipboardError, 'File clipboard contains an invalid path')
       }
       bytes += Buffer.byteLength(item, 'utf8')
     }
-    if (bytes > 128 * 1024) throw new ZToolsError(errorCodes.responseTooLarge, '文件剪贴板路径超过大小上限')
+    if (bytes > 128 * 1024) throw new ZToolsError(errorCodes.responseTooLarge, 'File clipboard paths exceed the size limit')
     return files
   }
 }

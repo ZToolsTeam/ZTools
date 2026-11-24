@@ -284,7 +284,7 @@ test('config persistence failure rolls back the OS state; failed rollback report
   brokenLoginItems.failSet(false)
   await assert.rejects(
     brokenService.set('user_settings.json', 'system.autostart', 'true', true),
-    (error) => error instanceof ZToolsError && error.code === errorCodes.fileWriteOutcomeUnknown && /状态不一致/.test(error.message)
+    (error) => error instanceof ZToolsError && error.code === errorCodes.fileWriteOutcomeUnknown && /inconsistent/i.test(error.message)
   )
 })
 
@@ -296,13 +296,13 @@ test('OS failure prevents config success, status is read-only, and malformed boo
 
   await assert.rejects(config.set('user_settings.json', 'system.autostart', 'true', true), /injected login-item failure/)
   assert.equal(fakeConfig.calls.some(call => call.method === 'set'), false)
-  await assert.rejects(config.set('user_settings.json', 'system.autostart', '1', true), /必须是布尔值/)
-  await assert.rejects(config.set('user_settings.json', 'system.autostartStatus', 'enabled', true), /只允许读取/)
+  await assert.rejects(config.set('user_settings.json', 'system.autostart', '1', true), /must be a boolean/)
+  await assert.rejects(config.set('user_settings.json', 'system.autostartStatus', 'enabled', true), /read-only/)
   await assert.rejects(
     config.set('user_settings.json', 'system', JSON.stringify({ autostartStatus: 'enabled' }), true),
-    /只允许读取/
+    /read-only/
   )
-  await assert.rejects(config.set('user_settings.json', 'system.autostart.nested', 'true', true), /不能包含子路径/)
+  await assert.rejects(config.set('user_settings.json', 'system.autostart.nested', 'true', true), /cannot contain child paths/)
 })
 
 test('without a packaged-macOS adapter the wrapper preserves the original config flow', async () => {

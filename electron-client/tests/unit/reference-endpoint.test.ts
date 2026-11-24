@@ -200,7 +200,7 @@ test('maintained preload to Main endpoint cancellation is owner-bound and return
   const cancelled = await bridge.cancellations.filesystem_write_file!({ messageId: 'write', reason: 'cancel' })
   assert.deepEqual(cancelled, { messageId: 'write', success: true, data: { success: true, requested: true } })
   finish()
-  assert.deepEqual(await pending, { messageId: 'write', success: false, error: { code: 'FILE_WRITE_OUTCOME_UNKNOWN', message: '文件请求取消后写入结果未确认' } })
+  assert.deepEqual(await pending, { messageId: 'write', success: false, error: { code: 'FILE_WRITE_OUTCOME_UNKNOWN', message: 'Write outcome after file request cancellation could not be confirmed' } })
   assert.equal(disposed, 1)
   await f.tracker.stop()
 })

@@ -33,7 +33,7 @@ export class PluginShortcutService {
 
   async create(pluginId: string): Promise<{ success: true; pluginId: string; shortcutPath: string }> {
     if (this.platform !== 'win32') {
-      throw new ZToolsError(errorCodes.notSupported, '当前平台不支持桌面快捷方式')
+      throw new ZToolsError(errorCodes.notSupported, 'Desktop shortcuts are not supported on this platform')
     }
     return this.manifests.withPluginDirectory(pluginId, async (manifest, pluginRoot) => {
       const shortcutPath = path.join(this.desktopPath, `${shortcutName(manifest)}.lnk`)
@@ -47,7 +47,7 @@ export class PluginShortcutService {
         ...(await ordinaryFile(iconPath) ? { icon: iconPath, iconIndex: 0 } : {})
       }
       if (!this.writeShortcut(shortcutPath, options)) {
-        throw new ZToolsError(errorCodes.storageError, '创建插件桌面快捷方式失败')
+        throw new ZToolsError(errorCodes.storageError, 'Failed to create plugin desktop shortcut')
       }
       return { success: true, pluginId: manifest.id, shortcutPath }
     })
@@ -55,7 +55,7 @@ export class PluginShortcutService {
 
   async remove(pluginId: string): Promise<{ success: true; pluginId: string; shortcutPath: string; removed: boolean }> {
     if (this.platform !== 'win32') {
-      throw new ZToolsError(errorCodes.notSupported, '当前平台不支持桌面快捷方式')
+      throw new ZToolsError(errorCodes.notSupported, 'Desktop shortcuts are not supported on this platform')
     }
     return this.manifests.withPluginDirectory(pluginId, async (manifest) => {
       const shortcutPath = path.join(this.desktopPath, `${shortcutName(manifest)}.lnk`)
@@ -90,11 +90,11 @@ export class PluginShortcutService {
 async function removeShortcutFile(shortcutPath: string): Promise<boolean> {
   const stats = await fs.lstat(shortcutPath).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    throw new ZToolsError(errorCodes.storageError, '读取插件桌面快捷方式失败')
+    throw new ZToolsError(errorCodes.storageError, 'Failed to read plugin desktop shortcut')
   })
   if (stats === undefined) return false
   if (!stats.isFile() || stats.isSymbolicLink()) {
-    throw new ZToolsError(errorCodes.permissionDenied, '插件桌面快捷方式不是普通文件')
+    throw new ZToolsError(errorCodes.permissionDenied, 'Plugin desktop shortcut is not a regular file')
   }
   await fs.rm(shortcutPath)
   return true

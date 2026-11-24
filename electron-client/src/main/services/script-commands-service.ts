@@ -5,6 +5,7 @@ import fsPromises from 'node:fs/promises'
 import path from 'node:path'
 import type { HudService, HudMessagePayload } from './hud-service.js'
 import type { FrecencyRankingService } from './frecency-ranking-service.js'
+import { t } from '../i18n/index.js'
 
 export const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000
 export const TRUST_STORE_FILE = 'script_commands_trust.json'
@@ -243,7 +244,7 @@ export function parseScriptMetadata(
   logger?: (level: 'INFO' | 'WARN' | 'ERROR', message: string, details?: unknown) => void
 ): ScriptMetadata | null {
   if (typeof content !== 'string' || content.length === 0) {
-    logger?.('WARN', '脚本内容为空，已跳过', { filePath })
+    logger?.('WARN', 'Script content is empty; skipped', { filePath })
     return null
   }
 
@@ -274,26 +275,26 @@ export function parseScriptMetadata(
   // 1. 验证 schemaVersion (必须为正整数)
   const rawSchemaVersion = headers.schemaversion
   if (!rawSchemaVersion) {
-    logger?.('WARN', '脚本缺少 @raycast.schemaVersion 字段，已跳过', { filePath })
+    logger?.('WARN', 'Script is missing @raycast.schemaVersion; skipped', { filePath })
     return null
   }
   const schemaVersion = parseInt(rawSchemaVersion, 10)
   if (!Number.isInteger(schemaVersion) || schemaVersion <= 0) {
-    logger?.('WARN', '脚本 @raycast.schemaVersion 格式不正确，必须为正整数，已跳过', { filePath, rawSchemaVersion })
+    logger?.('WARN', 'Invalid @raycast.schemaVersion; must be a positive integer, skipped', { filePath, rawSchemaVersion })
     return null
   }
 
   // 2. 验证 title (必须非空)
   const title = (headers.title || '').trim()
   if (!title) {
-    logger?.('WARN', '脚本缺少 @raycast.title 字段，已跳过', { filePath })
+    logger?.('WARN', 'Script is missing @raycast.title; skipped', { filePath })
     return null
   }
 
   // 3. 验证 mode (必须为 fullOutput, compact, silent, inline 之一)
   const rawMode = headers.mode
   if (!rawMode || !VALID_MODES.has(rawMode as ScriptMode)) {
-    logger?.('WARN', '脚本 @raycast.mode 必须为 fullOutput, compact, silent, inline 之一，已跳过', { filePath, rawMode })
+    logger?.('WARN', 'Invalid @raycast.mode; must be one of fullOutput, compact, silent, inline, skipped', { filePath, rawMode })
     return null
   }
   const mode = rawMode as ScriptMode
@@ -320,7 +321,9 @@ export function parseScriptMetadata(
       scriptArgs.push({
         name: argKey,
         type: parsedArg.type === 'password' ? 'password' : parsedArg.type === 'dropdown' ? 'dropdown' : 'text',
-        placeholder: typeof parsedArg.placeholder === 'string' ? parsedArg.placeholder : `参数 ${i}`,
+        placeholder: typeof parsedArg.placeholder === 'string'
+          ? parsedArg.placeholder
+          : t('scriptCommands.argPlaceholder', { index: i }),
         optional: Boolean(parsedArg.optional),
         percentEncoded: Boolean(parsedArg.percentEncoded),
         ...(Array.isArray(parsedArg.data) ? { data: parsedArg.data } : {})
@@ -423,7 +426,7 @@ export function resolveScriptInterpreter(
       }
     }
     default:
-      throw new Error(`不支持的脚本格式: ${ext}`)
+      throw new Error(t('scriptCommands.error.unsupportedFormat', { ext }))
   }
 }
 
@@ -615,31 +618,31 @@ export function createDetailViewDescriptor(
     metadataChildren.push({
       $$typeof: VIEW_DESCRIPTOR_SYMBOL,
       type: 'Detail.Metadata.Label',
-      props: { title: '状态', text: meta.status },
+      props: { title: t('scriptCommands.meta.status'), text: meta.status },
       children: []
     })
     metadataChildren.push({
       $$typeof: VIEW_DESCRIPTOR_SYMBOL,
       type: 'Detail.Metadata.Label',
-      props: { title: '执行耗时', text: meta.duration },
+      props: { title: t('scriptCommands.meta.duration'), text: meta.duration },
       children: []
     })
     metadataChildren.push({
       $$typeof: VIEW_DESCRIPTOR_SYMBOL,
       type: 'Detail.Metadata.Label',
-      props: { title: '退出码', text: String(meta.exitCode) },
+      props: { title: t('scriptCommands.meta.exitCode'), text: String(meta.exitCode) },
       children: []
     })
     metadataChildren.push({
       $$typeof: VIEW_DESCRIPTOR_SYMBOL,
       type: 'Detail.Metadata.Label',
-      props: { title: '脚本路径', text: meta.scriptPath },
+      props: { title: t('scriptCommands.meta.scriptPath'), text: meta.scriptPath },
       children: []
     })
     metadataChildren.push({
       $$typeof: VIEW_DESCRIPTOR_SYMBOL,
       type: 'Detail.Metadata.Label',
-      props: { title: '解释器', text: meta.interpreter },
+      props: { title: t('scriptCommands.meta.interpreter'), text: meta.interpreter },
       children: []
     })
   }
@@ -657,7 +660,7 @@ export function createDetailViewDescriptor(
       $$typeof: VIEW_DESCRIPTOR_SYMBOL,
       type: 'Action.CopyToClipboard',
       props: {
-        title: '复制脚本输出 (Copy Output)',
+        title: t('scriptCommands.action.copyOutput'),
         content: meta.plainOutput
       },
       children: []
@@ -670,7 +673,7 @@ export function createDetailViewDescriptor(
         $$typeof: VIEW_DESCRIPTOR_SYMBOL,
         type: 'Action.OpenInBrowser',
         props: {
-          title: `打开链接: ${url}`,
+          title: t('scriptCommands.action.openUrl', { url }),
           url
         },
         children: []
@@ -692,7 +695,7 @@ export function createDetailViewDescriptor(
     $$typeof: VIEW_DESCRIPTOR_SYMBOL,
     type: 'Detail',
     props: {
-      navigationTitle: `${title} - 执行结果`,
+      navigationTitle: t('scriptCommands.detail.navigationTitle', { title }),
       markdown,
       metadata: detailMetadata,
       ...(actionPanel ? { actions: actionPanel } : {}),
@@ -760,7 +763,7 @@ export class ScriptCommandsService {
     try {
       await fsPromises.mkdir(this.#scriptsDir, { recursive: true })
     } catch (err) {
-      this.#logger('ERROR', '创建脚本目录失败', { scriptsDir: this.#scriptsDir, error: err })
+      this.#logger('ERROR', 'Failed to create scripts directory', { scriptsDir: this.#scriptsDir, error: err })
     }
 
     await this.scanScripts()
@@ -971,7 +974,7 @@ export class ScriptCommandsService {
 
           results.push(command)
         } catch (err) {
-          this.#logger('WARN', '读取脚本文件失败，已跳过', { filePath, error: err })
+          this.#logger('WARN', 'Failed to read script file; skipped', { filePath, error: err })
         }
       }
 
@@ -983,7 +986,7 @@ export class ScriptCommandsService {
       this.#onScriptsUpdated?.(results)
       return results
     } catch (err) {
-      this.#logger('ERROR', '扫描脚本目录失败', { scriptsDir: this.#scriptsDir, error: err })
+      this.#logger('ERROR', 'Failed to scan scripts directory', { scriptsDir: this.#scriptsDir, error: err })
       return []
     }
   }
@@ -1012,7 +1015,7 @@ export class ScriptCommandsService {
         }
       }
     } catch (err) {
-      this.#logger('WARN', '读取子目录失败', { dir, error: err })
+      this.#logger('WARN', 'Failed to read scripts subdirectory', { dir, error: err })
     }
 
     return results
@@ -1036,10 +1039,10 @@ export class ScriptCommandsService {
         }, 150)
       })
       this.#watcher.on('error', (err) => {
-        this.#logger('WARN', '脚本目录监听器发生异常', { error: err })
+        this.#logger('WARN', 'Scripts directory watcher encountered an error', { error: err })
       })
     } catch (err) {
-      this.#logger('WARN', '创建脚本目录监听器失败', { scriptsDir: this.#scriptsDir, error: err })
+      this.#logger('WARN', 'Failed to create scripts directory watcher', { scriptsDir: this.#scriptsDir, error: err })
     }
   }
 
@@ -1213,7 +1216,7 @@ export class ScriptCommandsService {
             output: '',
             durationMs: 0,
             timedOut: false,
-            error: '无效或缺少必要头部字段的脚本'
+            error: t('scriptCommands.error.invalidHeader')
           }
         }
         command = {
@@ -1240,7 +1243,7 @@ export class ScriptCommandsService {
           output: '',
           durationMs: 0,
           timedOut: false,
-          error: `无法读取脚本文件: ${err instanceof Error ? err.message : String(err)}`
+          error: t('scriptCommands.error.readFailed', { detail: err instanceof Error ? err.message : String(err) })
         }
       }
     }
@@ -1265,7 +1268,7 @@ export class ScriptCommandsService {
         output: '',
         durationMs: 0,
         timedOut: false,
-        error: `计算脚本哈希失败: ${err instanceof Error ? err.message : String(err)}`
+        error: t('scriptCommands.error.hashFailed', { detail: err instanceof Error ? err.message : String(err) })
       }
     }
 
@@ -1279,7 +1282,7 @@ export class ScriptCommandsService {
         const summaryLines = fileContent.split(/\r?\n/).slice(0, 15).join('\n')
         codeSummary = summaryLines.slice(0, 500)
       } catch {
-        codeSummary = '(无法读取代码摘要)'
+        codeSummary = t('scriptCommands.codeSummaryUnavailable')
       }
 
       // 获取执行命令预览
@@ -1323,7 +1326,7 @@ export class ScriptCommandsService {
           durationMs: Date.now() - startTime,
           timedOut: false,
           cancelled: true,
-          error: '用户取消执行未受信任的脚本'
+          error: t('scriptCommands.error.untrustedCancelled')
         }
       }
 
@@ -1463,19 +1466,27 @@ export class ScriptCommandsService {
 
     // 8. 处理四种输出模式 (fullOutput, compact, silent, inline)
     if (command.mode === 'fullOutput') {
-      const statusText = timedOut ? '超时 (已终止)' : isSuccess ? '成功' : '失败'
+      const statusText = timedOut
+        ? t('scriptCommands.status.timedOut')
+        : isSuccess
+          ? t('scriptCommands.status.success')
+          : t('scriptCommands.status.failed')
       const cleanStdout = stripAnsiCodes(stdout).trim()
       const cleanStderr = stripAnsiCodes(stderr).trim()
       const markdownContent = [
         `# ${command.title}`,
         '',
-        `> **包名**：${command.packageName} | **模式**：fullOutput | **状态**：${statusText} | **耗时**：${durationMs}ms`,
+        t('scriptCommands.detail.summaryLine', {
+          packageName: command.packageName,
+          status: statusText,
+          durationMs
+        }),
         '',
-        '### 标准输出',
+        t('scriptCommands.detail.stdoutHeading'),
         '```bash',
-        cleanStdout || '(无标准输出)',
+        cleanStdout || t('scriptCommands.detail.noStdout'),
         '```',
-        ...(cleanStderr ? ['', '### 错误输出', '```bash', cleanStderr, '```'] : [])
+        ...(cleanStderr ? ['', t('scriptCommands.detail.stderrHeading'), '```bash', cleanStderr, '```'] : [])
       ].join('\n')
 
       viewDescriptor = createDetailViewDescriptor(command.title, markdownContent, {
@@ -1489,7 +1500,7 @@ export class ScriptCommandsService {
         extractedUrls
       })
     } else if (command.mode === 'compact') {
-      const message = lastLine || (isSuccess ? '执行完成' : '执行失败')
+      const message = lastLine || (isSuccess ? t('scriptCommands.hud.completed') : t('scriptCommands.hud.failed'))
       if (this.#hudService) {
         hudPayload = await this.#hudService.showHUD(message, {
           icon: isSuccess ? '✓' : 'x'
@@ -1498,10 +1509,10 @@ export class ScriptCommandsService {
     } else if (command.mode === 'silent') {
       if (!isSuccess) {
         const errorMsg = timedOut
-          ? `脚本超时 (${timeoutMs}ms)`
-          : execResult.error?.message || lastLine || '执行失败'
+          ? t('scriptCommands.error.scriptTimeoutShort', { timeoutMs })
+          : execResult.error?.message || lastLine || t('scriptCommands.hud.failed')
         if (this.#hudService) {
-          hudPayload = await this.#hudService.showHUD(`执行失败: ${errorMsg}`, {
+          hudPayload = await this.#hudService.showHUD(t('scriptCommands.hud.failedWithDetail', { detail: errorMsg }), {
             icon: 'error'
           })
         }
@@ -1523,11 +1534,11 @@ export class ScriptCommandsService {
 
     let errorString: string | undefined
     if (timedOut) {
-      errorString = `脚本执行超时 (${timeoutMs}ms)，子进程树已被完全终结`
+      errorString = t('scriptCommands.error.scriptTimeoutFull', { timeoutMs })
     } else if (execResult.error) {
       errorString = execResult.error.message
     } else if (execResult.exitCode !== 0 && execResult.exitCode !== null) {
-      errorString = `进程退出码非零: ${execResult.exitCode}`
+      errorString = t('scriptCommands.error.nonZeroExitCode', { exitCode: execResult.exitCode })
     }
 
     return {
@@ -1561,7 +1572,7 @@ export class ScriptCommandsService {
   }): Promise<{ success: boolean; scriptPath: string; command?: ScriptCommand | undefined }> {
     const cleanTitle = String(params.title ?? '').trim()
     if (!cleanTitle) {
-      throw new Error('脚本命令标题不能为空')
+      throw new Error(t('scriptCommands.error.emptyTitle'))
     }
 
     const mode: ScriptMode = params.mode && VALID_MODES.has(params.mode) ? params.mode : 'compact'

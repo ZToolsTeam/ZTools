@@ -100,13 +100,13 @@ test('validates a selected canonical app bundle and its Info.plist executable id
 
 test('rejects noncanonical app paths and symlinked bundle members', async () => {
   const alias = createFixture({ selectedRealPath: '/Applications/Target.app' })
-  await assert.rejects(alias.inspect('/Applications/CaseSensitive.app'), /符号链接/)
+  await assert.rejects(alias.inspect('/Applications/CaseSensitive.app'), /symbolic links/)
 
   const linkedInfo = createFixture({ infoRealPath: '/Applications/Elsewhere/Info.plist' })
-  await assert.rejects(linkedInfo.inspect('/Applications/CaseSensitive.app'), /符号链接/)
+  await assert.rejects(linkedInfo.inspect('/Applications/CaseSensitive.app'), /Symbolic links/)
 
   const linkedExecutable = createFixture({ executableRealPath: '/Applications/Other/Executable' })
-  await assert.rejects(linkedExecutable.inspect('/Applications/CaseSensitive.app'), /符号链接/)
+  await assert.rejects(linkedExecutable.inspect('/Applications/CaseSensitive.app'), /Symbolic links/)
 })
 
 test('requires a bounded plist, valid identity, ordinary executable file, and execute permission', async () => {
@@ -118,21 +118,21 @@ test('requires a bounded plist, valid identity, ordinary executable file, and ex
     CFBundleIdentifier: '../invalid',
     CFBundleExecutable: 'CaseSensitive'
   } })
-  await assert.rejects(invalidBundleId.inspect('/Applications/CaseSensitive.app'), /身份/)
+  await assert.rejects(invalidBundleId.inspect('/Applications/CaseSensitive.app'), /identity/)
 
   const invalidExecutableName = createFixture({ metadata: {
     CFBundlePackageType: 'APPL',
     CFBundleIdentifier: 'com.example.CaseSensitive',
     CFBundleExecutable: '../CaseSensitive'
   } })
-  await assert.rejects(invalidExecutableName.inspect('/Applications/CaseSensitive.app'), /身份/)
+  await assert.rejects(invalidExecutableName.inspect('/Applications/CaseSensitive.app'), /identity/)
 
   const nonApplicationPackage = createFixture({ metadata: {
     CFBundlePackageType: 'BNDL',
     CFBundleIdentifier: 'com.example.CaseSensitive',
     CFBundleExecutable: 'CaseSensitive'
   } })
-  await assert.rejects(nonApplicationPackage.inspect('/Applications/CaseSensitive.app'), /身份/)
+  await assert.rejects(nonApplicationPackage.inspect('/Applications/CaseSensitive.app'), /identity/)
 
   const nonFileExecutable = createFixture({ executableKind: 'directory' })
   await assert.rejects(nonFileExecutable.inspect('/Applications/CaseSensitive.app'))
@@ -143,9 +143,9 @@ test('requires a bounded plist, valid identity, ordinary executable file, and ex
 
 test('rejects relative, NUL-containing, and oversized paths before filesystem access', async () => {
   const fixture = createFixture()
-  await assert.rejects(fixture.inspect('Applications/CaseSensitive.app'), /路径无效/)
-  await assert.rejects(fixture.inspect('/Applications/CaseSensitive.app\0'), /路径无效/)
-  await assert.rejects(fixture.inspect(`/${'a'.repeat(32 * 1024)}.app`), /路径无效/)
+  await assert.rejects(fixture.inspect('Applications/CaseSensitive.app'), /Invalid macOS application path/)
+  await assert.rejects(fixture.inspect('/Applications/CaseSensitive.app\0'), /Invalid macOS application path/)
+  await assert.rejects(fixture.inspect(`/${'a'.repeat(32 * 1024)}.app`), /Invalid macOS application path/)
 })
 
 test('does not invoke the plist reader when inspection is pre-cancelled', async () => {

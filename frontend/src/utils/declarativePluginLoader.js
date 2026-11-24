@@ -19,6 +19,11 @@ import { createScopedHostBridge, createScopedWindow, getPluginSessionHolder } fr
 import { createPluginHostApis } from '../declarative/pluginSecureStorage.js'
 import { ensureHostBridge } from '../declarative/hostClipboardBridge.js'
 import { t } from '@/i18n'
+import {
+  getLocalizedFeatureExplain,
+  getLocalizedPluginDescription,
+  getLocalizedPluginName
+} from './pluginI18n.js'
 
 export const V2_CATALOG_CDN_URL = 'https://cdn.ztools.cn/plugins-v2/catalog.json'
 
@@ -814,18 +819,24 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     : 'icon.svg'
 
   const effectiveMode = matchedFeature?.mode || manifest.mode || 'view'
-  // 标题用插件名称；命令说明（explain）是一整句话，放进标题会挤掉返回按钮，只作为提示保留
-  const effectiveTitle = manifest.name || pid
-  const featureExplain = typeof matchedFeature?.explain === 'string' ? matchedFeature.explain : ''
 
   const loadedPlugin = {
     id: manifest.id || pid,
     pluginId: manifest.id || pid,
     featureCode: requestedFeatureCode || '',
-    name: effectiveTitle,
-    title: effectiveTitle,
-    featureExplain,
-    description: manifest.description || '',
+    // 动态按当前生效 locale 解析名称/说明/简介，避免命中模块缓存后切语冻结
+    get name() {
+      return getLocalizedPluginName(manifest) || pid
+    },
+    get title() {
+      return getLocalizedPluginName(manifest) || pid
+    },
+    get featureExplain() {
+      return matchedFeature ? getLocalizedFeatureExplain(manifest, matchedFeature) : ''
+    },
+    get description() {
+      return getLocalizedPluginDescription(manifest)
+    },
     version: manifest.version || '1.0.0',
     ...(typeof manifest.defaultLocale === 'string' && manifest.defaultLocale ? { defaultLocale: manifest.defaultLocale } : {}),
     ...(manifest.i18n && typeof manifest.i18n === 'object' ? { i18n: manifest.i18n } : {}),
@@ -835,6 +846,7 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     mode: effectiveMode,
     alias: matchedFeature?.alias || manifest.alias || '',
     features: Array.isArray(manifest.features) ? manifest.features : [],
+    feature: matchedFeature || null,
     isDeclarative: true,
     isInstalledDeclarative: true,
     command: wrappedRootCommand,

@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { tAiMcp } from '../i18n.js';
 
 export interface SearchFilesArgs {
   query: string;
@@ -8,6 +9,7 @@ export interface SearchFilesArgs {
   fileTypes?: string[];
   caseSensitive?: boolean;
   contentMatch?: boolean;
+  locale?: string;
 }
 
 export interface MatchedFileInfo {
@@ -27,10 +29,11 @@ export interface SearchFilesResult {
   files: MatchedFileInfo[];
 }
 
-export async function searchFiles(args: SearchFilesArgs): Promise<SearchFilesResult> {
+export async function searchFiles(args: SearchFilesArgs, locale?: string): Promise<SearchFilesResult> {
+  const effectiveLocale = locale ?? args.locale;
   const query = args.query.trim();
   if (!query) {
-    throw new Error('Search query cannot be empty');
+    throw new Error(tAiMcp('tools.searchFiles.emptyQuery', undefined, effectiveLocale));
   }
 
   const baseDir = path.resolve(args.directory || process.cwd());
@@ -40,7 +43,7 @@ export async function searchFiles(args: SearchFilesArgs): Promise<SearchFilesRes
   const contentMatch = !!args.contentMatch;
 
   if (!fs.existsSync(baseDir)) {
-    throw new Error(`Directory does not exist: "${baseDir}"`);
+    throw new Error(tAiMcp('tools.searchFiles.directoryNotFound', { directory: baseDir }, effectiveLocale));
   }
 
   const matches: MatchedFileInfo[] = [];

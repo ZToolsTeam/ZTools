@@ -181,7 +181,7 @@ function boxScore(pred: Float32Array, width: number, height: number, box: TextBo
  * 返回检测图坐标系下的文字框。
  */
 export function detectionBoxes(pred: Float32Array, width: number, height: number): TextBox[] {
-  if (pred.length !== width * height) throw new Error('检测模型输出尺寸与输入不一致')
+  if (pred.length !== width * height) throw new Error('Detection model output size does not match input')
   const label = new Uint8Array(width * height)
   const boxes: TextBox[] = []
   const stack: number[] = []
@@ -318,7 +318,7 @@ export function arrangeLines(lines: readonly RecognizedLine[]): string[] {
 
 /** 完整识别一张图片，返回按阅读顺序排好的文字行 */
 export async function recognizeText(image: BgraImage, runner: OcrModelRunner, dictionary: readonly string[]): Promise<string[]> {
-  if (image.width < 1 || image.height < 1 || image.data.length < image.width * image.height * 4) throw new Error('图片像素数据无效')
+  if (image.width < 1 || image.height < 1 || image.data.length < image.width * image.height * 4) throw new Error('Invalid image pixel data')
   const size = detectionSize(image.width, image.height)
   const pred = await runner.detect(detectionInput(image, size.width, size.height), size.height, size.width)
   const boxes = detectionBoxes(pred, size.width, size.height)
@@ -340,7 +340,7 @@ export async function recognizeText(image: BgraImage, runner: OcrModelRunner, di
       }
     })
     const output = await runner.recognize(batch, group.length, REC_HEIGHT, width)
-    if (output.classes !== dictionary.length + 2) throw new Error('识别模型与字典不匹配')
+    if (output.classes !== dictionary.length + 2) throw new Error('Recognition model does not match character dictionary')
     const stride = output.steps * output.classes
     group.forEach((item, n) => {
       const { text, score } = ctcDecode(output.data.subarray(n * stride, (n + 1) * stride), output.steps, output.classes, dictionary)

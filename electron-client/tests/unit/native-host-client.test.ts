@@ -12,6 +12,7 @@ import type {
 import { PassThrough } from 'node:stream'
 import test from 'node:test'
 import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
+import { getLocaleSetting, setLocale, ZTOOLS_LOCALE_ENV_KEY } from '../../src/main/i18n/index.js'
 import type { NativeDllInvocationContext } from '../../src/main/native-host/dll-client-port.js'
 import {
   NativeHostClient,
@@ -680,6 +681,39 @@ test('configureKeyboardDoubleTap 与 configureMouseTrigger 发送 2/6 字节全�
   } finally {
     disposeListener()
     if (client.state !== 'closed') await client.stop(1000)
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('NativeHostClient forwards current resolved ZTOOLS_LOCALE in spawned child environment', async () => {
+  const previousLocale = getLocaleSetting()
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-native-host-locale-'))
+  const executable = path.join(root, 'ZToolsNativeHost32.exe')
+  await fs.writeFile(executable, 'placeholder')
+  const capturedLocales: Array<string | undefined> = []
+
+  const launchAndCapture = async (): Promise<void> => {
+    const client = new NativeHostClient(executable, {
+      spawnProcess: (_cmd, _args, options) => {
+        capturedLocales.push(options.env?.[ZTOOLS_LOCALE_ENV_KEY])
+        return createFakeHostProcess(options, true).child
+      }
+    })
+    try {
+      await client.start(1000)
+    } finally {
+      if (client.state !== 'closed') await client.stop(1000)
+    }
+  }
+
+  try {
+    setLocale('en-US', 'zh-CN')
+    await launchAndCapture()
+    setLocale('zh-CN', 'en-US')
+    await launchAndCapture()
+    assert.deepEqual(capturedLocales, ['en-US', 'zh-CN'])
+  } finally {
+    setLocale(previousLocale, 'zh-CN')
     await fs.rm(root, { recursive: true, force: true })
   }
 })

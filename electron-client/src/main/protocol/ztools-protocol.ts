@@ -52,7 +52,7 @@ function requireLocalUrl(requestUrl: string, host: string): URL {
     url.password !== '' ||
     url.port !== ''
   ) {
-    throw new Error('本地资源 URL 无效')
+    throw new Error('Invalid local resource URL')
   }
   return url
 }
@@ -62,7 +62,7 @@ function stripFirstPathSegment(encodedPath: string, expected: string): string {
   const encodedFirst = segments[0] === '' ? segments[1] : segments[0]
   const remainderIndex = segments[0] === '' ? 2 : 1
   if (!encodedFirst || decodeURIComponent(encodedFirst) !== expected) {
-    throw new Error('资源不属于当前作用域')
+    throw new Error('Resource does not belong to the current scope')
   }
   return `/${segments.slice(remainderIndex).join('/')}`
 }

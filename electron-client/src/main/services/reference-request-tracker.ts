@@ -9,9 +9,9 @@ const allowed = new Set<string>(REFERENCE_METHODS)
 const dialogs = new Set(['window_show_open_dialog', 'window_show_save_dialog', 'window_show_select_folder_dialog'])
 const referenceProducers = new Set([...dialogs, 'filesystem_derive_read', 'filesystem_derive_save', 'filesystem_derive_directory',
   'filesystem_write_file', 'filesystem_write_cache', 'clipboard_read_files', 'clipboard_read_image', 'screen_capture', 'screen_capture_region'])
-const denied = () => new ZToolsError(errorCodes.permissionDenied, '文件请求无效或超过上限')
-const incomplete = () => new ZToolsError(errorCodes.fileError, '文件请求停止未确认')
-const unknown = () => new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '文件请求取消后写入结果未确认')
+const denied = () => new ZToolsError(errorCodes.permissionDenied, 'File request is invalid or exceeds limit')
+const incomplete = () => new ZToolsError(errorCodes.fileError, 'File request stop could not be confirmed')
+const unknown = () => new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Write outcome after file request cancellation could not be confirmed')
 interface Pending {
   method: string
   controller: AbortController
@@ -163,8 +163,8 @@ export class ReferenceRequestTracker {
     }
   }
   #cancelError(reason: unknown): ZToolsError {
-    if (reason === errorCodes.requestTimeout) return new ZToolsError(errorCodes.requestTimeout, '文件请求超时')
-    if (reason === errorCodes.appStopping) return new ZToolsError(errorCodes.appStopping, '应用正在退出')
-    return new ZToolsError(errorCodes.callerDestroyed, '文件请求已取消或调用窗口已关闭')
+    if (reason === errorCodes.requestTimeout) return new ZToolsError(errorCodes.requestTimeout, 'File request timed out')
+    if (reason === errorCodes.appStopping) return new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
+    return new ZToolsError(errorCodes.callerDestroyed, 'File request cancelled or caller window closed')
   }
 }

@@ -24,8 +24,8 @@ export class MarkdownDocumentService {
     try {
       signal.throwIfAborted()
       const stat = await handle.stat()
-      if (!stat.isFile()) throw new Error('只能读取普通 Markdown 文件')
-      if (stat.size > MAX_MARKDOWN_BYTES) throw new Error('Markdown 文件超过 256 KiB，请拆分后导入')
+      if (!stat.isFile()) throw new Error('Only regular Markdown files can be read')
+      if (stat.size > MAX_MARKDOWN_BYTES) throw new Error('Markdown file exceeds 256 KiB; split it before importing')
       const bytes = Buffer.alloc(MAX_MARKDOWN_BYTES + 1)
       let length = 0
       while (length < bytes.length) {
@@ -35,7 +35,7 @@ export class MarkdownDocumentService {
         if (!bytesRead) break
         length += bytesRead
       }
-      if (length > MAX_MARKDOWN_BYTES) throw new Error('Markdown 文件超过 256 KiB，请拆分后导入')
+      if (length > MAX_MARKDOWN_BYTES) throw new Error('Markdown file exceeds 256 KiB; split it before importing')
       return new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length))
     } finally { await handle.close() }
   }
@@ -47,9 +47,9 @@ export class MarkdownDocumentService {
       if (matched) { pending.controller.abort(); await pending.done }
       return { success: true as const, cancelRequested: matched }
     }
-    if (this.#pending.has(key) || this.#pending.size >= 2) throw new ZToolsError(errorCodes.invalidRequest, '已有文档正在处理，请稍候')
+    if (this.#pending.has(key) || this.#pending.size >= 2) throw new ZToolsError(errorCodes.invalidRequest, 'Another document operation is already in progress; please wait')
     const controller = new AbortController(), activeSignal = AbortSignal.any([signal, controller.signal])
-    const active = () => { activeSignal.throwIfAborted(); if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, '文档服务已停止') }
+    const active = () => { activeSignal.throwIfAborted(); if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'Document service has stopped') }
     let finish!: () => void
     const done = new Promise<void>(resolve => { finish = resolve })
     active(); this.#pending.set(key, { windowId: caller.webContentsId, operationId: p.operationId, controller, done })
@@ -72,15 +72,15 @@ export class MarkdownDocumentService {
       const bytes = await rendered.docx()
       active()
       const archive = await readZipArchive(bytes, activeSignal), summary = inspectOffice(archive.entries)
-      if (summary.type !== 'docx') throw new Error('生成的文档格式校验失败')
+      if (summary.type !== 'docx') throw new Error('Generated document format validation failed')
       active()
       const receipt = await this.files.writeFile({ path: p.outputPath!, content: bytes.toString('base64'), encoding: 'base64', overwrite: false }, caller, activeSignal, { replaceConfirmed: true })
-      if (receipt.success !== true || receipt.size !== bytes.length) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '保存结果未确认，请检查新文件')
+      if (receipt.success !== true || receipt.size !== bytes.length) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Save outcome could not be confirmed; check the output file')
       return { success: true as const, status: 'committed' as const, size: bytes.length, name: path.basename(p.outputPath!), summary: rendered.summary }
     } catch (error) {
       if (error instanceof ZToolsError) throw error
-      if (activeSignal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '文档处理已取消')
-      throw new ZToolsError(errorCodes.fileError, error instanceof Error ? error.message : '文档处理失败')
+      if (activeSignal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Document processing cancelled')
+      throw new ZToolsError(errorCodes.fileError, error instanceof Error ? error.message : 'Document processing failed')
     } finally { this.#pending.delete(key); finish() }
   }
 }

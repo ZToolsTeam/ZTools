@@ -18,11 +18,17 @@ import { ROUTES } from '@/router/routes'
 import { feedbackEntry, headerExtraComponents, useFeedbackIndicator } from '@edition'
 import { BrandGlyph } from '@/components/base'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
-import { CATEGORY_GLYPHS } from '@/utils/brandIcons'
+import { getCategoryGlyph } from '@/utils/brandIcons'
 import { shortcutLabel } from '@/utils/platform'
 import { OPEN_SETTINGS_SHORTCUT, SHELL_SHORTCUTS } from '@/utils/shellShortcuts'
 import { useAppI18n } from '@/i18n'
 import { getLocalizedCategoryName } from '@/utils/pluginI18n'
+import {
+  ALL_CATEGORY_ID,
+  isAllCategory,
+  normalizeCategoryRouteParam,
+  resolveCategoryKey
+} from '@/utils/pluginCategories'
 
 const { t } = useAppI18n()
 const route = useRoute()
@@ -46,25 +52,27 @@ const isMyActive = computed(() => {
   return route.name === 'my' || route.path === '/'
 })
 
-const isCategoryActive = (categoryName) => {
+const isCategoryActive = (categoryIdOrName) => {
+  const target = normalizeCategoryRouteParam(categoryIdOrName)
   if (nav.isInCategoryMode) {
-    const curCat = nav.currentCategory || ''
-    if (categoryName === '全部' || !categoryName) return !curCat
-    return curCat === categoryName
+    const curCat = normalizeCategoryRouteParam(nav.currentCategory || '')
+    if (!target) return !curCat
+    return curCat === target
   }
   if (route.name !== 'list') return false
-  const curCat = route.params.category || ''
-  if (categoryName === '全部' || !categoryName) return !curCat
-  return curCat === categoryName
+  const curCat = normalizeCategoryRouteParam(route.params.category || '')
+  if (!target) return !curCat
+  return curCat === target
 }
 
-const isMarketActive = computed(() => isCategoryActive('全部'))
+const isMarketActive = computed(() => isCategoryActive(ALL_CATEGORY_ID))
 
 // 插件市场下的具体分类：去掉「全部」（上方已有「插件市场」）；当前系统上没有插件的分类不显示
 const categoryItems = computed(() =>
-  (categoriesStore.sidebarCategories || []).filter(
-    (c) => c.name !== '全部' && pluginsStore.isCategoryVisible(c.name, isCategoryActive(c.name) ? c.name : '')
-  )
+  (categoriesStore.sidebarCategories || []).filter((c) => {
+    const key = resolveCategoryKey(c)
+    return !isAllCategory(key) && pluginsStore.isCategoryVisible(key, isCategoryActive(key) ? key : '')
+  })
 )
 
 const isFeedbackActive = computed(() => {
@@ -89,7 +97,7 @@ watch(
   () => [route.name, route.params?.category],
   ([name, cat]) => {
     if (name === 'list') {
-      nav.setCategory(cat || '')
+      nav.setCategory(normalizeCategoryRouteParam(cat || ''))
     } else if (name) {
       nav.setPage(name)
     }
@@ -105,14 +113,14 @@ const goMyPage = () => {
   router.push(ROUTES.HOME)
 }
 
-const selectCategory = (categoryName) => {
-  const category = categoryName === '全部' ? '' : categoryName
+const selectCategory = (categoryIdOrName) => {
+  const category = normalizeCategoryRouteParam(categoryIdOrName)
   nav.setCategory(category)
   router.push({ ...ROUTES.LIST, params: { category } })
 }
 
 const goMarket = () => {
-  selectCategory('全部')
+  selectCategory(ALL_CATEGORY_ID)
 }
 
 const goAdvancedSettings = () => {
@@ -254,7 +262,7 @@ const handleSidebarKeydown = (event) => {
             <div
               v-for="i in 4"
               :key="'skeleton-' + i"
-              class="sidebar-item sidebar-category-item"
+              class="sidebar-item"
               aria-hidden="true"
               style="opacity: 0.4"
             >
@@ -268,7 +276,7 @@ const handleSidebarKeydown = (event) => {
           </template>
           <template v-else-if="categoriesStore.error">
             <div
-              class="sidebar-item sidebar-category-item"
+              class="sidebar-item"
               role="button"
               tabindex="0"
               :aria-current="undefined"
@@ -284,19 +292,19 @@ const handleSidebarKeydown = (event) => {
           <template v-else>
             <div
               v-for="c in categoryItems"
-              :key="c.name"
-              class="sidebar-item sidebar-category-item"
+              :key="resolveCategoryKey(c)"
+              class="sidebar-item"
               role="button"
               tabindex="0"
-              :aria-current="isCategoryActive(c.name) ? 'page' : undefined"
-              :class="{ active: isCategoryActive(c.name) }"
-              :title="isCollapsed ? getLocalizedCategoryName(c.name) : undefined"
-              @click="selectCategory(c.name)"
-              @keydown.enter.prevent="selectCategory(c.name)"
-              @keydown.space.prevent="selectCategory(c.name)"
+              :aria-current="isCategoryActive(resolveCategoryKey(c)) ? 'page' : undefined"
+              :class="{ active: isCategoryActive(resolveCategoryKey(c)) }"
+              :title="isCollapsed ? getLocalizedCategoryName(resolveCategoryKey(c)) : undefined"
+              @click="selectCategory(resolveCategoryKey(c))"
+              @keydown.enter.prevent="selectCategory(resolveCategoryKey(c))"
+              @keydown.space.prevent="selectCategory(resolveCategoryKey(c))"
             >
-              <BrandGlyph :kind="CATEGORY_GLYPHS[c.name] || 'folder'" :size="16" />
-              <span v-if="!isCollapsed" class="sidebar-label truncate">{{ getLocalizedCategoryName(c.name) }}</span>
+              <BrandGlyph :kind="getCategoryGlyph(resolveCategoryKey(c))" :size="16" />
+              <span v-if="!isCollapsed" class="sidebar-label truncate">{{ getLocalizedCategoryName(resolveCategoryKey(c)) }}</span>
             </div>
           </template>
         </div>
@@ -421,18 +429,6 @@ const handleSidebarKeydown = (event) => {
   padding: 12px 8px;
 }
 
-/* 分类属于「插件市场」：图标缩进到上级文字的起点，形成明确的从属层级；
-   左侧选中标记仍与上级同列，保证整栏只有一条标记线 */
-.sidebar-category-item > svg:first-of-type,
-.sidebar-category-item > div:first-of-type {
-  margin-left: 26px;
-}
-
-.sidebar-root.is-collapsed .sidebar-category-item > svg:first-of-type,
-.sidebar-root.is-collapsed .sidebar-category-item > div:first-of-type {
-  margin-left: 0;
-}
-
 .sidebar-item {
   position: relative;
   height: 32px;
@@ -444,8 +440,7 @@ const handleSidebarKeydown = (event) => {
   box-shadow: inset 0 0 0 1.5px var(--rc-accent);
 }
 
-.sidebar-root.is-collapsed .sidebar-item,
-.sidebar-root.is-collapsed .sidebar-category-item {
+.sidebar-root.is-collapsed .sidebar-item {
   justify-content: center;
   padding: 0;
   gap: 0;

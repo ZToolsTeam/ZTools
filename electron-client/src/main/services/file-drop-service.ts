@@ -2,7 +2,8 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
-import { errorCodes, toPublicError, ZToolsError } from '../../contracts/errors.js'
+import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import { toLocalizedPublicError } from '../ipc/error-localizer.js'
 import { IPC_EVENT_CHANNEL } from '../../contracts/ipc.js'
 import type { WindowRegistry } from '../windows/window-registry.js'
 import type { ClipboardService } from './clipboard-service.js'
@@ -46,12 +47,12 @@ export class FileDropService {
       if ('overflowCount' in record) {
         const count = record.overflowCount
         if (!Number.isSafeInteger(count) || Number(count) <= MAX_FILES || Number(count) > 1_000_000) {
-          throw new ZToolsError(errorCodes.invalidRequest, '拖放文件数量无效')
+          throw new ZToolsError(errorCodes.invalidRequest, 'Invalid dropped file count')
         }
         return this.publish(
           caller,
           [],
-          [{ index: -1, code: errorCodes.fileTooLarge, message: '一次最多拖入100个文件' }],
+          [{ index: -1, code: errorCodes.fileTooLarge, message: 'At most 100 files can be dropped at once' }],
           Number(count),
           targetFieldId ? { targetFieldId } : undefined
         )
@@ -62,7 +63,7 @@ export class FileDropService {
     }
 
     if (!Array.isArray(rawPaths) || rawPaths.length === 0 || rawPaths.length > MAX_FILES) {
-      throw new ZToolsError(errorCodes.invalidRequest, '拖放文件数量须为1..100')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Dropped file count must be between 1 and 100')
     }
     return this.authorizeAndPublish(
       webContentsId,
@@ -105,7 +106,7 @@ export class FileDropService {
 
     if (source.kind === 'image') {
       if (typeof this.files.writeGeneratedCacheFile !== 'function') {
-        throw new ZToolsError(errorCodes.notSupported, '当前环境不支持写入剪贴板截图缓存')
+        throw new ZToolsError(errorCodes.notSupported, 'Writing clipboard image cache is not supported in this environment')
       }
       const generated = await this.files.writeGeneratedCacheFile(
         `clipboard/paste_${randomUUID()}.png`,
@@ -143,14 +144,14 @@ export class FileDropService {
       try {
         const candidate: unknown = candidates[index]
         if (typeof candidate !== 'string' || candidate.length === 0 || candidate.length > 4096 || /[\u0000\r\n"]/.test(candidate) || !path.isAbsolute(candidate)) {
-          throw new ZToolsError(errorCodes.invalidRequest, '拖放路径无效')
+          throw new ZToolsError(errorCodes.invalidRequest, 'Invalid dropped file path')
         }
         const target = path.resolve(candidate)
         // Reject a symlink/junction at any component rather than silently granting its destination.
         let cursor = target
         while (true) {
           const stats = await fs.lstat(cursor)
-          if (stats.isSymbolicLink()) throw new ZToolsError(errorCodes.permissionDenied, '拖放路径包含重解析链接')
+          if (stats.isSymbolicLink()) throw new ZToolsError(errorCodes.permissionDenied, 'Dropped path contains a symbolic link or reparse point')
           const parent = path.dirname(cursor)
           if (parent === cursor) break
           cursor = parent
@@ -162,11 +163,11 @@ export class FileDropService {
         if (!isAllowedType) {
           throw new ZToolsError(
             errorCodes.invalidRequest,
-            allowDirectories ? '拖放目标必须为普通文件或文件夹' : '拖放目标必须为普通文件'
+            allowDirectories ? 'Dropped target must be a regular file or directory' : 'Dropped target must be a regular file'
           )
         }
         if (stats.isFile() && (!Number.isSafeInteger(stats.size) || stats.size > MAX_FILE_BYTES || totalBytes + stats.size > MAX_TOTAL_BYTES)) {
-          throw new ZToolsError(errorCodes.fileTooLarge, '拖放文件超过大小上限')
+          throw new ZToolsError(errorCodes.fileTooLarge, 'Dropped file exceeds size limit')
         }
         this.requireCaller(webContentsId, caller)
         await this.files.grantOpenPath(real, caller)
@@ -176,7 +177,7 @@ export class FileDropService {
         else directories.push(real)
         accepted.push(real)
       } catch (error) {
-        const publicError = toPublicError(fileFailure(error))
+        const publicError = toLocalizedPublicError(fileFailure(error))
         errors.push({ index, ...publicError })
       }
     }
@@ -250,7 +251,7 @@ export class FileDropService {
       caller?.pluginInstanceId === expected.pluginInstanceId
     )
     if (!caller || (!isPluginCaller && !isMainCaller) || !matchesExpected) {
-      throw new ZToolsError(errorCodes.permissionDenied, '拖放调用者不是当前注册插件窗口')
+      throw new ZToolsError(errorCodes.permissionDenied, 'File drop caller is not a currently registered plugin window')
     }
     return caller
   }

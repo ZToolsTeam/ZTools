@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import fs from 'node:fs'
 import vm from 'node:vm'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 const id = 'a'.repeat(43), saveId = 's'.repeat(43)
 function fixture(version = 2) {
-  const methods = { image_to_gif() {} }, source = ['fs-reference', 'image-reference', 'image'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join(String.fromCharCode(10))
+  const methods = { image_to_gif() {} }, source = loadCefIpcSources(['api/fs-reference', 'api/image-reference', 'api/image'])
   const Constructor = vm.runInNewContext(source + String.fromCharCode(10) + 'ImageAPI', { window: { __ztoolsElectron: { contractVersion: version, transport: { methods, cancellations: methods } } }, TextEncoder }) as new (transport: unknown) => { imagesToGIF(images: unknown[], output: unknown, options?: unknown): Promise<boolean> }
   const calls: unknown[][] = []; let response = { success: true, status: 'committed', size: 100, frameCount: 2, width: 2, height: 2 }
   const api = new Constructor({ supportsAbortSignal: true, call: async (...args: unknown[]) => { calls.push(args); return response } })
@@ -25,7 +25,7 @@ test('GIF SDK validates inputs, receipt, preabort and contract1 without fake con
 
 test('GIF preview SDK freezes owner reference and releases invalid returned preview metadata', async () => {
   const methods = { image_preview_gif() {}, filesystem_revoke() {} }
-  const source = ['fs-reference', 'image-reference'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join(String.fromCharCode(10))
+  const source = loadCefIpcSources(['api/fs-reference', 'api/image-reference'])
   const Constructor = vm.runInNewContext(source + String.fromCharCode(10) + 'ReferenceImageAPI', { window: { __ztoolsElectron: { contractVersion: 2, transport: { methods, cancellations: methods } } }, TextEncoder }) as new (transport: unknown) => { previewGIF(images: unknown[], options?: unknown): Promise<{ reference: unknown }> }
   const ref = { grantId: id, kind: 'file', displayName: 'animation.gif', operations: ['read'] }, calls: unknown[][] = []
   let fileUrl = 'ztools://file/' + id + '/animation.gif'

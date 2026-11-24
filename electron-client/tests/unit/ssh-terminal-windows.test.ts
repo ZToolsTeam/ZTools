@@ -18,9 +18,9 @@ test('Windows 代理环境：去掉所有大小写变体的旧代理变量，保
   assert.deepEqual(windowsProxyTerminalArguments(65535), ['HTTP_PROXY=http://127.0.0.1:65535', 'HTTPS_PROXY=http://127.0.0.1:65535', 'ALL_PROXY=http://127.0.0.1:65535'])
   // 只接受固定三个变量指向本机：小写变量名、外部主机、其他变量、带命令拼接的值都拒绝
   for (const bad of [['http_proxy=http://127.0.0.1:1'], ['HTTP_PROXY=https://127.0.0.1:1'], ['HTTP_PROXY=http://127.0.0.2:1'], ['NO_PROXY=http://127.0.0.1:1'], ['HTTP_PROXY=http://127.0.0.1:1\r\nPATH=x'], ['HTTP_PROXY=http://127.0.0.1:123456']]) {
-    assert.throws(() => windowsProxyEnvironment({}, bad), /代理终端参数无效/)
+    assert.throws(() => windowsProxyEnvironment({}, bad), /Invalid proxy terminal parameters/)
   }
-  for (const port of [0, 65536, 1.5, NaN]) assert.throws(() => windowsProxyTerminalArguments(port), /1 到 65535/)
+  for (const port of [0, 65536, 1.5, NaN]) assert.throws(() => windowsProxyTerminalArguments(port), /1 and 65535/)
 })
 
 test('Windows SSH 终端：参数原样交给系统 OpenSSH，环境为副本；SystemRoot 缺失时用 C:\\Windows', async () => {
@@ -29,7 +29,7 @@ test('Windows SSH 终端：参数原样交给系统 OpenSSH，环境为副本；
   const launcher = new WindowsTerminalLauncher(r.start, environment, async file => { checked.push(file); return true })
   const args = sshArguments('dev-box', { localPort: 8080, remoteHost: '10.0.0.5', remotePort: 80 })
   const result = await launcher.launch('ssh', args, signal())
-  assert.deepEqual(result, { success: true, opened: true, notice: '已请求打开新的控制台窗口；连接、认证和隧道状态以窗口输出为准，Ctrl+C 可停止' })
+  assert.deepEqual(result, { success: true, opened: true, notice: 'Requested new console window; check console output for connection, authentication, and tunnel status (Ctrl+C to stop)' })
   assert.deepEqual(checked, ['E:\\WINDOWS\\System32\\OpenSSH\\ssh.exe'])
   assert.deepEqual(r.started[0], { file: 'E:\\WINDOWS\\System32\\OpenSSH\\ssh.exe', args: ['-N', '-o', 'ExitOnForwardFailure=yes', '-L', '127.0.0.1:8080:10.0.0.5:80', 'dev-box'], env: environment })
   assert.notEqual(r.started[0]!.env, environment)
@@ -41,18 +41,18 @@ test('Windows SSH 终端：参数原样交给系统 OpenSSH，环境为副本；
 
 test('Windows 终端故障注入：找不到 ssh.exe（替身与真实文件检查）、代理参数无效、真实启动失败均如实报错且不启动', async () => {
   const r = recorder()
-  await assert.rejects(new WindowsTerminalLauncher(r.start, { SystemRoot: 'C:\\Windows' }, async () => false).launch('ssh', ['host'], signal()), /未找到 Windows 自带的 OpenSSH 客户端/)
+  await assert.rejects(new WindowsTerminalLauncher(r.start, { SystemRoot: 'C:\\Windows' }, async () => false).launch('ssh', ['host'], signal()), /Windows built-in OpenSSH Client not found/)
   // 默认文件检查：路径不存在（stat 抛错）按不存在处理
-  await assert.rejects(new WindowsTerminalLauncher(r.start, { SystemRoot: 'C:\\ztools-不存在的系统目录-7f3a' }).launch('ssh', ['host'], signal()), /OpenSSH 客户端/)
-  await assert.rejects(new WindowsTerminalLauncher(r.start, {}).launch('proxy', ['PATH=C:\\evil'], signal()), /代理终端参数无效/)
+  await assert.rejects(new WindowsTerminalLauncher(r.start, { SystemRoot: 'C:\\ztools-不存在的系统目录-7f3a' }).launch('ssh', ['host'], signal()), /OpenSSH Client/)
+  await assert.rejects(new WindowsTerminalLauncher(r.start, {}).launch('proxy', ['PATH=C:\\evil'], signal()), /Invalid proxy terminal parameters/)
   assert.equal(r.started.length, 0)
   // 默认启动器走真实 spawn：程序不存在时报“未能打开”，不声称已打开
-  await assert.rejects(new WindowsTerminalLauncher(undefined, { SystemRoot: 'C:\\ztools-nonexistent-root-7f3a' }).launch('proxy', windowsProxyTerminalArguments(1), signal()), /系统未能打开新的控制台窗口/)
+  await assert.rejects(new WindowsTerminalLauncher(undefined, { SystemRoot: 'C:\\ztools-nonexistent-root-7f3a' }).launch('proxy', windowsProxyTerminalArguments(1), signal()), /System failed to open a new console window/)
   // 文件检查期间被取消或服务停止：不启动
   const abort = new AbortController(), cancelled = new WindowsTerminalLauncher(r.start, {}, async () => { abort.abort(new Error('已取消')); return true })
   await assert.rejects(cancelled.launch('ssh', ['host'], abort.signal), /已取消/)
   let launcher: WindowsTerminalLauncher | undefined
   launcher = new WindowsTerminalLauncher(r.start, {}, async () => { await launcher!.stop(); return true })
-  await assert.rejects(launcher.launch('ssh', ['host'], signal()), /终端服务已停止/)
+  await assert.rejects(launcher.launch('ssh', ['host'], signal()), /Terminal service stopped/)
   assert.equal(r.started.length, 0)
 })

@@ -1,3 +1,4 @@
+import { resolveSdkErrorText } from '../core/environment.js'
 /**
  * FileSystem API - 文件系统操作
  * CEF 使用 V8 ArrayBuffer，Electron 使用受控异步 IPC。
@@ -375,7 +376,7 @@ class FileSystemAPI {
       }
 
       if (options.overwrite === false) {
-        const error = new Error('当前宿主不支持原子禁止覆盖写入')
+        const error = new Error(resolveSdkErrorText('hostNoAtomicNoOverwriteWrite'))
         error.code = 'NOT_SUPPORTED'
         throw error
       }
@@ -496,7 +497,7 @@ class FileSystemAPI {
     if (this.transport.isElectronEnvironment()) {
       try {
         if (options.overwrite === false) {
-          const error = new Error('当前宿主缓存写入接口不支持原子禁止覆盖')
+          const error = new Error(resolveSdkErrorText('hostNoAtomicNoOverwriteCacheWrite'))
           error.code = 'NOT_SUPPORTED'
           throw error
         }

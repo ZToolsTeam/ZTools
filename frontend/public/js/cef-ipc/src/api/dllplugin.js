@@ -1,9 +1,11 @@
+import { resolveSdkText } from '../core/environment.js'
 /**
  * DLL Plugin API - DLL 插件接口
  * 提供 DLL 插件调用和任务管理功能
  */
 const PROGRESS_EVENT_TYPE = 'dllplugin_progress'
 const CALLBACK_RESULT_EVENT_TYPE = 'dllplugin_callback_result'
+
 
 
 function copyTaskStartMetadata(taskInfo, value) {
@@ -330,7 +332,10 @@ class DLLPluginAPI {
           hasResultData = true
         } catch (e) {
           dllError('Failed to parse callback result JSON:', e)
-          error = '回调结果解析失败: ' + (e instanceof Error ? e.message : String(e))
+          error = resolveSdkText(
+            '回调结果解析失败: ',
+            'Failed to parse callback result: '
+          ) + (e instanceof Error ? e.message : String(e))
         }
       } else if (payload.data !== undefined) {
         resultData = payload.data
@@ -403,7 +408,7 @@ class DLLPluginAPI {
           this._emit('cancelled', { taskId })
         }
       } else if (resultStatus === 'error') {
-        error = error || 'DLL 回调调用失败'
+        error = error || resolveSdkText('DLL 回调调用失败', 'DLL callback invocation failed')
         taskInfo.status = 'error'
         if (hasResultData) taskInfo.result = resultData
         taskInfo.error = error
@@ -499,7 +504,7 @@ class DLLPluginAPI {
       if (response && response.success) {
         return response.plugins || []
       } else {
-        throw new Error((response && response.error) || '获取 DLL 插件列表失败')
+        throw new Error((response && response.error) || resolveSdkText('获取 DLL 插件列表失败', 'Failed to get DLL plugin list'))
       }
     } catch (e) {
       dllError('Failed to get DLL plugin list:', e)
@@ -524,11 +529,11 @@ class DLLPluginAPI {
   async call(pluginName, funcName, params = {}, options = {}) {
     try {
       if (!pluginName || typeof pluginName !== 'string') {
-        throw new Error('插件名称无效')
+        throw new Error(resolveSdkText('插件名称无效', 'Invalid plugin name'))
       }
 
       if (!funcName || typeof funcName !== 'string') {
-        throw new Error('函数名称无效')
+        throw new Error(resolveSdkText('函数名称无效', 'Invalid function name'))
       }
 
       const response = await this.transport.call(
@@ -544,7 +549,7 @@ class DLLPluginAPI {
       if (response && response.success) {
         return response.data
       } else {
-        throw new Error(response.error || 'DLL 插件调用失败')
+        throw new Error(response.error || resolveSdkText('DLL 插件调用失败', 'DLL plugin call failed'))
       }
     } catch (e) {
       dllError(`Failed to call DLL plugin ${pluginName}.${funcName}:`, e)
@@ -566,16 +571,22 @@ class DLLPluginAPI {
     let definitiveNoStartCleared = false
     try {
       if (!pluginName || typeof pluginName !== 'string') {
-        throw new Error('插件名称无效')
+        throw new Error(resolveSdkText('插件名称无效', 'Invalid plugin name'))
       }
 
       if (!funcName || typeof funcName !== 'string') {
-        throw new Error('函数名称无效')
+        throw new Error(resolveSdkText('函数名称无效', 'Invalid function name'))
       }
 
       // 生成 taskId（如果未提供）
       if (!params.taskId) {
-        params.taskId = `callback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+        const randomSuffix =
+          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+            : typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
+              ? Array.from(crypto.getRandomValues(new Uint32Array(2)), (n) => n.toString(36)).join('').slice(0, 12)
+              : String((this._callbackSeq = (this._callbackSeq || 0) + 1))
+        params.taskId = `callback_${Date.now()}_${randomSuffix}`
       }
 
       taskId = params.taskId
@@ -584,7 +595,7 @@ class DLLPluginAPI {
         this._startingTasks.has(taskId) ||
         this._callbackHandlers.has(taskId)
       ) {
-        throw new Error('DLL 回调任务ID已被占用')
+        throw new Error(resolveSdkText('DLL 回调任务ID已被占用', 'DLL callback task ID is already in use'))
       }
       this._startingTasks.add(taskId)
       reservedTaskId = true
@@ -676,7 +687,7 @@ class DLLPluginAPI {
           ? response.error
           : null
         const error = new Error(
-          responseError?.message || response?.error || 'DLL 插件回调调用失败'
+          responseError?.message || response?.error || resolveSdkText('DLL 插件回调调用失败', 'DLL plugin callback invocation failed')
         )
         const code = response?.code || responseError?.code
         Object.assign(error, {
@@ -711,7 +722,7 @@ class DLLPluginAPI {
     try {
       const response = await this.transport.call('dllplugin_clear_callback_task', { taskId })
       if (!response || response.success !== true) {
-        throw new Error(response?.error || '清理 DLL 回调任务失败')
+        throw new Error(response?.error || resolveSdkText('清理 DLL 回调任务失败', 'Failed to clear DLL callback task'))
       }
       const callbackHandler = this._callbackHandlers.get(taskId)
       if (callbackHandler) {
@@ -765,11 +776,17 @@ class DLLPluginAPI {
   async callAsync(pluginName, funcName, params = {}) {
     try {
       if (!pluginName || typeof pluginName !== 'string') {
-        throw dllTaskFailure({ code: 'INVALID_REQUEST', workNotStarted: true, taskStartResolved: 'not-started' }, '插件名称无效')
+        throw dllTaskFailure(
+          { code: 'INVALID_REQUEST', workNotStarted: true, taskStartResolved: 'not-started' },
+          resolveSdkText('插件名称无效', 'Invalid plugin name')
+        )
       }
 
       if (!funcName || typeof funcName !== 'string') {
-        throw dllTaskFailure({ code: 'INVALID_REQUEST', workNotStarted: true, taskStartResolved: 'not-started' }, '函数名称无效')
+        throw dllTaskFailure(
+          { code: 'INVALID_REQUEST', workNotStarted: true, taskStartResolved: 'not-started' },
+          resolveSdkText('函数名称无效', 'Invalid function name')
+        )
       }
 
       const response = await this.transport.call('dllplugin_call_async', {
@@ -780,7 +797,9 @@ class DLLPluginAPI {
 
       if (response && response.success) {
         const taskId = response.taskId
-        if (typeof taskId !== 'string' || !taskId) throw taskObservationFailure({}, '', '宿主返回无效任务ID')
+        if (typeof taskId !== 'string' || !taskId) {
+          throw taskObservationFailure({}, '', resolveSdkText('宿主返回无效任务ID', 'Host returned an invalid task ID'))
+        }
 
         const now = Date.now()
         const taskInfo = this._tasks.get(taskId)
@@ -821,10 +840,10 @@ class DLLPluginAPI {
           })
         }
 
-        dllLog(`异步任务已登记: ${taskId}`)
+        dllLog(`Async task registered: ${taskId}`)
         return taskId
       } else {
-        throw dllTaskFailure(response, response?.error || 'DLL 插件异步调用失败', response?.taskId)
+        throw dllTaskFailure(response, response?.error || resolveSdkText('DLL 插件异步调用失败', 'DLL plugin async call failed'), response?.taskId)
       }
     } catch (e) {
       dllError(`Failed to call DLL plugin async ${pluginName}.${funcName}:`, e)
@@ -843,10 +862,10 @@ class DLLPluginAPI {
     try {
       // 参数验证
       if (!pluginName || typeof pluginName !== 'string') {
-        throw new Error('插件名称无效: ' + pluginName)
+        throw new Error(resolveSdkText('插件名称无效: ', 'Invalid plugin name: ') + pluginName)
       }
       if (!taskId || typeof taskId !== 'string') {
-        throw new Error('任务ID无效: ' + taskId)
+        throw new Error(resolveSdkText('任务ID无效: ', 'Invalid task ID: ') + taskId)
       }
 
       // 调用后端查询任务状态
@@ -857,7 +876,7 @@ class DLLPluginAPI {
 
       // 处理响应
       if (!response) {
-        throw new Error('查询任务返回空响应')
+        throw new Error(resolveSdkText('查询任务返回空响应', 'Task query returned an empty response'))
       }
 
       const hasTaskStatus = typeof response.taskStatus === 'string' && response.taskStatus.length > 0
@@ -954,7 +973,7 @@ class DLLPluginAPI {
 
       // 如果查询失败，抛出错误
       if (!response.queryOk) {
-        throw new Error(response.taskError || '查询任务失败')
+        throw new Error(response.taskError || resolveSdkText('查询任务失败', 'Failed to query task status'))
       }
 
       return result
@@ -972,29 +991,46 @@ class DLLPluginAPI {
    */
   async waitTask(taskId, pollInterval = 1000, timeout = 0, options = {}) {
     const taskInfo = this._tasks.get(taskId)
-    if (!taskInfo) throw new Error('未知的任务ID: ' + taskId)
+    if (!taskInfo) throw new Error(resolveSdkText('未知的任务ID: ', 'Unknown task ID: ') + taskId)
     const signal = options?.signal
     if (!Number.isFinite(pollInterval) || pollInterval <= 0 || pollInterval > 60_000 ||
         !Number.isFinite(timeout) || timeout < 0 || timeout > 86_400_000 ||
         (signal !== undefined && (!signal || typeof signal.aborted !== 'boolean' ||
           typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function'))) {
-      throw Object.assign(new Error('DLL 任务观察参数无效'), { code: 'INVALID_REQUEST' })
+      throw Object.assign(
+        new Error(resolveSdkText('DLL 任务观察参数无效', 'Invalid DLL task observation parameters')),
+        { code: 'INVALID_REQUEST' }
+      )
     }
     const deadline = timeout > 0 ? Date.now() + timeout : Infinity
     const checkObservation = () => {
       if (signal?.aborted) {
-        throw Object.assign(taskObservationFailure(taskInfo, taskId, '已停止观察任务，原生结果仍须确认',
-          'DLL_TASK_OBSERVATION_ABORTED'), { name: 'AbortError' })
+        throw Object.assign(
+          taskObservationFailure(
+            taskInfo,
+            taskId,
+            resolveSdkText('已停止观察任务，原生结果仍须确认', 'Stopped observing task; native outcome remains unconfirmed'),
+            'DLL_TASK_OBSERVATION_ABORTED'
+          ),
+          { name: 'AbortError' }
+        )
       }
       if (Date.now() >= deadline) {
-        throw taskObservationFailure(taskInfo, taskId, '任务等待超时，原生结果仍须确认', 'DLL_TASK_WAIT_TIMEOUT')
+        throw taskObservationFailure(
+          taskInfo,
+          taskId,
+          resolveSdkText('任务等待超时，原生结果仍须确认', 'Timed out waiting for task; native outcome remains unconfirmed'),
+          'DLL_TASK_WAIT_TIMEOUT'
+        )
       }
     }
     const terminalResult = () => {
       if (taskInfo.status === 'completed') return { done: true, data: taskInfo.result }
       if (taskInfo.status === 'error' || taskInfo.status === 'cancelled') {
         throw Object.assign(dllTaskFailure(taskInfo, taskInfo.error ||
-          (taskInfo.status === 'cancelled' ? '任务已取消' : '任务执行失败'), taskId), { taskDone: true })
+          (taskInfo.status === 'cancelled'
+            ? resolveSdkText('任务已取消', 'Task cancelled')
+            : resolveSdkText('任务执行失败', 'Task execution failed')), taskId), { taskDone: true })
       }
       return { done: false }
     }
@@ -1051,10 +1087,10 @@ class DLLPluginAPI {
           taskInfo.updatedAt = Date.now()
         }
 
-        dllLog(`已请求取消任务: ${taskId}`)
+        dllLog(`Task cancellation requested: ${taskId}`)
         return true
       } else {
-        throw new Error(response.error || '取消任务失败')
+        throw new Error(response.error || resolveSdkText('取消任务失败', 'Failed to cancel task'))
       }
     } catch (e) {
       dllError('Failed to cancel task:', e)

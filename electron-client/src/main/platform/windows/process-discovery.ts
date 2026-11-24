@@ -76,7 +76,7 @@ export class WindowsProcessDiscoveryAdapter implements ProcessDiscoveryAdapter {
       return parseWindowsTaskListOutput(stdout)
     } catch (error) {
       if (signal.aborted) throw error
-      throw new ZToolsError(errorCodes.processError, '读取进程列表失败')
+      throw new ZToolsError(errorCodes.processError, 'Failed to read process list')
     }
   }
 }

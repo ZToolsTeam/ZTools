@@ -8,7 +8,86 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PNG } from 'pngjs'
 import type { CallerIdentity } from '../../../contracts/capabilities.js'
+import { errorCodes, ZToolsError, type ZToolsErrorCode } from '../../../contracts/errors.js'
+import { getResolvedLocale, t } from '../../i18n/index.js'
+import { toLocalizedPublicError } from '../../ipc/error-localizer.js'
 import type { ProcessService } from '../process-service.js'
+
+const CJK_ERROR_PATTERN = /[\u4e00-\u9fa5]/
+
+/**
+ * 安全解析宿主插件运行期错误消息，避免 `err.message || t(...)` 透传反模式在英文模式下泄露原始中文错误：
+ * - `ZToolsError` 统一经 `toLocalizedPublicError` 按当前 locale 翻译；
+ * - 普通 `Error` 或非空字符串若在 `en-US` 下包含中文字符，则统一回退到 `t(fallbackKey, params)`。
+ */
+export function resolveHostErrorMessage(
+  source: unknown,
+  fallbackKey: string,
+  params?: Readonly<Record<string, string | number>>
+): string {
+  if (source instanceof ZToolsError) {
+    const localized = toLocalizedPublicError(source).message.trim()
+    if (localized.length > 0) return localized
+  }
+  const candidate = source instanceof Error
+    ? source.message.trim()
+    : typeof source === 'string'
+      ? source.trim()
+      : ''
+  if (candidate.length > 0 && (getResolvedLocale() !== 'en-US' || !CJK_ERROR_PATTERN.test(candidate))) {
+    return candidate
+  }
+  return t(fallbackKey, params)
+}
+
+/** 构造携带规范 code/hostCode/i18nKey/i18nParams 的宿主插件错误对象 */
+export function hostPluginError(
+  code: ZToolsErrorCode,
+  i18nKey: string,
+  options?: {
+    hostCode?: string
+    i18nParams?: Readonly<Record<string, string | number>>
+    path?: string
+    public?: Readonly<Record<string, string | number | boolean | readonly number[]>>
+  }
+): ZToolsError {
+  return new ZToolsError(code, t(i18nKey, options?.i18nParams), {
+    ...(options?.hostCode ? { hostCode: options.hostCode } : {}),
+    ...(options?.path ? { path: options.path } : {}),
+    i18nKey,
+    ...(options?.i18nParams ? { i18nParams: options.i18nParams } : {}),
+    ...(options?.public ? { public: options.public } : {})
+  })
+}
+
+/** 构造宿主插件失败响应信封（兼容既有 ok/success/error 契约并附加结构化错误码） */
+export function hostPluginFailure<T extends Record<string, unknown> = Record<string, never>>(
+  i18nKey: string,
+  options?: {
+    code?: ZToolsErrorCode
+    hostCode?: string
+    i18nParams?: Readonly<Record<string, string | number>>
+    extra?: T
+  }
+): {
+  ok: false
+  success: false
+  error: string
+  errorCode?: string
+  hostCode?: string
+  i18nKey: string
+} & T {
+  const message = t(i18nKey, options?.i18nParams)
+  return {
+    ...(options?.extra ?? ({} as T)),
+    ok: false,
+    success: false,
+    error: message,
+    ...(options?.code ? { errorCode: options.code } : {}),
+    ...(options?.hostCode ? { hostCode: options.hostCode } : {}),
+    i18nKey
+  }
+}
 
 export interface HostClipboardPort {
   getText(): Promise<string>
@@ -181,7 +260,10 @@ export function isFullyQualifiedPath(rawPath: string, platform: NodeJS.Platform 
 export function fileUrlToLocalPath(url: string, platform: NodeJS.Platform = process.platform): string {
   const raw = typeof url === 'string' ? url.trim() : ''
   if (!/^file:\/\//i.test(raw)) {
-    throw new Error(`不是合法的 file:// 地址: ${raw || '(空)'}`)
+    throw hostPluginError(errorCodes.invalidRequest, 'hostPlugin.shared.invalidFileUrl', {
+      hostCode: 'INVALID_FILE_URL',
+      i18nParams: { url: raw || t('hostPlugin.shared.emptyValue') }
+    })
   }
   const windows = platform === 'win32'
   let localPath: string
@@ -189,14 +271,29 @@ export function fileUrlToLocalPath(url: string, platform: NodeJS.Platform = proc
     localPath = fileURLToPath(raw, { windows })
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | undefined)?.code
-    throw new Error(`不是合法的 file:// 地址${code ? `（${code}）` : ''}: ${raw}`)
+    if (code) {
+      throw hostPluginError(errorCodes.invalidRequest, 'hostPlugin.shared.invalidFileUrlWithCode', {
+        hostCode: 'INVALID_FILE_URL',
+        i18nParams: { code, url: raw }
+      })
+    }
+    throw hostPluginError(errorCodes.invalidRequest, 'hostPlugin.shared.invalidFileUrl', {
+      hostCode: 'INVALID_FILE_URL',
+      i18nParams: { url: raw }
+    })
   }
   const pathApi = windows ? path.win32 : path.posix
   if (!localPath || localPath.includes('\0') || !isFullyQualifiedPath(localPath, platform)) {
-    throw new Error(`file:// 地址没有指向完整的本地路径: ${raw}`)
+    throw hostPluginError(errorCodes.invalidRequest, 'hostPlugin.shared.fileUrlNotQualified', {
+      hostCode: 'FILE_URL_NOT_QUALIFIED',
+      i18nParams: { url: raw }
+    })
   }
   if (pathApi.parse(localPath).root === localPath) {
-    throw new Error(`file:// 地址只指向根目录，没有指向具体文件: ${raw}`)
+    throw hostPluginError(errorCodes.invalidRequest, 'hostPlugin.shared.fileUrlRootOnly', {
+      hostCode: 'FILE_URL_ROOT_ONLY',
+      i18nParams: { url: raw }
+    })
   }
   return localPath
 }
@@ -430,7 +527,7 @@ function collectProcessOutput(command: string, args: string[], timeoutMs: number
     }
     const onAbort = () => {
       if (settled) return
-      finish(130, '命令已取消')
+      finish(130, t('hostPlugin.shared.commandCancelled'))
       try { child?.kill() } catch { /* 进程可能已退出；仍按取消报告。 */ }
     }
 
@@ -446,7 +543,7 @@ function collectProcessOutput(command: string, args: string[], timeoutMs: number
     }
 
     timer = setTimeout(() => {
-      finish(124, `命令执行超时（${timeoutMs} ms）`)
+      finish(124, t('hostPlugin.shared.commandTimeout', { timeoutMs }))
       try {
         child?.kill()
       } catch {
@@ -481,7 +578,7 @@ export async function runCommand(
   timeoutMs = 15_000,
   signal?: AbortSignal
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  if (signal?.aborted) return { stdout: '', stderr: '命令已取消', exitCode: 130 }
+  if (signal?.aborted) return { stdout: '', stderr: t('hostPlugin.shared.commandCancelled'), exitCode: 130 }
   // 与命令并行探测，只在第一次执行时可能多等 reg 的几十毫秒；探测失败退回按界面语言解码
   const codePagePromise = process.platform === 'win32' ? probeSystemOemCodePage() : Promise.resolve(undefined)
   const raw = await collectProcessOutput(command, args, timeoutMs, signal)
@@ -497,9 +594,13 @@ export async function runCommand(
 /** PowerShell 执行失败（非零退出、超时、取消、无法启动）：带退出码与错误输出，不能当成“没有结果” */
 export class PowerShellError extends Error {
   constructor(readonly exitCode: number, readonly stderr: string) {
-    super(exitCode === 124 ? `PowerShell 执行超时${stderr ? `：${stderr}` : ''}`
-      : exitCode === 130 ? 'PowerShell 执行已取消'
-        : `PowerShell 执行失败（退出码 ${exitCode}）${stderr ? `：${stderr.slice(0, 500)}` : ''}`)
+    super(exitCode === 124
+      ? (stderr ? t('hostPlugin.shared.powershellTimeoutDetail', { detail: stderr }) : t('hostPlugin.shared.powershellTimeout'))
+      : exitCode === 130
+        ? t('hostPlugin.shared.powershellCancelled')
+        : (stderr
+          ? t('hostPlugin.shared.powershellFailedDetail', { exitCode, detail: stderr.slice(0, 500) })
+          : t('hostPlugin.shared.powershellFailed', { exitCode })))
     this.name = 'PowerShellError'
   }
 }
@@ -521,7 +622,9 @@ const POWERSHELL_LEADING_ONLY_STATEMENT = /^(?:\s|#[^\n]*(?:\n|$)|<#[\s\S]*?#>)*
 /** 生成 powershell.exe 的参数：脚本加上 UTF-8 输出前缀后按 UTF-16LE 编码给 -EncodedCommand */
 export function buildPowerShellArgs(script: string): string[] {
   if (POWERSHELL_LEADING_ONLY_STATEMENT.test(script)) {
-    throw new Error('PowerShell 脚本以 param()、[CmdletBinding()] 或 using 开头，无法在前面设置 UTF-8 输出；-EncodedCommand 也无法传参，请去掉 param 块')
+    throw hostPluginError(errorCodes.invalidRequest, 'hostPlugin.shared.powershellLeadingBlock', {
+      hostCode: 'POWERSHELL_LEADING_BLOCK'
+    })
   }
   const encoded = Buffer.from(POWERSHELL_UTF8_OUTPUT_PREFIX + script, 'utf16le').toString('base64')
   return ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded]
@@ -533,7 +636,7 @@ export function buildPowerShellArgs(script: string): string[] {
  * 确认这类错误可以忽略的脚本要在末尾显式 exit 0，不能让可忽略的错误变成整体失败。
  */
 export async function runPowerShell(script: string, timeoutMs = 15_000, signal?: AbortSignal): Promise<string> {
-  if (signal?.aborted) throw new PowerShellError(130, '命令已取消')
+  if (signal?.aborted) throw new PowerShellError(130, t('hostPlugin.shared.commandCancelled'))
   if (process.platform !== 'win32') {
     return ''
   }
@@ -828,5 +931,99 @@ export async function processSingleImageFile(
     }
   }
 
-  throw new Error(`图像处理失败，不支持直接复制冒充超分结果: ${path.basename(srcPath)}`)
+  throw hostPluginError(errorCodes.fileError, 'hostPlugin.shared.imageUpscaleFailed', {
+    hostCode: 'IMAGE_UPSCALE_FAILED',
+    i18nParams: { fileName: path.basename(srcPath) }
+  })
+}
+
+const ACCESS_DENIED_ERROR_CODES = new Set([
+  'EACCES',
+  'EPERM',
+  'ERROR_ACCESS_DENIED',
+  'ERROR_ELEVATION_REQUIRED',
+  'ACCESS_DENIED'
+])
+
+const ACCESS_DENIED_NUMERIC_CODES = new Set([
+  5, // Win32 ERROR_ACCESS_DENIED
+  740, // Win32 ERROR_ELEVATION_REQUIRED
+  0x80070005, // HRESULT E_ACCESSDENIED (unsigned)
+  -2147024891, // HRESULT E_ACCESSDENIED (signed 32-bit)
+  0x800702e4, // HRESULT ERROR_ELEVATION_REQUIRED (unsigned)
+  -2147024156 // HRESULT ERROR_ELEVATION_REQUIRED (signed 32-bit)
+])
+
+const ACCESS_DENIED_TEXT_PATTERN =
+  /\b(?:EACCES|EPERM|ERROR_ACCESS_DENIED|ERROR_ELEVATION_REQUIRED|0x80070005|0x800702e4|FAILED\s+(?:5|740)|ERROR\s+(?:5|740))\b|access(?:\s+is)?\s+denied|permission\s+denied|operation\s+not\s+permitted|unauthorized\s+access|requires?\s+elevation|elevat(?:ion|ed)\s+(?:is\s+)?required|elevated\s+privileges?|administrator\s+privileges?|run\s+as\s+administrator/i
+
+// i18n-allow: 匹配简体/繁体中文 Windows 原生 CLI（reg/netsh/schtasks）固定输出（权限不足时真实退出码为 1）
+const ACCESS_DENIED_WINDOWS_CJK_CLI_PATTERN =
+  /(?:拒绝访问|请求的操作需要提升|需要提升|需要管理员|权限不足|没有权限|以管理员身份运行|存取被拒|要求的操作需要提高權限|需要提高權限|需要系統管理員|權限不足|沒有權限|以系統管理員身分執行)/
+
+/**
+ * 跨语种判定命令输出或异常文本是否为权限不足 / 需要管理员提权：
+ * 优先匹配 POSIX/Win32/HRESULT 结构化错误码与英文系统错误关键字，
+ * 同时保留简/繁体中文 Windows 原生 CLI（reg/netsh/schtasks 权限不足退出码常为 1）的固定输出识别。
+ */
+export function isAccessDeniedText(text: string): boolean {
+  if (!text) return false
+  return ACCESS_DENIED_TEXT_PATTERN.test(text) || ACCESS_DENIED_WINDOWS_CJK_CLI_PATTERN.test(text)
+}
+
+/**
+ * 跨语种判定子进程命令执行结果是否为拒绝访问或需要管理员提权：
+ * 优先检查结构化错误码与退出码（EACCES/EPERM/5/740/HRESULT 0x80070005 等），
+ * 再回退英文通用关键字及中文 Windows 原生 CLI 固定权限错误文本匹配。
+ */
+export function isAccessDeniedCommandResult(result: {
+  readonly exitCode?: number | null | undefined
+  readonly code?: string | number | null | undefined
+  readonly stdout?: string | undefined
+  readonly stderr?: string | undefined
+}): boolean {
+  if (typeof result.code === 'string' && ACCESS_DENIED_ERROR_CODES.has(result.code.trim().toUpperCase())) {
+    return true
+  }
+  if (typeof result.code === 'number' && ACCESS_DENIED_NUMERIC_CODES.has(result.code)) {
+    return true
+  }
+  if (typeof result.exitCode === 'number' && ACCESS_DENIED_NUMERIC_CODES.has(result.exitCode)) {
+    return true
+  }
+  const combined = `${result.stderr ?? ''} ${result.stdout ?? ''}`.trim()
+  return isAccessDeniedText(combined)
+}
+
+/**
+ * 跨语种判定任意捕获异常是否为权限拒绝 / 提权不足（优先检查 error.code / errno / exitCode / hresult）。
+ */
+export function isAccessDeniedError(err: unknown): boolean {
+  if (!err) return false
+  if (typeof err === 'string') return isAccessDeniedText(err)
+  if (typeof err === 'object') {
+    const rec = err as Record<string, unknown>
+    const code = rec.code
+    if (typeof code === 'string' && ACCESS_DENIED_ERROR_CODES.has(code.trim().toUpperCase())) {
+      return true
+    }
+    if (typeof code === 'number' && ACCESS_DENIED_NUMERIC_CODES.has(code)) {
+      return true
+    }
+    for (const numericField of ['exitCode', 'errno', 'hresult', 'HResult'] as const) {
+      const value = rec[numericField]
+      if (typeof value === 'number' && ACCESS_DENIED_NUMERIC_CODES.has(value)) {
+        return true
+      }
+    }
+    const textParts = [
+      typeof rec.message === 'string' ? rec.message : '',
+      typeof rec.stderr === 'string' ? rec.stderr : '',
+      typeof rec.stdout === 'string' ? rec.stdout : ''
+    ].filter(Boolean)
+    if (textParts.length > 0 && isAccessDeniedText(textParts.join(' '))) {
+      return true
+    }
+  }
+  return false
 }

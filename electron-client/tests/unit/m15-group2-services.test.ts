@@ -218,8 +218,8 @@ test('ZTools M1.5 Group 2 High-Frequency Core Builtin Services Test Suite', asyn
     assert.equal(service.listNotes().length, 1)
 
     // Beyond Happy Path / 异常覆盖
-    assert.throws(() => service.updateNote('non-existent-id', { title: 'fail' }), /笔记不存在/)
-    assert.throws(() => service.togglePin('non-existent-id'), /笔记不存在/)
+    assert.throws(() => service.updateNote('non-existent-id', { title: 'fail' }), /Note not found/)
+    assert.throws(() => service.togglePin('non-existent-id'), /Note not found/)
 
     // 数据库关闭后调用防护
     service.close()
@@ -762,7 +762,7 @@ test('ZTools M1.5 Group 2 High-Frequency Core Builtin Services Test Suite', asyn
     assert.equal(uninstalledCmd, 'C:\\Program Files\\Tencent\\WeChat\\Uninstall.exe /S')
 
     // Beyond Happy Path / 异常覆盖
-    await assert.rejects(service.launchUninstall('non-existent-app'), /未找到应用程序/)
+    await assert.rejects(service.launchUninstall('non-existent-app'), /Application not found/)
   })
 
   // ===========================================================================

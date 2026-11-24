@@ -17,17 +17,17 @@ export function validEnvironmentKey(value: unknown): value is string { return ty
 export function validEnvironmentValue(value: unknown): value is string { return typeof value === 'string' && value.length <= 32767 && !value.includes('\0') }
 export function validateEnvironmentRequest(value: unknown): asserts value is EnvironmentRequest {
   const uuid = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(v)
-  const exact = (row: Record<string, unknown>, fields: string[]) => { if (Object.keys(row).some(k => !fields.includes(k))) throw new Error('环境变量请求包含无效字段') }
-  if (!environmentRecord(value)) throw new Error('环境变量请求无效')
+  const exact = (row: Record<string, unknown>, fields: string[]) => { if (Object.keys(row).some(k => !fields.includes(k))) throw new Error('Environment request contains invalid fields') }
+  if (!environmentRecord(value)) throw new Error('Invalid environment request')
   if (value.action === 'list' || value.action === 'cancel') { exact(value, ['action']); return }
-  if (value.action === 'apply') { exact(value, ['action', 'planId']); if (!uuid(value.planId)) throw new Error('修改计划无效'); return }
-  if (value.action !== 'prepare' || !uuid(value.sessionId) || !environmentRecord(value.change)) throw new Error('请先读取环境变量')
+  if (value.action === 'apply') { exact(value, ['action', 'planId']); if (!uuid(value.planId)) throw new Error('Invalid modification plan'); return }
+  if (value.action !== 'prepare' || !uuid(value.sessionId) || !environmentRecord(value.change)) throw new Error('Read environment variables first')
   exact(value, ['action', 'sessionId', 'change'])
   const change = value.change
-  if (typeof change.source !== 'string' || !['user', 'system'].includes(change.source) || typeof change.kind !== 'string') throw new Error('环境变量来源或操作无效')
+  if (typeof change.source !== 'string' || !['user', 'system'].includes(change.source) || typeof change.kind !== 'string') throw new Error('Invalid environment source or operation')
   if (change.kind === 'clean') { exact(change, ['kind', 'source']); return }
-  if (change.kind === 'restore') { exact(change, ['kind', 'source', 'backupId']); if (!uuid(change.backupId)) throw new Error('备份编号无效'); return }
-  if (!['set', 'delete'].includes(change.kind) || !validEnvironmentKey(change.key)) throw new Error('变量名必须由字母、数字和下划线组成，且不能以数字开头')
+  if (change.kind === 'restore') { exact(change, ['kind', 'source', 'backupId']); if (!uuid(change.backupId)) throw new Error('Invalid backup ID'); return }
+  if (!['set', 'delete'].includes(change.kind) || !validEnvironmentKey(change.key)) throw new Error('Variable name must contain only letters, digits, and underscores, and must not start with a digit')
   exact(change, change.kind === 'set' ? ['kind', 'source', 'key', 'value'] : ['kind', 'source', 'key'])
-  if (change.kind === 'set' && !validEnvironmentValue(change.value)) throw new Error('变量值含空字符或超过 32767 字符')
+  if (change.kind === 'set' && !validEnvironmentValue(change.value)) throw new Error('Variable value contains null bytes or exceeds 32767 characters')
 }

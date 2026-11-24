@@ -161,7 +161,7 @@ export class TrayController {
     if (this.#tray) return
     const icon = this.options.icon
     if (!icon || typeof icon.isEmpty !== 'function' || icon.isEmpty()) {
-      throw new Error('无法加载 ZTools 托盘图标')
+      throw new Error('Failed to load ZTools tray icon')
     }
 
     this.#stopped = false

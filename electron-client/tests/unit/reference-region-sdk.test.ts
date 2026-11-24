@@ -1,19 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 const id = 'a'.repeat(43), ref = { grantId: id, kind: 'file', displayName: 'region.png', operations: ['read'] }
-function stripModuleSyntax(source: string) {
-  return source.split(/\r?\n/).map(line => {
-    const trimmed = line.trim()
-    if (trimmed.startsWith('import ')) return ''
-    if (/^export\s+default\b/.test(trimmed) || /^export\s*\{/.test(trimmed)) return ''
-    return line.replace(/^(\s*)export\s+/, '$1')
-  }).join('\n')
-}
 function fixture(version = 2, initialAuthorization: 'not-requested' | 'granted' = 'not-requested') {
   const methods = { screen_capture_region() {}, filesystem_revoke() {} }
-  const source = ['fs-reference', 'runtime-capability', 'screen'].map(name => stripModuleSyntax(fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8'))).join('\n')
+  const source = loadCefIpcSources(['api/fs-reference', 'api/runtime-capability', 'api/screen'])
   let response: unknown = { success: true, reference: ref, fileUrl: `ztools://file/${id}/region.png`, size: 10, width: 10, height: 10 }
   const calls: { method: string; params: unknown; options: unknown }[] = []
   const capabilityCalls: { method: string; capability: string; timeout?: number; signal?: AbortSignal }[] = []

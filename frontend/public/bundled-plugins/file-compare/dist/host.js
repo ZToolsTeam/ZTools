@@ -1,4 +1,5 @@
 import { t } from "./i18n.js";
+import { resolveErrorMessage } from './error-i18n.js';
 /**
  * 调用 ZTools 宿主能力（选择文件、读取文本文件）
  */
@@ -14,7 +15,7 @@ async function callHost(method, params = {}) {
     if (!envelope || typeof envelope !== "object")
         throw new Error(t("hostUnrecognizedResult"));
     if (!envelope.success)
-        throw new Error(envelope.error?.message || t("hostMethodFailed", { method }));
+        throw new Error(resolveErrorMessage(envelope.error, t("hostMethodFailed", { method })));
     return envelope.data;
 }
 /** 单个文本文件读取上限 */
@@ -31,8 +32,16 @@ export async function readTextFileByPath(filePath) {
         read = await callHost("filesystem_read_file", { path: filePath, encoding: "utf8" });
     }
     catch (err) {
+        const errRec = err && typeof err === "object" ? err : null;
+        const code = typeof errRec?.code === "string" ? errRec.code : "";
+        const hostCode = typeof errRec?.details?.hostCode === "string" ? errRec.details.hostCode : "";
         const msg = err instanceof Error ? err.message : String(err ?? "");
-        throw new Error(/utf|decode|编码/i.test(msg) ? t("fileNotUtf8") : msg || t("readFileFailed"));
+        const isEncodingErr = code === "INVALID_UTF8" ||
+            hostCode === "INVALID_UTF8" ||
+            /utf|decode/i.test(msg) ||
+            // i18n-allow: legacy host fallback
+            (!code && !hostCode && /编码/.test(msg));
+        throw new Error(isEncodingErr ? t("fileNotUtf8") : msg || t("readFileFailed"));
     }
     return { name: filePath.split(/[\\/]/).pop() || filePath, text: read.content };
 }

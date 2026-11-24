@@ -41,8 +41,8 @@ test('真实命令子进程返回双输出流；非零、超时、取消和过�
   const result = await runDockerCommand(process.execPath, ['-e', 'process.stdout.write("out");process.stderr.write("err")'], signal(), {})
   assert.deepEqual(result, { stdout: 'out', stderr: 'err' })
   await assert.rejects(runDockerCommand(process.execPath, ['-e', 'process.stderr.write("denied");process.exit(1)'], signal(), {}), /denied/)
-  await assert.rejects(runDockerCommand(process.execPath, ['-e', 'setInterval(()=>{},1000)'], signal(), {}, 40), /超时/)
-  await assert.rejects(runDockerCommand(process.execPath, ['-e', 'setInterval(()=>{},1000)'], AbortSignal.timeout(40), {}), /取消/)
+  await assert.rejects(runDockerCommand(process.execPath, ['-e', 'setInterval(()=>{},1000)'], signal(), {}, 40), /timed out/i)
+  await assert.rejects(runDockerCommand(process.execPath, ['-e', 'setInterval(()=>{},1000)'], AbortSignal.timeout(40), {}), /cancelled/i)
   await assert.rejects(runDockerCommand(process.execPath, ['-e', 'process.stdout.write("x".repeat(5000000))'], signal(), {}), /4 MiB/)
   await assert.rejects(runDockerCommand('/not-present/docker', [], signal(), {}))
 })
@@ -51,7 +51,7 @@ test('隔离 CLI 进程端到端读取、采样、启停、日志和清理，每
   try {
     let list = await f.list(); assert.equal(list.containers.length, 2); assert.equal(list.containers[1]!.cpu, '0.00%')
     await f.call({ action: 'control', sessionId: list.sessionId, id: id1, operation: 'start' })
-    await assert.rejects(f.call({ action: 'logs', sessionId: list.sessionId, id: id1 }), /过期/)
+    await assert.rejects(f.call({ action: 'logs', sessionId: list.sessionId, id: id1 }), /expired/i)
     list = await f.list(); assert.equal(list.containers[0]!.state, 'running')
     assert.deepEqual(await f.call({ action: 'logs', sessionId: list.sessionId, id: id1 }), { success: true, id: id1, stdout: 'actual stdout\n', stderr: 'actual stderr\n' })
     await f.call({ action: 'control', sessionId: list.sessionId, id: id1, operation: 'stop' }); list = await f.list()
@@ -63,10 +63,10 @@ test('隔离 CLI 进程端到端读取、采样、启停、日志和清理，每
 test('缺环境、离线、畸形列表和资源失败均明确报告，不伪造空列表或资源数', async () => {
   const f = await fixture()
   try {
-    await f.patch({ offline: true }); await assert.rejects(f.list(), /无法连接本机 Docker/)
-    await f.patch({ offline: false, badList: true }); await assert.rejects(f.list(), /记录无效/)
+    await f.patch({ offline: true }); await assert.rejects(f.list(), /Unable to connect to local Docker/i)
+    await f.patch({ offline: false, badList: true }); await assert.rejects(f.list(), /Invalid container record/i)
     await f.patch({ badList: false, statsFail: true }); const list = await f.list()
-    assert.match(list.statsError!, /资源采样失败/); assert.equal(list.containers[1]!.cpu, null)
+    assert.match(list.statsError!, /Resource stats sampling failed/i); assert.equal(list.containers[1]!.cpu, null)
     assert.throws(() => parseDockerContainers(JSON.stringify({ ...row(id1), CreatedAt: undefined })))
     const missing = new DockerManagerService(new DockerCli(undefined, async () => { throw new Error('未找到 Docker 命令行') }))
     await assert.rejects(missing.handle({ action: 'list' }, caller, signal()), /未找到 Docker/); await missing.stop()
@@ -76,10 +76,10 @@ test('拒绝远程上下文和跨会话操作，上下文或引擎漂移后不�
   const f = await fixture()
   try {
     const list = await f.list()
-    await assert.rejects(f.call({ action: 'control', sessionId: list.sessionId, id: id1, operation: 'start' }, { ...caller, webContentsId: 9 }), /过期/)
-    await f.patch({ endpoint: 'ssh://remote.invalid' }); await assert.rejects(f.list(), /不是本机连接/)
+    await assert.rejects(f.call({ action: 'control', sessionId: list.sessionId, id: id1, operation: 'start' }, { ...caller, webContentsId: 9 }), /expired/i)
+    await f.patch({ endpoint: 'ssh://remote.invalid' }); await assert.rejects(f.list(), /not a local connection/i)
     await f.patch({ endpoint: 'unix:///test/docker.sock' }); const next = await f.list()
-    await f.patch({ daemon: 'other-daemon' }); await assert.rejects(f.call({ action: 'control', sessionId: next.sessionId, id: id1, operation: 'start' }), /引擎已变化/)
+    await f.patch({ daemon: 'other-daemon' }); await assert.rejects(f.call({ action: 'control', sessionId: next.sessionId, id: id1, operation: 'start' }), /engine has changed/i)
     assert.ok(!(await f.calls()).some(c => c[3] === 'start'))
   } finally { await f.close() }
 })
@@ -91,16 +91,16 @@ test('DOCKER_CONTEXT 优先于 DOCKER_HOST，固定连接清除环境覆盖，�
     const connection = await cli.connect(signal()); await cli.run(connection, ['info', '--format', '{{json .ID}}'], signal())
     assert.equal(connection.endpoint, 'unix:///test/docker.sock'); assert.equal(calls.at(-1)!.env.DOCKER_CONTEXT, undefined); assert.equal(env.DOCKER_HOST, 'tcp://remote.invalid')
     const direct = new DockerCli(f.run, async () => process.execPath, { DOCKER_HOST: 'tcp://remote.invalid' }, 'darwin')
-    await assert.rejects(direct.connect(signal()), /不是本机连接/)
+    await assert.rejects(direct.connect(signal()), /not a local connection/i)
   } finally { await f.close() }
 })
 test('状态漂移、命令未生效、日志读取失败均不能报成功', async () => {
   const f = await fixture()
   try {
     let list = await f.list(); await f.patch({ rows: [row(id1, 'running'), row(id2, 'running')] })
-    await assert.rejects(f.call({ action: 'control', sessionId: list.sessionId, id: id1, operation: 'start' }), /状态已变化/)
+    await assert.rejects(f.call({ action: 'control', sessionId: list.sessionId, id: id1, operation: 'start' }), /state has changed/i)
     list = await f.list(); await f.patch({ noChange: true })
-    await assert.rejects(f.call({ action: 'control', sessionId: list.sessionId, id: id1, operation: 'stop' }), /当前状态为 running/)
+    await assert.rejects(f.call({ action: 'control', sessionId: list.sessionId, id: id1, operation: 'stop' }), /state is running/i)
     list = await f.list(); await f.patch({ logsFail: true })
     await assert.rejects(f.call({ action: 'logs', sessionId: list.sessionId, id: id1 }), /logging driver/)
   } finally { await f.close() }
@@ -126,10 +126,10 @@ test('请求并发拒绝，窗口关闭或服务停止取消真实进程并释�
   const ready = new Promise<void>(resolve => { started = resolve })
   const cli = new DockerCli(async (_file, _args, abort, env) => { started(); return runDockerCommand(process.execPath, ['-e', 'setInterval(()=>{},1000)'], abort, env) }, async () => process.execPath)
   const service = new DockerManagerService(cli)
-  const pending = service.handle({ action: 'list' }, caller, signal()); const rejection = assert.rejects(pending, /取消/)
-  await ready; await assert.rejects(service.handle({ action: 'list' }, caller, signal()), /正在进行/)
+  const pending = service.handle({ action: 'list' }, caller, signal()); const rejection = assert.rejects(pending, /cancelled/i)
+  await ready; await assert.rejects(service.handle({ action: 'list' }, caller, signal()), /in progress/i)
   service.closeOwner(caller.webContentsId); await rejection; await service.stop()
-  await assert.rejects(service.handle({ action: 'list' }, caller, signal()), /已停止/)
+  await assert.rejects(service.handle({ action: 'list' }, caller, signal()), /stopped/i)
 })
 test('macOS 命令发现补充 OrbStack (~/.orbstack/bin) 与 Rancher Desktop (~/.rd/bin)，只接受普通可执行文件', { skip: process.platform === 'win32' ? '依赖 POSIX 可执行权限' : false }, async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'docker-home-'))
@@ -141,7 +141,7 @@ test('macOS 命令发现补充 OrbStack (~/.orbstack/bin) 与 Rancher Desktop (~
     await fs.mkdir(rd)
     const fallback = await findDockerExecutable({ PATH: '' }, 'darwin', home).catch((error: Error) => error)
     if (typeof fallback === 'string') { assert.notEqual(fallback, orb); assert.notEqual(fallback, rd) }
-    else assert.match(fallback.message, /未找到 Docker 命令行/)
+    else assert.match(fallback.message, /Docker CLI not found/i)
     await fs.rmdir(rd); await fs.writeFile(rd, 'fixture'); await fs.chmod(rd, 0o700)
     assert.equal(await findDockerExecutable({ PATH: '' }, 'darwin', home), rd)
     await fs.chmod(orb, 0o700)

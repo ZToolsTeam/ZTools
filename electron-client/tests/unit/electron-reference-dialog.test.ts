@@ -2,24 +2,40 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { BrowserWindow } from 'electron'
 import { createElectronReferenceDialogProvider } from '../../src/main/platform/electron-reference-dialog.js'
+import { getLocaleSetting, setLocale } from '../../src/main/i18n/index.js'
 import { parseDialogFilters, normalizeOpenDialogProperties } from '../../src/main/services/window-service.js'
 
 const caller = { type: 'main', webContentsId: 42 } as const
 test('native dialog provider reuses filter/property policy and shows requested authority in its title', async () => {
-  const window = { isDestroyed: () => false } as BrowserWindow
-  const opened: Electron.OpenDialogOptions[] = [], saved: Electron.SaveDialogOptions[] = []
-  const provider = createElectronReferenceDialogProvider(actual => { assert.equal(actual, caller); return window }, parseDialogFilters, normalizeOpenDialogProperties, {
-    open: async (_, options) => { opened.push(options); return { canceled: false, filePaths: ['/synthetic/directory'] } },
-    save: async (_, options) => { saved.push(options); return { canceled: false, filePath: '/synthetic/output.txt' } },
-    inspect: async () => ({ isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false })
-  })
-  const folder = await provider.select('folder', { title: '合成目录', access: 'read-write' }, caller)
-  assert.equal(folder.selections[0]!.kind, 'directory'); assert.deepEqual(opened[0]!.properties, ['openDirectory'])
-  assert.equal(opened[0]!.title, '合成目录（读写授权）')
-  await provider.select('open', { properties: ['multiSelections'], filters: '文本|*.txt' }, caller)
-  assert.deepEqual(opened[1]!.properties, ['openFile', 'multiSelections']); assert.deepEqual(opened[1]!.filters, [{ name: '文本', extensions: ['txt'] }])
-  await provider.select('save', { defaultName: 'output.txt' }, caller)
-  assert.equal(saved[0]!.defaultPath, 'output.txt'); assert.equal(saved[0]!.title, '保存文件（写入授权）')
+  const previousLocale = getLocaleSetting()
+  setLocale('zh-CN', 'zh-CN')
+  try {
+    const window = { isDestroyed: () => false } as BrowserWindow
+    const opened: Electron.OpenDialogOptions[] = [], saved: Electron.SaveDialogOptions[] = []
+    const provider = createElectronReferenceDialogProvider(actual => { assert.equal(actual, caller); return window }, parseDialogFilters, normalizeOpenDialogProperties, {
+      open: async (_, options) => { opened.push(options); return { canceled: false, filePaths: ['/synthetic/directory'] } },
+      save: async (_, options) => { saved.push(options); return { canceled: false, filePath: '/synthetic/output.txt' } },
+      inspect: async () => ({ isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false })
+    })
+    const folder = await provider.select('folder', { title: '合成目录', access: 'read-write' }, caller)
+    assert.equal(folder.selections[0]!.kind, 'directory'); assert.deepEqual(opened[0]!.properties, ['openDirectory'])
+    assert.equal(opened[0]!.title, '合成目录（读写授权）')
+    await provider.select('open', { properties: ['multiSelections'], filters: '文本|*.txt' }, caller)
+    assert.deepEqual(opened[1]!.properties, ['openFile', 'multiSelections']); assert.deepEqual(opened[1]!.filters, [{ name: '文本', extensions: ['txt'] }])
+    assert.equal(opened[1]!.title, '选择文件（只读授权）')
+    await provider.select('save', { defaultName: 'output.txt' }, caller)
+    assert.equal(saved[0]!.defaultPath, 'output.txt'); assert.equal(saved[0]!.title, '保存文件（写入授权）')
+
+    setLocale('en-US', 'en-US')
+    await provider.select('folder', { access: 'read-write' }, caller)
+    assert.equal(opened[2]!.title, 'Select Folder (Read & Write Access)')
+    await provider.select('open', {}, caller)
+    assert.equal(opened[3]!.title, 'Select File (Read-Only Access)')
+    await provider.select('save', {}, caller)
+    assert.equal(saved[1]!.title, 'Save File (Write Access)')
+  } finally {
+    setLocale(previousLocale, 'zh-CN')
+  }
 })
 test('cancelled/destroyed native windows return no selections and do not inspect stale paths', async () => {
   for (const mode of ['open', 'save', 'folder'] as const) {

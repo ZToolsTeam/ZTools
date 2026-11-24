@@ -4,9 +4,9 @@ import { grantId } from '../../contracts/path-reference.js'
 import type { VisionBackend } from '../platform/macos/vision-runner.js'
 import type { PathGrantService } from './path-grant-service.js'
 import { imageHeader } from './reference-image-service.js'
-const invalid = () => new ZToolsError(errorCodes.invalidRequest, '本地OCR参数无效')
-const cancelled = () => new ZToolsError(errorCodes.callerDestroyed, '本地OCR已取消')
-const failed = () => new ZToolsError(errorCodes.fileError, '本地OCR结果无效')
+const invalid = () => new ZToolsError(errorCodes.invalidRequest, 'Invalid local OCR parameters')
+const cancelled = () => new ZToolsError(errorCodes.callerDestroyed, 'Local OCR cancelled')
+const failed = () => new ZToolsError(errorCodes.fileError, 'Invalid local OCR result')
 function record(value: unknown, keys: string[]): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).some(key => !keys.includes(key))) throw invalid()
   return value as Record<string, unknown>
@@ -53,7 +53,7 @@ export class ReferenceOcrService {
   #common(result: Record<string, unknown>) { if (result.version !== 1 || result.success !== true || result.provider !== 'apple-vision-local' || !Number.isSafeInteger(result.revision) || Number(result.revision) < 1) throw failed() }
   async #execute<T>(caller: CallerIdentity, signal: AbortSignal, action: (signal: AbortSignal) => Promise<T>): Promise<T> {
     if (this.#stopped || signal.aborted) throw cancelled()
-    if (this.#pending.has(caller.webContentsId) || this.#pending.size >= 2) throw new ZToolsError(errorCodes.fileTooLarge, '本地OCR正在处理中')
+    if (this.#pending.has(caller.webContentsId) || this.#pending.size >= 2) throw new ZToolsError(errorCodes.fileTooLarge, 'Local OCR is already in progress')
     const controller = new AbortController(), combined = AbortSignal.any([signal, controller.signal]); let finish!: () => void
     this.#pending.set(caller.webContentsId, { controller, finished: new Promise<void>(resolve => { finish = resolve }) })
     try { const result = await action(combined); if (this.#stopped || combined.aborted) throw cancelled(); return result }

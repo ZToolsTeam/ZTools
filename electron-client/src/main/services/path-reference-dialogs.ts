@@ -12,7 +12,7 @@ export interface ReferenceDialogProvider {
 }
 export interface DialogPathRef extends PathGrantRef { readonly fileUrl?: string }
 type Grants = Pick<PathGrantService, 'create' | 'revoke' | 'resourceUrl'>
-const failed = () => new ZToolsError(errorCodes.fileError, '文件选择授权未完成')
+const failed = () => new ZToolsError(errorCodes.fileError, 'File selection authorization did not complete')
 
 /** Native picker results are pinned immediately, projected to refs, and rolled back on partial acquisition. */
 export class PathReferenceDialogs {
@@ -50,7 +50,7 @@ export class PathReferenceDialogs {
       return { canceled: false, references: Object.freeze(references) }
     } catch (error) {
       const cleanup = await Promise.allSettled(created.map(id => this.grants.revoke(caller.webContentsId, id)))
-      if (cleanup.some(result => result.status === 'rejected')) throw new ZToolsError(errorCodes.fileError, '部分文件选择授权释放未确认')
+      if (cleanup.some(result => result.status === 'rejected')) throw new ZToolsError(errorCodes.fileError, 'Partial file selection grant release could not be confirmed')
       throw error
     }
   }

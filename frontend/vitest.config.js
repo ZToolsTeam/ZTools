@@ -45,6 +45,7 @@ export default defineConfig({
       '@stores': path.resolve(__dirname, './src/stores'),
       '@composables': path.resolve(__dirname, './src/composables'),
       // 宿主专用入口（插件缓存作用域工厂等），必须写在包入口别名之前，否则会被前缀匹配成 dist/index.js/host
+      '@ztools/plugins-spec/locale': path.resolve(__dirname, '../packages/ztools-plugins-spec/src/locale.js'),
       '@ztools/declarative-ui/host': path.resolve(__dirname, '../packages/declarative-ui/dist/host/index.js'),
       '@ztools/declarative-ui': path.resolve(__dirname, '../packages/declarative-ui/dist/index.js'),
       '@ztools/raycast-compat': path.resolve(__dirname, '../packages/declarative-ui/dist/index.js')

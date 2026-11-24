@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import path from 'node:path'
 import { Duplex } from 'node:stream'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import { getResolvedLocale, ZTOOLS_LOCALE_ENV_KEY } from '../i18n/index.js'
 
 export type ServiceTransport = Duplex & {
   readonly connecting: boolean
@@ -21,16 +22,19 @@ export class ServiceBridgeTransport extends Duplex implements ServiceTransport {
   constructor(executable: string, pipeName: string, timeoutMs: number, spawnBridge?: ServiceBridgeSpawner) {
     super({ allowHalfOpen: false })
     if (!path.isAbsolute(executable)) {
-      throw new ZToolsError(errorCodes.serviceAuthentication, 'ZToolsService 连接桥路径无效')
+      throw new ZToolsError(errorCodes.serviceAuthentication, 'Invalid ZToolsService bridge executable path')
     }
     const args = ['--client-bridge', pipeName, String(timeoutMs)]
     this.#child = spawnBridge ? spawnBridge(executable, args) : spawn(executable, args, {
-      windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], shell: false
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false,
+      env: { ...process.env, [ZTOOLS_LOCALE_ENV_KEY]: getResolvedLocale() }
     })
     this.clientProcessId = this.#child.pid ?? 0
     this.#child.stdout.on('data', (chunk: Buffer) => {
       if (this.connecting) {
-        this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService 连接桥在身份核验前返回数据'))
+        this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService bridge returned data before identity verification'))
       } else if (!this.push(chunk)) {
         this.#child.stdout.pause()
       }
@@ -41,13 +45,13 @@ export class ServiceBridgeTransport extends Duplex implements ServiceTransport {
     this.#child.on('close', (code) => {
       if (this.destroyed) return
       if (!this.#controlReceived && this.#control.length !== 0) {
-        this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService 连接桥控制消息不完整'))
+        this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'Incomplete ZToolsService bridge control message'))
         return
       }
       // 两条 stdio 流之间没有事件顺序保证；到 close 后再结束，保留晚于 stdout EOF 的鉴权错误。
       this.push(null)
       this.destroy(this.connecting || code !== 0
-        ? new ZToolsError(errorCodes.serviceUnavailable, 'ZToolsService 连接桥已退出')
+        ? new ZToolsError(errorCodes.serviceUnavailable, 'ZToolsService bridge exited')
         : undefined)
     })
   }
@@ -89,13 +93,13 @@ export class ServiceBridgeTransport extends Duplex implements ServiceTransport {
     if (this.destroyed) return
     this.#control += chunk.toString('utf8')
     if (this.#controlReceived || this.#control.length > 4096) {
-      this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService 连接桥控制消息无效'))
+      this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService bridge control message'))
       return
     }
     const newline = this.#control.indexOf('\n')
     if (newline < 0) return
     if (this.#control.slice(newline + 1).length !== 0) {
-      this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService 连接桥控制消息重复'))
+      this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'Duplicate ZToolsService bridge control message'))
       return
     }
     this.#controlReceived = true
@@ -103,13 +107,13 @@ export class ServiceBridgeTransport extends Duplex implements ServiceTransport {
     try {
       value = JSON.parse(this.#control.slice(0, newline))
     } catch (error) {
-      this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService 连接桥控制消息无法解析', {
+      this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'Failed to parse ZToolsService bridge control message', {
         hostCode: error instanceof Error ? error.name : 'BRIDGE_CONTROL_INVALID'
       }))
       return
     }
     if (!value || typeof value !== 'object') {
-      this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService 连接桥控制消息无效'))
+      this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService bridge control message'))
       return
     }
     const control = value as Record<string, unknown>
@@ -121,11 +125,11 @@ export class ServiceBridgeTransport extends Duplex implements ServiceTransport {
     if (control.status === 'error' && typeof control.win32 === 'number' &&
         Number.isInteger(control.win32) && control.win32 >= 0 && control.win32 <= 0xffffffff &&
         (control.code === errorCodes.serviceAuthentication || control.code === errorCodes.serviceUnavailable)) {
-      this.destroy(new ZToolsError(control.code, 'ZToolsService 服务端身份核验或连接失败', {
+      this.destroy(new ZToolsError(control.code, 'ZToolsService server identity verification or connection failed', {
         hostCode: `WIN32_${control.win32}`
       }))
       return
     }
-    this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService 连接桥身份信息无效'))
+    this.destroy(new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService bridge identity information'))
   }
 }

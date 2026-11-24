@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { FontManagerService } from '../../src/main/services/font-manager-service.js'
 import { parseFontList, parseFontPreview, runFontProcess, SystemFontProvider } from '../../src/main/services/font-provider.js'
+import { getLocaleSetting, setLocale } from '../../src/main/i18n/index.js'
 import { validateFontRequest } from '../../src/contracts/font-manager.js'
 import type { CallerIdentity } from '../../src/contracts/capabilities.js'
 import type { FontProvider } from '../../src/main/services/font-provider.js'
@@ -59,26 +60,77 @@ test('子进程失败和损坏输出不返回成功；取消终止实际子进�
   setTimeout(() => abort.abort(), 80)
   await assert.rejects(pending); assert.ok(Date.now() - start < 3000)
 })
-test('预览缺字提示：coverageWarning 原样透传，超长或非字符串拒绝', () => {
+test('预览缺字提示：coverageWarning 原样透传，coverageWarningCode 按当前 locale 本地化，超长或非字符串拒绝', () => {
+  const previousLocale = getLocaleSetting()
   const png = Buffer.alloc(33); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png); png.writeUInt32BE(1000, 16); png.writeUInt32BE(200, 20)
   const base = { version: 1, success: true, id: font.id, png: png.toString('base64'), fallbacks: ['LastResort'], license: '', licenseUrl: '', copyright: '', manufacturer: '' }
-  assert.equal(parseFontPreview(base, font.id).coverageWarning, '')
-  assert.equal(parseFontPreview({ ...base, coverageWarning: '部分字符本机没有任何字体包含，显示为占位方框。' }, font.id).coverageWarning, '部分字符本机没有任何字体包含，显示为占位方框。')
-  assert.throws(() => parseFontPreview({ ...base, coverageWarning: 'x'.repeat(1025) }, font.id))
-  assert.throws(() => parseFontPreview({ ...base, coverageWarning: 1 }, font.id))
+  try {
+    assert.equal(parseFontPreview(base, font.id).coverageWarning, '')
+    assert.equal(parseFontPreview({ ...base, coverageWarning: '部分字符本机没有任何字体包含，显示为占位方框。' }, font.id).coverageWarning, '部分字符本机没有任何字体包含，显示为占位方框。')
+    assert.throws(() => parseFontPreview({ ...base, coverageWarning: 'x'.repeat(1025) }, font.id))
+    assert.throws(() => parseFontPreview({ ...base, coverageWarning: 1 }, font.id))
+    assert.throws(() => parseFontPreview({ ...base, coverageWarningCode: 123 }, font.id))
+    assert.throws(() => parseFontPreview({ ...base, coverageWarningCode: 'MISSING_GLYPHS_LAST_RESORT', coverageFallbackFonts: 'PingFangSC' }, font.id))
+
+    const structured = {
+      ...base,
+      coverageWarningCode: 'MISSING_GLYPHS_LAST_RESORT',
+      coverageFallbackFonts: ['PingFangSC-Regular', 'AppleSymbols'],
+      coverageWarning: 'Some characters are not covered by any installed font and are shown as placeholder boxes.'
+    }
+    setLocale('en-US')
+    const enResult = parseFontPreview(structured, font.id)
+    assert.match(enResult.coverageWarning ?? '', /placeholder boxes/)
+    assert.match(enResult.coverageWarning ?? '', /PingFangSC-Regular, AppleSymbols/)
+    assert.doesNotMatch(enResult.coverageWarning ?? '', /[\u4e00-\u9fff]/)
+
+    setLocale('zh-CN')
+    const zhResult = parseFontPreview(structured, font.id)
+    assert.match(zhResult.coverageWarning ?? '', /占位方框/)
+    assert.match(zhResult.coverageWarning ?? '', /PingFangSC-Regular、AppleSymbols/)
+
+    // 超过 8 个回退字体时显示总计数，无回退字体时仅显示基础提示
+    const manyFallbacks = Array.from({ length: 10 }, (_, idx) => `FallbackFont-${idx + 1}`)
+    setLocale('en-US')
+    assert.match(
+      parseFontPreview({ ...structured, coverageFallbackFonts: manyFallbacks }, font.id).coverageWarning ?? '',
+      /\(10 total\)/
+    )
+    assert.equal(
+      parseFontPreview({ ...structured, coverageFallbackFonts: [] }, font.id).coverageWarning,
+      'Some characters are not covered by any installed font and are shown as placeholder boxes.'
+    )
+    setLocale('zh-CN')
+    assert.match(
+      parseFontPreview({ ...structured, coverageFallbackFonts: manyFallbacks }, font.id).coverageWarning ?? '',
+      /等 10 个/
+    )
+  } finally {
+    setLocale(previousLocale, 'zh-CN')
+  }
 })
 const visionHelper = path.resolve(__dirname, '../../../out/mac-vision-native/native/ZToolsMacVision')
 const visionSkip = process.platform !== 'darwin' ? '仅 macOS' : existsSync(visionHelper) ? false : 'ZToolsMacVision 未构建'
 test('真实 Mac 字体组件：苹方等 /System/ 下（含 AssetsV2、PrivateFrameworks）的字体标为系统字体；缺字时返回 coverageWarning', { skip: visionSkip }, async () => {
+  const previousLocale = getLocaleSetting()
   const provider = new SystemFontProvider(visionHelper, 'darwin')
-  const fonts = await provider.list(signal())
-  const pingfang = fonts.filter(item => item.id.startsWith('PingFang'))
-  assert.ok(pingfang.length > 0, '本机应有苹方字体')
-  assert.ok(pingfang.every(item => item.system), '苹方必须标为系统字体')
-  for (const item of fonts) assert.equal(item.system, item.filePath.startsWith('/System/'))
-  const missing = await provider.preview('Helvetica', 'Hello 中文 \u{10FFFD}', signal())
-  assert.ok(missing.fallbacks.includes('LastResort'))
-  assert.match(missing.coverageWarning ?? '', /占位方框/)
-  const complete = await provider.preview('Helvetica', 'Hello world', signal())
-  assert.equal(complete.coverageWarning, '')
+  try {
+    const fonts = await provider.list(signal())
+    const pingfang = fonts.filter(item => item.id.startsWith('PingFang'))
+    assert.ok(pingfang.length > 0, '本机应有苹方字体')
+    assert.ok(pingfang.every(item => item.system), '苹方必须标为系统字体')
+    for (const item of fonts) assert.equal(item.system, item.filePath.startsWith('/System/'))
+    setLocale('zh-CN')
+    const missingZh = await provider.preview('Helvetica', 'Hello 中文 \u{10FFFD}', signal())
+    assert.ok(missingZh.fallbacks.includes('LastResort'))
+    assert.match(missingZh.coverageWarning ?? '', /占位方框/)
+    setLocale('en-US')
+    const missingEn = await provider.preview('Helvetica', 'Hello 中文 \u{10FFFD}', signal())
+    assert.ok(missingEn.fallbacks.includes('LastResort'))
+    assert.match(missingEn.coverageWarning ?? '', /placeholder boxes/)
+    const complete = await provider.preview('Helvetica', 'Hello world', signal())
+    assert.equal(complete.coverageWarning, '')
+  } finally {
+    setLocale(previousLocale, 'zh-CN')
+  }
 })

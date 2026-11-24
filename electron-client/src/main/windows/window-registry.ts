@@ -57,7 +57,7 @@ export class WindowRegistry {
 
   #register(webContents: WebContents, identity: CallerIdentity, sdkApiLane: SdkApiLane): CallerIdentity {
     if (this.#callers.has(webContents.id)) {
-      throw new Error(`WebContents 已注册: ${webContents.id}`)
+      throw new Error(`WebContents is already registered: ${webContents.id}`)
     }
     const registeredIdentity = Object.freeze({ ...identity })
     this.#callers.set(webContents.id, registeredIdentity)

@@ -1,3 +1,5 @@
+import { resolveSdkText } from '../core/environment.js'
+
 /**
  * System API - 系统操作
  * 封装系统相关的业务逻辑
@@ -51,14 +53,14 @@ class SystemAPI {
         Object.keys(options).some(key => key !== 'requestIds') ||
         (requestIds !== undefined && (!Array.isArray(requestIds) || requestIds.length > 64 ||
           requestIds.some(value => typeof value !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(value))))) {
-      const error = new Error('诊断请求 ID 无效')
+      const error = new Error(resolveSdkText('诊断请求 ID 无效', 'Invalid diagnostics request IDs'))
       error.code = 'INVALID_REQUEST'
       throw error
     }
     const ids = requestIds === undefined ? [] : [...new Set(requestIds)]
     const data = await this.transport.call('diagnostics_get', ids.length ? { requestIds: ids } : {})
     if (!data || data.schemaVersion !== 1 || !Array.isArray(data.requestFailures) || data.requestFailures.length > ids.length) {
-      const error = new Error('宿主诊断响应无效')
+      const error = new Error(resolveSdkText('宿主诊断响应无效', 'Invalid host diagnostics response'))
       error.code = 'DIAGNOSTICS_INVALID'
       throw error
     }
@@ -73,7 +75,7 @@ class SystemAPI {
           typeof failure.failureStage !== 'string' || !/^[a-z-]{1,32}$/.test(failure.failureStage) ||
           typeof failure.errorCode !== 'string' || !/^[A-Z][A-Z0-9_]{0,63}$/.test(failure.errorCode) ||
           typeof failure.occurredAt !== 'string' || !Number.isFinite(Date.parse(failure.occurredAt))) {
-        const error = new Error('宿主诊断记录无效')
+        const error = new Error(resolveSdkText('宿主诊断记录无效', 'Invalid host diagnostics record'))
         error.code = 'DIAGNOSTICS_INVALID'
         throw error
       }
@@ -128,7 +130,7 @@ class SystemAPI {
     if (r && r.success) {
       return r
     }
-    throw new Error(r?.error || 'Get system info failed')
+    throw new Error(r?.error || resolveSdkText('获取系统信息失败', 'Failed to get system info'))
   }
 
   // ============ 系统扩展功能 (类似 uTools API) ============
@@ -142,7 +144,7 @@ class SystemAPI {
     if (r && r.success && r.nativeId) {
       return r.nativeId
     }
-    throw new Error(r?.error || 'Get native ID failed')
+    throw new Error(r?.error || resolveSdkText('获取本机唯一标识失败', 'Failed to get native ID'))
   }
 
   /**
@@ -289,7 +291,7 @@ class SystemAPI {
       typeof this.transport.isElectronEnvironment !== 'function' ||
       !this.transport.isElectronEnvironment()
     ) {
-      const error = new Error('运行时能力查询仅支持 Electron 宿主')
+      const error = new Error(resolveSdkText('运行时能力查询仅支持 Electron 宿主', 'Runtime capability queries are only supported in the Electron host'))
       error.code = 'NOT_SUPPORTED'
       throw error
     }
@@ -302,20 +304,20 @@ class SystemAPI {
       typeof this.transport.isElectronEnvironment !== 'function' ||
       !this.transport.isElectronEnvironment()
     ) {
-      const error = new Error('运行时能力申请仅支持 Electron 宿主')
+      const error = new Error(resolveSdkText('运行时能力申请仅支持 Electron 宿主', 'Runtime capability requests are only supported in the Electron host'))
       error.code = 'NOT_SUPPORTED'
       throw error
     }
     const capability = request && typeof request === 'object' ? request.capability : undefined
     const timeout = options.timeout ?? 120000
     if (!Number.isInteger(timeout) || timeout < 1 || timeout > 120000) {
-      const error = new Error('屏幕权限申请等待时间必须为 1 到 120000 毫秒')
+      const error = new Error(resolveSdkText('屏幕权限申请等待时间必须为 1 到 120000 毫秒', 'Screen permission request timeout must be between 1 and 120000 ms'))
       error.code = 'INVALID_REQUEST'
       throw error
     }
     if (options.signal !== undefined && (!options.signal || typeof options.signal.aborted !== 'boolean' ||
         typeof options.signal.addEventListener !== 'function' || typeof options.signal.removeEventListener !== 'function')) {
-      const error = new Error('屏幕权限申请 signal 无效')
+      const error = new Error(resolveSdkText('屏幕权限申请 signal 无效', 'Invalid AbortSignal for screen permission request'))
       error.code = 'INVALID_REQUEST'
       throw error
     }
@@ -331,7 +333,7 @@ class SystemAPI {
       typeof this.transport.isElectronEnvironment !== 'function' ||
       !this.transport.isElectronEnvironment()
     ) {
-      const error = new Error('运行时能力撤销仅支持 Electron 宿主')
+      const error = new Error(resolveSdkText('运行时能力撤销仅支持 Electron 宿主', 'Runtime capability revocation is only supported in the Electron host'))
       error.code = 'NOT_SUPPORTED'
       throw error
     }
@@ -345,7 +347,7 @@ class SystemAPI {
       typeof this.transport.isElectronEnvironment !== 'function' ||
       !this.transport.isElectronEnvironment()
     ) {
-      const error = new Error('运行时能力管理仅支持 Electron 宿主')
+      const error = new Error(resolveSdkText('运行时能力管理仅支持 Electron 宿主', 'Runtime capability management is only supported in the Electron host'))
       error.code = 'NOT_SUPPORTED'
       throw error
     }
@@ -358,7 +360,7 @@ class SystemAPI {
       typeof this.transport.isElectronEnvironment !== 'function' ||
       !this.transport.isElectronEnvironment()
     ) {
-      const error = new Error('运行时能力管理仅支持 Electron 宿主')
+      const error = new Error(resolveSdkText('运行时能力管理仅支持 Electron 宿主', 'Runtime capability management is only supported in the Electron host'))
       error.code = 'NOT_SUPPORTED'
       throw error
     }
@@ -374,7 +376,7 @@ class SystemAPI {
       typeof this.transport.isElectronEnvironment !== 'function' ||
       !this.transport.isElectronEnvironment()
     ) {
-      const error = new Error('Runtime identity is only available from the Electron host')
+      const error = new Error(resolveSdkText('运行时身份信息仅支持在 Electron 宿主中获取', 'Runtime identity is only available from the Electron host'))
       error.code = 'NOT_SUPPORTED'
       throw error
     }
@@ -483,7 +485,7 @@ class SystemAPI {
   /** 管理当前窗口及插件的定时防休眠；离开插件页面后仍由主进程保持。 */
   async managePowerSession(options) {
     const r = await this.transport.call('system_power_session', options)
-    if (!r?.success) throw new Error(r?.error?.message || r?.error || '防休眠操作失败')
+    if (!r?.success) throw new Error(r?.error?.message || r?.error || resolveSdkText('防休眠操作失败', 'Power sleep-prevention action failed'))
     return r.data ?? r
   }
 
@@ -566,7 +568,7 @@ class SystemAPI {
    */
   async getHardwareSummary() {
     const result = await this.transport.call('system_get_hardware_summary', {})
-    const data = result?.data, failed = () => Object.assign(new Error('硬件概要响应无效'), { code: 'SYSTEM_ERROR' })
+    const data = result?.data, failed = () => Object.assign(new Error(resolveSdkText('硬件概要响应无效', 'Invalid hardware summary response')), { code: 'SYSTEM_ERROR' })
     if (result?.success !== true || !data || !['windows', 'macos'].includes(data.platform) || !['ia32', 'x64', 'arm64'].includes(data.processArch) || typeof data.osVersion !== 'string' || data.osVersion.length > 64 || !Array.isArray(data.cpuModels) || data.cpuModels.length > 32 || data.cpuModels.some(value => typeof value !== 'string' || !value || value.length > 512) || !Number.isSafeInteger(data.logicalCpuCount) || data.logicalCpuCount < 0 || data.logicalCpuCount > 65536 || !Number.isSafeInteger(data.totalMemory) || data.totalMemory < 0 || !data.fieldAvailability || ['cpuModels', 'logicalCpuCount', 'totalMemory', 'osVersion'].some(key => typeof data.fieldAvailability[key] !== 'boolean')) throw failed()
     if (data.fieldAvailability.cpuModels !== !!data.cpuModels.length || data.fieldAvailability.logicalCpuCount !== (data.logicalCpuCount > 0) || data.fieldAvailability.totalMemory !== (data.totalMemory > 0) || data.fieldAvailability.osVersion !== !!data.osVersion) throw failed()
     return Object.freeze({ platform: data.platform, processArch: data.processArch, osVersion: data.osVersion, cpuModels: Object.freeze([...data.cpuModels]), logicalCpuCount: data.logicalCpuCount, totalMemory: data.totalMemory, fieldAvailability: Object.freeze({ ...data.fieldAvailability }) })
@@ -633,7 +635,7 @@ class SystemAPI {
         web: r.web || null
       }
     }
-    throw new Error(r?.error || 'Check update failed')
+    throw new Error(r?.error || resolveSdkText('检查更新失败', 'Check update failed'))
   }
 
   /**
@@ -674,7 +676,7 @@ class SystemAPI {
     if (r && r.success) {
       return r
     }
-    throw new Error(r?.error || 'Update failed')
+    throw new Error(r?.error || resolveSdkText('执行更新失败', 'Update failed'))
   }
 
   /**
@@ -689,7 +691,7 @@ class SystemAPI {
         webVersion: r.webVersion || '0'
       }
     }
-    throw new Error(r?.error || 'Get version failed')
+    throw new Error(r?.error || resolveSdkText('获取版本信息失败', 'Get version failed'))
   }
 
   // ============ 提权执行功能 ============
@@ -710,7 +712,7 @@ class SystemAPI {
     if (r && r.success) {
       return r.result
     }
-    throw new Error(r?.error || 'Privileged execute failed')
+    throw new Error(r?.error || resolveSdkText('特权操作执行失败', 'Privileged execute failed'))
   }
 
   // ============ 快捷键管理 ============

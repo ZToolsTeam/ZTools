@@ -194,7 +194,7 @@ describe('外框导航与通用控件键盘方向键一致性及模态隔离测�
     await items[2].trigger('keydown', { key: 'Enter' })
     await flushPromises()
     expect(router.currentRoute.value.name).toBe('list')
-    expect(router.currentRoute.value.params.category).toBe('办公效率')
+    expect(router.currentRoute.value.params.category).toBe('productivity')
 
     // 按 → 移交焦点给右侧卡片网格
     await items[2].trigger('keydown', { key: 'ArrowRight' })

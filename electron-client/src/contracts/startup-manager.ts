@@ -19,15 +19,15 @@ export function validateStartupRequest(value: unknown): asserts value is Startup
   const v = value as Record<string, unknown> | null
   if (!v || typeof v !== 'object' || Array.isArray(v) || typeof v.action !== 'string' ||
       !['scan', 'cancel', 'set-enabled', 'remove', 'restore', 'backups', 'settings'].includes(v.action) ||
-      typeof v.operationId !== 'string' || !/^[\w-]{1,100}$/.test(v.operationId)) throw new ZToolsError(errorCodes.invalidRequest, '启动管理请求无效')
+      typeof v.operationId !== 'string' || !/^[\w-]{1,100}$/.test(v.operationId)) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid startup manager request')
   const keys = ['action', 'operationId']
   if (['set-enabled', 'remove', 'restore'].includes(v.action)) {
     keys.push('id')
-    if (typeof v.id !== 'string' || !/^[a-f0-9-]{36,64}$/.test(v.id)) throw new ZToolsError(errorCodes.invalidRequest, '启动项编号无效')
+    if (typeof v.id !== 'string' || !/^[a-f0-9-]{36,64}$/.test(v.id)) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid startup item ID')
   }
   if (v.action === 'set-enabled') {
     keys.push('enabled')
-    if (typeof v.enabled !== 'boolean') throw new ZToolsError(errorCodes.invalidRequest, '启动状态无效')
+    if (typeof v.enabled !== 'boolean') throw new ZToolsError(errorCodes.invalidRequest, 'Invalid startup enabled state')
   }
-  if (Object.keys(v).some(k => !keys.includes(k))) throw new ZToolsError(errorCodes.invalidRequest, '启动管理含有多余参数')
+  if (Object.keys(v).some(k => !keys.includes(k))) throw new ZToolsError(errorCodes.invalidRequest, 'Startup manager request contains unexpected parameters')
 }

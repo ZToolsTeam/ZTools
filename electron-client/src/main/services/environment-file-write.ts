@@ -14,11 +14,11 @@ export async function preserveAndWriteEnvironment(adapter: PathAccessAdapter, pr
     try {
       await adapter.save(incoming, Buffer.from(next), false, signal)
       const written = await adapter.pinCommittedSave(incoming, signal)
-      try { if ((await adapter.read(written, [], 1024 * 1024, signal)).toString('utf8') !== next) throw new Error('新配置副本核验失败') }
+      try { if ((await adapter.read(written, [], 1024 * 1024, signal)).toString('utf8') !== next) throw new Error('New configuration copy verification failed') }
       finally { await adapter.release(written) }
     } finally { await adapter.release(incoming) }
     const old = await adapter.deriveRead(parent, [name], signal)
-    try { if ((await adapter.read(old, [], 1024 * 1024, signal)).toString('utf8') !== original) throw new Error('移动前配置已变化') }
+    try { if ((await adapter.read(old, [], 1024 * 1024, signal)).toString('utf8') !== original) throw new Error('Configuration changed before move') }
     finally { await adapter.release(old) }
     signal.throwIfAborted()
     // 原对象离开原位后，用独立时限完成提交或恢复；界面取消不能中断恢复。
@@ -27,7 +27,7 @@ export async function preserveAndWriteEnvironment(adapter: PathAccessAdapter, pr
     try { await adapter.move(parent, [name], retained, false, commitSignal); moved = true }
     finally { await adapter.release(retained) }
     const retainedRead = await adapter.deriveRead(recovery, ['original'], commitSignal)
-    try { if ((await adapter.read(retainedRead, [], 1024 * 1024, commitSignal)).toString('utf8') !== original) throw new Error('移出后检测到并发编辑，已停止提交') }
+    try { if ((await adapter.read(retainedRead, [], 1024 * 1024, commitSignal)).toString('utf8') !== original) throw new Error('Concurrent edit detected after moving original file; commit aborted') }
     finally { await adapter.release(retainedRead) }
     const target = await adapter.deriveSave(parent, [name], commitSignal)
     try { await adapter.move(recovery, ['updated'], target, false, commitSignal) }
@@ -41,15 +41,15 @@ export async function preserveAndWriteEnvironment(adapter: PathAccessAdapter, pr
         try { await adapter.move(recovery, ['original'], target, false, restoreSignal) }
         finally { await adapter.release(target) }
       } catch (restoreError) {
-        failure += `；原位恢复未确认：${restoreError instanceof Error ? restoreError.message : String(restoreError)}`
+        failure += `; in-place restore not confirmed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`
       }
     }
   } finally {
     for (const object of [recovery, parent]) if (object) {
       try { await adapter.release(object) }
-      catch (error) { failure += `${failure ? '；' : ''}文件句柄释放未确认：${error instanceof Error ? error.message : String(error)}` }
+      catch (error) { failure += `${failure ? '; ' : ''}file handle release not confirmed: ${error instanceof Error ? error.message : String(error)}` }
     }
   }
-  if (failure) throw new Error(`${failure}；未确认保存成功。请检查原配置 ${profile}${recoveryPath ? ` 与恢复目录 ${recoveryPath}（original 为移出的原对象）` : ''}`)
+  if (failure) throw new Error(`${failure}; save not confirmed. Check original configuration ${profile}${recoveryPath ? ` and recovery directory ${recoveryPath} (original is the moved original file)` : ''}`)
   return path.join(recoveryPath, 'original')
 }

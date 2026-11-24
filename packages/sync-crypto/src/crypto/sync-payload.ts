@@ -1,4 +1,5 @@
 import { encryptAesGcm, decryptAesGcmString, type EncryptedPayload } from './aes-gcm.js'
+import { tSync } from '../i18n.js'
 
 export interface ConfigSyncData {
   schemaVersion: number
@@ -29,11 +30,12 @@ export interface ClipboardSyncData {
  */
 export function encryptConfigPayload(
   data: ConfigSyncData,
-  key: Buffer
+  key: Buffer,
+  locale?: string
 ): EncryptedPayload {
   const jsonStr = JSON.stringify(data)
   const aad = `ztools:config:v${data.schemaVersion}:${data.updatedAt}`
-  return encryptAesGcm(jsonStr, key, aad)
+  return encryptAesGcm(jsonStr, key, aad, locale)
 }
 
 /**
@@ -41,12 +43,13 @@ export function encryptConfigPayload(
  */
 export function decryptConfigPayload(
   payload: EncryptedPayload,
-  key: Buffer
+  key: Buffer,
+  locale?: string
 ): ConfigSyncData {
-  const jsonStr = decryptAesGcmString(payload, key)
+  const jsonStr = decryptAesGcmString(payload, key, locale)
   const data = JSON.parse(jsonStr) as ConfigSyncData
   if (typeof data !== 'object' || data === null || typeof data.schemaVersion !== 'number') {
-    throw new Error('解密后的配置数据格式无效')
+    throw new Error(tSync('payload.invalidConfig', undefined, locale))
   }
   return data
 }
@@ -56,11 +59,12 @@ export function decryptConfigPayload(
  */
 export function encryptClipboardPayload(
   data: ClipboardSyncData,
-  key: Buffer
+  key: Buffer,
+  locale?: string
 ): EncryptedPayload {
   const jsonStr = JSON.stringify(data)
   const aad = `ztools:clipboard:v${data.schemaVersion}:${data.updatedAt}`
-  return encryptAesGcm(jsonStr, key, aad)
+  return encryptAesGcm(jsonStr, key, aad, locale)
 }
 
 /**
@@ -68,12 +72,13 @@ export function encryptClipboardPayload(
  */
 export function decryptClipboardPayload(
   payload: EncryptedPayload,
-  key: Buffer
+  key: Buffer,
+  locale?: string
 ): ClipboardSyncData {
-  const jsonStr = decryptAesGcmString(payload, key)
+  const jsonStr = decryptAesGcmString(payload, key, locale)
   const data = JSON.parse(jsonStr) as ClipboardSyncData
   if (typeof data !== 'object' || data === null || !Array.isArray(data.items)) {
-    throw new Error('解密后的剪贴板数据格式无效')
+    throw new Error(tSync('payload.invalidClipboard', undefined, locale))
   }
   return data
 }

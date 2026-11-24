@@ -31,7 +31,7 @@ export interface MacApplicationInspectorDependencies {
 const execFileAsync = promisify(execFileCallback)
 
 function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw signal.reason ?? new Error('macOS 应用校验已取消')
+  if (signal?.aborted) throw signal.reason ?? new Error('macOS application inspection was cancelled')
 }
 
 async function readInfoPlistWithPlutil(filePath: string, signal?: AbortSignal): Promise<unknown> {
@@ -84,11 +84,11 @@ async function requireEntry(
     (expected === 'directory' ? !stat.isDirectory() : !stat.isFile()) ||
     (expected === 'file' && (!Number.isSafeInteger(stat.size) || stat.size <= 0 || stat.size > maximumSize))
   ) {
-    throw new Error('macOS 应用包结构无效')
+    throw new Error('Invalid macOS application bundle structure')
   }
   const realPath = await dependencies.realpath(filePath)
   throwIfAborted(signal)
-  if (realPath !== filePath) throw new Error('macOS 应用包不允许符号链接')
+  if (realPath !== filePath) throw new Error('Symbolic links are not allowed inside macOS application bundles')
 }
 
 export function createMacApplicationInspector(
@@ -103,7 +103,7 @@ export function createMacApplicationInspector(
       selectedPath.includes('\0') ||
       !path.posix.isAbsolute(selectedPath)
     ) {
-      throw new Error('macOS 应用路径无效')
+      throw new Error('Invalid macOS application path')
     }
 
     const appPath = await dependencies.realpath(selectedPath)
@@ -114,7 +114,7 @@ export function createMacApplicationInspector(
       appPath !== path.posix.resolve(selectedPath) ||
       path.posix.extname(appPath).toLowerCase() !== '.app'
     ) {
-      throw new Error('macOS 应用路径无效或包含符号链接')
+      throw new Error('Invalid macOS application path or contains symbolic links')
     }
 
     await requireEntry(appPath, 'directory', dependencies, Number.MAX_SAFE_INTEGER, signal)
@@ -134,11 +134,11 @@ export function createMacApplicationInspector(
       !isBundleIdentifier(metadata.CFBundleIdentifier) ||
       !isExecutableName(metadata.CFBundleExecutable)
     ) {
-      throw new Error('Info.plist 缺少有效的应用身份')
+      throw new Error('Info.plist is missing a valid application identity')
     }
 
     const executablePath = path.posix.join(macOSPath, metadata.CFBundleExecutable)
-    if (executablePath.length > MAX_APPLICATION_PATH_LENGTH) throw new Error('macOS 应用可执行文件路径过长')
+    if (executablePath.length > MAX_APPLICATION_PATH_LENGTH) throw new Error('macOS application executable path exceeds length limit')
     await requireEntry(executablePath, 'file', dependencies, Number.MAX_SAFE_INTEGER, signal)
     throwIfAborted(signal)
     await dependencies.access(executablePath, fsConstants.X_OK)

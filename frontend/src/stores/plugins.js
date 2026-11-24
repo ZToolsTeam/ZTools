@@ -1,4 +1,9 @@
-import { normalizeCategoryNames } from '@/utils/pluginCategories'
+import {
+  CATEGORY_ID_TO_NAME,
+  isAllCategory,
+  normalizeCategoryIds,
+  normalizeCategoryRouteParam
+} from '@/utils/pluginCategories'
 import { invalidatePluginSession } from '@/declarative/pluginSession'
 import { defineStore } from 'pinia'
 import router from '@/router'
@@ -33,6 +38,7 @@ import {
   loadInstalledDeclarativePlugin
 } from '@/utils/declarativePluginLoader'
 import {
+  OFFICIAL_BADGE_CODE,
   getBundledPluginEntries,
   getBundledPluginEntry,
   isBundledPlugin,
@@ -40,8 +46,78 @@ import {
   resolveBundledReplacementFeature
 } from '@/utils/bundledPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
+import { getLocalizedPluginField, mergePluginI18n } from '@/utils/pluginI18n'
 import { runPluginInstall } from '@/utils/pluginInstallOperation'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 import { t } from '@/i18n'
+
+function isPlainRecord(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function hasPluginCategory(plugin) {
+  if (!isPlainRecord(plugin)) return false
+  if (normalizeCategoryIds(plugin.categoryId).length > 0) return true
+  if (normalizeCategoryIds(plugin.category).length > 0) return true
+  if (typeof plugin.category === 'string' && plugin.category.trim().length > 0) return true
+  if (Array.isArray(plugin.category)) {
+    return plugin.category.some((item) => typeof item === 'string' && item.trim().length > 0)
+  }
+  return false
+}
+
+function isSameJsonValue(a, b) {
+  if (a === b) return true
+  if (!a || !b) return false
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return false
+  }
+}
+
+/** 从市场目录条目提取可用于兜底补齐本地已安装插件的元数据（icon / i18n / 分类） */
+function extractCatalogPatch(item) {
+  if (!isPlainRecord(item)) return null
+  const icon = typeof item.icon === 'string' && item.icon.startsWith('http') ? item.icon : ''
+  const i18n = isPlainRecord(item.i18n) ? mergePluginI18n(item.i18n) : undefined
+  const categoryIds = normalizeCategoryIds(item.categoryId || item.category)
+  const categoryId = categoryIds.length === 1
+    ? categoryIds[0]
+    : categoryIds.length > 1
+      ? categoryIds
+      : undefined
+  const category = categoryIds.length > 0
+    ? categoryIds.map((id) => CATEGORY_ID_TO_NAME[id]).filter(Boolean).join(' / ')
+    : ''
+  if (!icon && !i18n && !categoryId && !category) return null
+  return {
+    ...(icon ? { icon } : {}),
+    ...(i18n ? { i18n } : {}),
+    ...(categoryId ? { categoryId } : {}),
+    ...(category ? { category } : {})
+  }
+}
+
+function normalizeCatalogPatchEntry(raw) {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    return trimmed ? { icon: trimmed } : null
+  }
+  return extractCatalogPatch(raw)
+}
+
+function mergeCatalogPatch(existing, incoming) {
+  if (!existing) return incoming
+  if (!incoming) return existing
+  const mergedI18n = mergePluginI18n(existing.i18n, incoming.i18n)
+  return {
+    ...(existing.icon || incoming.icon ? { icon: incoming.icon || existing.icon } : {}),
+    ...(mergedI18n ? { i18n: mergedI18n } : {}),
+    ...(existing.categoryId || incoming.categoryId ? { categoryId: incoming.categoryId || existing.categoryId } : {}),
+    ...(existing.category || incoming.category ? { category: incoming.category || existing.category } : {})
+  }
+}
 
 /** 安装 / 卸载通知交给版本处理；版本钩子出错只记日志，不影响安装状态 */
 function notifyLifecycle(name, pluginId) {
@@ -117,6 +193,7 @@ export function sanitizeRecentUsedAt(raw, recents, now = Date.now()) {
 }
 
 export const HIDDEN_BUNDLED_CONFIG_KEY = 'plugins.hidden_bundled'
+export const BUNDLED_VISIBILITY_SIGNAL = 'ztools_bundled_visibility_changed'
 
 /**
  * 解析并校验已隐藏（假卸载）的内置插件 ID 列表：
@@ -138,6 +215,60 @@ export function sanitizeHiddenBundledIds(raw) {
   return result
 }
 
+async function persistBundledPluginVisibility(store, id, hidden) {
+  const config = window.ztools?.config
+  if (typeof config?.get !== 'function' || typeof config?.set !== 'function') {
+    throw new Error(t('pluginsStore.saveBundledVisibilityFailed'))
+  }
+  await store.ensureHiddenBundledLoaded()
+  const nextHidden = new Set(store.hiddenBundledSet)
+  if (hidden) nextHidden.add(id)
+  else nextHidden.delete(id)
+  const saved = await config.set(
+    HIDDEN_BUNDLED_CONFIG_KEY,
+    JSON.stringify(Array.from(nextHidden)),
+    false,
+    'user_settings.json'
+  )
+  if (saved !== true) throw new Error(t('pluginsStore.saveBundledVisibilityFailed'))
+
+  // 先前发出的配置读取可能晚于本次写入完成。
+  store._hiddenBundledLoadPromise = null
+  store.hiddenBundledSet = nextHidden
+  store._hiddenBundledLoaded = true
+  store._installedRevision += 1
+  const entry = getBundledPluginEntry(id)
+  const resolvedId = entry?.pluginId || id
+  if (hidden) {
+    store.installedSet = new Set(Array.from(store.installedSet).filter(
+      (installedId) => normalizePluginId(installedId).toLowerCase() !== id
+    ))
+    store.installedPlugins = store.installedPlugins.filter(
+      (p) => normalizePluginId(p.pluginId || p.id).toLowerCase() !== id
+    )
+  } else {
+    store.installedSet.add(resolvedId)
+    if (entry && isPluginVisible(entry) && isPluginSupportedOnCurrentPlatform(entry) &&
+        !store.installedPlugins.some((p) => normalizePluginId(p.pluginId || p.id).toLowerCase() === id)) {
+      const restored = { ...entry, builtin: true, lastUsedTime: store.recentUsedAt[resolvedId] || 0 }
+      store.installedPlugins = [...store.installedPlugins, restored].sort(
+        (a, b) => (b.lastUsedTime || 0) - (a.lastUsedTime || 0)
+      )
+    }
+  }
+  // 两个窗口同源；storage 只传变更信号，新窗口和接收方均从宿主配置读取选择。
+  try {
+    const storage = window.localStorage
+    if (storage) {
+      storage.setItem(BUNDLED_VISIBILITY_SIGNAL, storage.getItem(BUNDLED_VISIBILITY_SIGNAL) === '1' ? '0' : '1')
+    }
+  } catch (err) {
+    console.warn('[plugins] 通知其他窗口刷新内置插件可见性失败:', err)
+  }
+  track('bundled_plugin_visibility', id, { action: hidden ? 'hide' : 'restore' })
+  return { success: true, pluginId: hidden ? id : resolvedId, hidden }
+}
+
 export const usePluginsStore = defineStore('plugins', {
   state: () => ({
     items: [],
@@ -153,13 +284,14 @@ export const usePluginsStore = defineStore('plugins', {
     recentUsedAt: {},
     installedSet: new Set(),
     installedPlugins: [], // 已安装插件的完整信息列表
-    installedListLoaded: false, // 最近一次是否从宿主成功读到本地已安装列表（失败时只有内置插件，不能当作完整列表）
+    installedListLoaded: false, // 宿主安装列表和内置插件可见性均已读到，才允许同步完整快照
     _installedRequestId: 0,
     _installedRevision: 0,
-    hiddenBundledSet: new Set(), // 用户在设置中假卸载（隐藏）的内置插件 ID 集合（小写）
+    hiddenBundledSet: new Set(), // 在主页和搜索中隐藏的内置插件 ID（小写）
     _hiddenBundledLoaded: false, // 是否已从本地配置加载过 hiddenBundledSet
     _hiddenBundledLoadPromise: null,
-    _togglingBundledSet: new Set(), // 正在切换假卸载/还原状态的内置插件互斥锁
+    _togglingBundledSet: new Set(), // 每个插件只允许一次可见性切换
+    _bundledVisibilityWrite: null, // 不同插件共用同一个配置键，按请求顺序写入
     downloadingSet: new Set(), // 正在下载的插件ID
     installingSet: new Set(), // 正在安装的插件ID集合（并发防重互斥）
     installFailedSet: new Set(), // 安装失败的插件ID（用于显示"重试"）
@@ -172,10 +304,12 @@ export const usePluginsStore = defineStore('plugins', {
     lastUpdateCheckTime: 0, // 上次批量检查更新的时间戳
     loading: false,
     error: null,
+    errorKey: null,
     // 推荐插件（从后端 API 获取）
     recommendedItems: [],
     recommendedLoading: false,
     recommendedError: null,
+    recommendedErrorKey: null,
     // 各分类下当前系统可用的插件数；null 表示还没算出来（此时不隐藏任何分类）
     categoryCounts: null,
     // 初始化状态（防重入）
@@ -213,10 +347,42 @@ export const usePluginsStore = defineStore('plugins', {
       return Boolean(state.revokedMap[pid]?.revoked)
     },
 
-    // 获取下架原因
+    // 获取下架原因（响应式按当前 locale 动态计算，避免热切换冻结静态中文）
     getRevokedReason: (state) => (pluginId) => {
       const pid = normalizePluginId(pluginId)
-      return state.revokedMap[pid]?.reason || t('pluginCatalog.revokedDisabledReason')
+      const entry = state.revokedMap[pid]
+      if (!entry) return t('pluginCatalog.revokedDisabledReason')
+      if (entry.kind === 'platform') {
+        if (entry.targetItem) {
+          const label = getPluginPlatformLabel(entry.targetItem)
+          return label
+            ? t('pluginsStore.platformUnsupportedWithLabel', { label })
+            : t('pluginsStore.platformUnsupported')
+        }
+        return entry.reason || t('pluginsStore.platformUnsupported')
+      }
+      const localized = getLocalizedPluginField(
+        {
+          revokedReason: entry.rawReason || '',
+          ...(entry.i18n ? { i18n: entry.i18n } : {})
+        },
+        'revokedReason'
+      )
+      if (localized) return localized
+      if (entry.isDefault) return t('pluginCatalog.revokedDisabledReason')
+      return entry.reason || t('pluginCatalog.revokedDisabledReason')
+    },
+
+    // 响应式加载错误信息（避免热切换语言时冻结）
+    errorMessage: (state) => {
+      if (state.errorKey) return t(state.errorKey)
+      return state.error || null
+    },
+
+    // 响应式推荐插件加载错误信息
+    recommendedErrorMessage: (state) => {
+      if (state.recommendedErrorKey) return t(state.recommendedErrorKey)
+      return state.recommendedError || null
     },
 
     // 禁用原因的类别：'platform' 表示插件目录里的新版本不再支持当前系统，其余为官方下架
@@ -322,19 +488,11 @@ export const usePluginsStore = defineStore('plugins', {
             'user_settings.json'
           )
 
-          const hiddenBundledStr = await window.ztools.config.get(
-            HIDDEN_BUNDLED_CONFIG_KEY,
-            '[]',
-            'user_settings.json'
-          )
-
           const parsedFavorites = parseConfigList(favStr)
           const parsedRecents = parseConfigList(recStr)
           this.favorites = new Set(normalizeIdList(parsedFavorites))
           this.recents = normalizeIdList(parsedRecents)
           this.recentUsedAt = sanitizeRecentUsedAt(recAtStr, this.recents)
-          this.hiddenBundledSet = new Set(sanitizeHiddenBundledIds(hiddenBundledStr))
-          this._hiddenBundledLoaded = true
 
           // 云端同步不阻塞首屏；完成后刷新收藏详情
           this.syncFromCloud()
@@ -343,20 +501,18 @@ export const usePluginsStore = defineStore('plugins', {
               console.warn('[plugins] 后台云端同步失败:', formatLogArg(err))
             })
         }
-
-        // 初始化已安装插件列表
-        await this.fetchInstalledPlugins()
-
-        // 收藏详情依赖市场接口，不阻塞首屏
-        this.fetchFavoritePlugins().catch((err) => {
-          console.warn('[plugins] 后台加载收藏插件失败:', err)
-        })
       } catch (err) {
-        console.error('[plugins] 初始化失败:', err)
+        console.warn('[plugins] 读取收藏与最近使用配置失败:', err)
         this.favorites = new Set()
         this.recents = []
         this.recentUsedAt = {}
       }
+      await this.fetchInstalledPlugins()
+
+      // 收藏详情依赖市场接口，不阻塞首屏
+      this.fetchFavoritePlugins().catch((err) => {
+        console.warn('[plugins] 后台加载收藏插件失败:', err)
+      })
     },
 
     /**
@@ -415,6 +571,7 @@ export const usePluginsStore = defineStore('plugins', {
             const list = await loadV2StaticCatalogList()
             this._applyRevocations(list)
             this._applyPlatformSupport(list)
+            this._patchInstalledFromCatalog(list)
             return list
           },
           getLocalSnapshot: async () => {
@@ -460,6 +617,7 @@ export const usePluginsStore = defineStore('plugins', {
     async load() {
       this.loading = true
       this.error = null
+      this.errorKey = null
       try {
         const { list, total, page, pageSize } = await this.loadWithCache({
           keyword: this.keyword,
@@ -477,7 +635,9 @@ export const usePluginsStore = defineStore('plugins', {
         // 市场数据到位后，补充已安装插件的远程 icon URL
         this._patchInstalledIcons()
       } catch (err) {
-        this.error = err.message || t('pluginsStore.loadFailed')
+        const resolved = resolveErrorMessage(err, 'pluginsStore.loadFailed')
+        this.errorKey = resolved === t('pluginsStore.loadFailed') ? 'pluginsStore.loadFailed' : null
+        this.error = resolved
         console.error('[PluginsStore] 加载插件失败:', err)
         throw err
       } finally {
@@ -506,6 +666,7 @@ export const usePluginsStore = defineStore('plugins', {
       // 下架状态来自完整目录，与当前分页、搜索和分类无关。
       this._applyRevocations(manager._catalog)
       this._updateCategoryCounts(manager._catalog)
+      this._patchInstalledFromCatalog(manager._catalog)
 
       return result
     },
@@ -524,14 +685,14 @@ export const usePluginsStore = defineStore('plugins', {
       return Object.fromEntries(types.map((type, index) => [type, results[index].total]))
     },
 
-    /** 按分类统计目录里的插件数（目录已按当前系统过滤，已下架的不计） */
+    /** 按标准 categoryId 主键统计目录里的插件数（目录已按当前系统过滤，已下架的不计） */
     _updateCategoryCounts(catalog) {
       if (!Array.isArray(catalog)) return
       const counts = {}
       for (const item of catalog) {
         if (!item || item.draft || item.revoked || this.isRevoked?.(item.pluginId || item.id)) continue
-        for (const name of normalizeCategoryNames(item.category)) {
-          counts[name] = (counts[name] || 0) + 1
+        for (const id of normalizeCategoryIds(item.categoryId || item.category)) {
+          counts[id] = (counts[id] || 0) + 1
         }
       }
       this.categoryCounts = counts
@@ -543,17 +704,27 @@ export const usePluginsStore = defineStore('plugins', {
         const { catalog } = await this._getCatalogManager().ensureCatalog()
         this._applyRevocations(catalog)
         this._updateCategoryCounts(catalog)
+        this._patchInstalledFromCatalog(catalog)
       } catch (error) {
         console.warn('[PluginsStore] 统计分类插件数失败，保留全部分类:', error)
       }
       return this.categoryCounts
     },
 
-    /** 某个分类是否要显示：统计结果出来前一律显示；正在查看的分类始终显示 */
-    isCategoryVisible(name, activeName = '') {
-      if (name === '全部' || name === activeName) return true
+    /** 某个分类是否要显示：统计结果出来前一律显示；「全部」与正在查看的分类始终显示（兼容 categoryId 与旧中文名） */
+    isCategoryVisible(idOrName, activeIdOrName = '') {
+      if (isAllCategory(idOrName)) return true
+      const normalized = normalizeCategoryRouteParam(idOrName)
+      const normalizedActive = normalizeCategoryRouteParam(activeIdOrName)
+      if (normalized && normalized === normalizedActive) return true
       if (!this.categoryCounts) return true
-      return (this.categoryCounts[name] || 0) > 0
+      const byId = this.categoryCounts[normalized]
+      if (typeof byId === 'number') return byId > 0
+      const legacyName = CATEGORY_ID_TO_NAME[normalized]
+      if (legacyName && typeof this.categoryCounts[legacyName] === 'number') {
+        return this.categoryCounts[legacyName] > 0
+      }
+      return (this.categoryCounts[idOrName] || 0) > 0
     },
 
     /** 清除所有列表缓存并重置管理器（主动刷新时调用） */
@@ -571,6 +742,7 @@ export const usePluginsStore = defineStore('plugins', {
     async loadRecommendedPlugins(limit = 8) {
       this.recommendedLoading = true
       this.recommendedError = null
+      this.recommendedErrorKey = null
       try {
         const { list } = await this.loadWithCache({
           sort: 'downloads',
@@ -580,7 +752,9 @@ export const usePluginsStore = defineStore('plugins', {
         })
         this.recommendedItems = list || []
       } catch (err) {
-        this.recommendedError = err.message || t('pluginsStore.loadRecommendedFailed')
+        const resolved = resolveErrorMessage(err, 'pluginsStore.loadRecommendedFailed')
+        this.recommendedErrorKey = resolved === t('pluginsStore.loadRecommendedFailed') ? 'pluginsStore.loadRecommendedFailed' : null
+        this.recommendedError = resolved
         console.error('[PluginsStore] 加载推荐插件失败:', err)
       } finally {
         this.recommendedLoading = false
@@ -714,67 +888,135 @@ export const usePluginsStore = defineStore('plugins', {
       }
     },
 
-    /** 用市场数据补充已安装插件的远程 icon URL */
+    /** 仅利用已有内存目录快照，用市场元数据补齐已安装旧版插件缺失的图标、i18n 与分类（不发起额外网络请求） */
+    _patchInstalledFromCatalog(catalog) {
+      if (!this.installedPlugins?.length || !Array.isArray(catalog) || catalog.length === 0) return
+      const marketMap = {}
+      for (const item of catalog) {
+        const pid = item?.pluginId || item?.id
+        if (!pid) continue
+        const patch = extractCatalogPatch(item)
+        if (!patch) continue
+        const key = String(pid)
+        marketMap[key] = mergeCatalogPatch(marketMap[key], patch)
+      }
+      if (Object.keys(marketMap).length > 0) {
+        this._applyIconPatch(marketMap)
+      }
+    },
+
+    /** 用市场数据补充已安装插件的远程 icon URL、缺失的 i18n 译文与缺失分类 */
     _patchInstalledIcons() {
       if (!this.installedPlugins?.length) return
       const marketMap = {}
+      const lowerKeyMap = {}
+      const addCatalogEntry = (item) => {
+        const pid = item?.pluginId || item?.id
+        if (!pid) return
+        const patch = extractCatalogPatch(item)
+        if (!patch) return
+        const key = String(pid)
+        const lower = key.toLowerCase()
+        const canonicalKey = lowerKeyMap[lower] || key
+        lowerKeyMap[lower] = canonicalKey
+        marketMap[canonicalKey] = mergeCatalogPatch(marketMap[canonicalKey], patch)
+      }
       const catalogSource = [
         ...(Array.isArray(this._catalogManager?._catalog) ? this._catalogManager._catalog : []),
         ...(Array.isArray(this.items) ? this.items : [])
       ]
       for (const item of catalogSource) {
-        const pid = item?.pluginId || item?.id
-        if (pid && item.icon && item.icon.startsWith('http')) {
-          marketMap[String(pid)] = item.icon
-        }
+        addCatalogEntry(item)
       }
 
-      // 找出不在市场列表里的已安装插件，单独请求它们的图标 URL
-      // 内置插件的图标随客户端一起发布，不向市场查询，避免被旧版本图标覆盖（返回首页时图标会闪一下再变）
+      if (Object.keys(marketMap).length > 0) {
+        this._applyIconPatch(marketMap)
+      }
+
+      // 找出不在市场列表里的已安装插件，单独请求它们的市场元数据（图标、i18n 与分类）
+      // 内置插件的资源随客户端一起发布，不向市场查询，避免被旧版本数据覆盖（返回首页时图标或文案会闪一下再变）
       const missingIds = this.installedPlugins
         .map((p) => String(p.pluginId))
-        .filter((id) => !marketMap[id] && !isBundledPlugin(id))
+        .filter((id) => !marketMap[id] && !lowerKeyMap[id.toLowerCase()] && !isBundledPlugin(id))
 
       if (missingIds.length > 0) {
         apiGetMarketPlugins({ ids: missingIds, per_page: missingIds.length }).then((res) => {
           const list = res?.list || []
           for (const item of list) {
-            if (item.pluginId && item.icon && item.icon.startsWith('http')) {
-              marketMap[String(item.pluginId)] = item.icon
-            }
+            addCatalogEntry(item)
           }
           this._applyIconPatch(marketMap)
         }).catch(() => {})
-        return
       }
-
-      this._applyIconPatch(marketMap)
     },
 
     _applyIconPatch(marketMap) {
+      if (!this.installedPlugins?.length || !isPlainRecord(marketMap)) return
+      const normalizedMap = new Map()
+      const lowerMap = new Map()
+      for (const [key, rawPatch] of Object.entries(marketMap)) {
+        const patch = normalizeCatalogPatchEntry(rawPatch)
+        if (!patch) continue
+        normalizedMap.set(String(key), patch)
+        const lower = String(key).toLowerCase()
+        if (!lowerMap.has(lower)) lowerMap.set(lower, patch)
+      }
+      if (normalizedMap.size === 0) return
+
       let changed = false
-      for (const p of this.installedPlugins) {
-        if (isBundledPlugin(p.pluginId)) continue
-        const remoteIcon = marketMap[String(p.pluginId)] || ''
+      const nextInstalled = this.installedPlugins.map((p) => {
+        if (isBundledPlugin(p.pluginId)) return p
+        const pid = String(p.pluginId || p.id || '')
+        const patch = normalizedMap.get(pid) || lowerMap.get(pid.toLowerCase())
+        if (!patch) return p
+
+        let itemChanged = false
+        const updates = {}
+
+        const remoteIcon = patch.icon || ''
         if (remoteIcon && p.icon !== remoteIcon) {
-          p.icon = remoteIcon
-          changed = true
+          updates.icon = remoteIcon
+          itemChanged = true
         }
+
+        // 以本地 plugin.json 的 i18n 为准，市场元数据仅用于兜底补齐本地缺失的语种或字段
+        if (patch.i18n) {
+          const mergedI18n = mergePluginI18n(patch.i18n, p.i18n)
+          if (mergedI18n && !isSameJsonValue(mergedI18n, p.i18n)) {
+            updates.i18n = mergedI18n
+            itemChanged = true
+          }
+        }
+
+        // 仅当本地旧版插件完全未声明分类时，使用市场目录的标准分类补齐
+        if (!hasPluginCategory(p) && (patch.categoryId || patch.category)) {
+          if (patch.categoryId) updates.categoryId = patch.categoryId
+          if (patch.category) updates.category = patch.category
+          itemChanged = true
+        }
+
         // 对比本地 icon.url 记录的 URL 和市场最新 URL
-        // 不一致说明后台更换了图标，通知 Delphi 异步更新本地 icon.png 和 icon.ico
+        // 不一致说明后台更换了图标，通知宿主异步更新本地 icon.png 和 icon.ico
         // 内置插件没有本地 icon 文件，请求刷新只会在主进程得到 PLUGIN_NOT_FOUND
         if (!p.builtin && remoteIcon && (p.localIconUrl || '') !== remoteIcon) {
           if (window.ztools?.plugin?.refreshIcon) {
             const prevLocalIconUrl = p.localIconUrl
-            p.localIconUrl = remoteIcon
+            updates.localIconUrl = remoteIcon
+            itemChanged = true
             Promise.resolve(window.ztools.plugin.refreshIcon(p.pluginId, remoteIcon)).catch(() => {
-              if (p.localIconUrl === remoteIcon) p.localIconUrl = prevLocalIconUrl
+              const current = (this.installedPlugins || []).find((item) => item.pluginId === p.pluginId)
+              if (current && current.localIconUrl === remoteIcon) current.localIconUrl = prevLocalIconUrl
             })
           }
         }
-      }
+
+        if (!itemChanged) return p
+        changed = true
+        return { ...p, ...updates }
+      })
+
       if (changed) {
-        this.installedPlugins = [...this.installedPlugins]
+        this.installedPlugins = nextInstalled
       }
     },
 
@@ -790,11 +1032,21 @@ export const usePluginsStore = defineStore('plugins', {
         const pid = normalizePluginId(item.pluginId || item.id)
         if (!pid) continue
         if (item.revoked) {
-          const reason = item.revoked_reason || item.revokedReason || t('pluginCatalog.revokedDisabledReason')
-          if (!this.revokedMap[pid] || this.revokedMap[pid].reason !== reason) {
+          const rawReason = item.revoked_reason || item.revokedReason || ''
+          const localizedReason = getLocalizedPluginField(item, 'revokedReason')
+          const reason = localizedReason || t('pluginCatalog.revokedDisabledReason')
+          const itemI18n = item.i18n && typeof item.i18n === 'object' ? item.i18n : null
+          const prev = this.revokedMap[pid]
+          if (!prev || prev.reason !== reason || prev.rawReason !== rawReason || prev.i18n !== itemI18n) {
             this.revokedMap = {
               ...this.revokedMap,
-              [pid]: { revoked: true, reason }
+              [pid]: {
+                revoked: true,
+                reason,
+                ...(rawReason ? { rawReason } : {}),
+                ...(itemI18n ? { i18n: itemI18n } : {}),
+                isDefault: !localizedReason
+              }
             }
             changed = true
           }
@@ -805,7 +1057,10 @@ export const usePluginsStore = defineStore('plugins', {
             )
             if (found) {
               found.revoked = true
-              found.revoked_reason = reason
+              found.revoked_reason = rawReason || reason
+              if (itemI18n) {
+                found.i18n = mergePluginI18n(found.i18n, itemI18n)
+              }
               found.enabled = false
             }
             if (window.ztools?.plugin?.revoke) {
@@ -841,12 +1096,13 @@ export const usePluginsStore = defineStore('plugins', {
         if (current && current.kind !== 'platform') continue
         // 不看是否已安装：目录可能先于已装列表返回；未安装的这类条目本来就不会出现在当前系统的插件市场里
         if (!isPluginSupportedOnCurrentPlatform(item)) {
-          const label = getPluginPlatformLabel(item)
-          const reason = label
-            ? t('pluginsStore.platformUnsupportedWithLabel', { label })
-            : t('pluginsStore.platformUnsupported')
-          if (!current || current.reason !== reason) {
-            next[pid] = { revoked: true, reason, kind: 'platform' }
+          const targetItem = {
+            ...(Array.isArray(item.targets) ? { targets: item.targets } : {}),
+            ...(Array.isArray(item.platforms) ? { platforms: item.platforms } : {})
+          }
+          const platformKey = JSON.stringify(targetItem)
+          if (!current || current.platformKey !== platformKey) {
+            next[pid] = { revoked: true, kind: 'platform', targetItem, platformKey }
             changed = true
           }
         } else if (current) {
@@ -860,37 +1116,41 @@ export const usePluginsStore = defineStore('plugins', {
       }
     },
 
-    async ensureHiddenBundledLoaded() {
-      if (this._hiddenBundledLoaded) return
-      if (this._hiddenBundledLoadPromise) return this._hiddenBundledLoadPromise
-      if (this.hiddenBundledSet.size > 0 || !window.ztools?.config?.get) {
+    async ensureHiddenBundledLoaded(refresh = false) {
+      if (!refresh && this._hiddenBundledLoadPromise) return this._hiddenBundledLoadPromise
+      if (!refresh && this._hiddenBundledLoaded) return
+      if (!window.ztools?.config?.get) {
         this._hiddenBundledLoaded = true
         return
       }
-      this._hiddenBundledLoadPromise = (async () => {
-        try {
-          const raw = await window.ztools.config.get(HIDDEN_BUNDLED_CONFIG_KEY, '[]', 'user_settings.json')
-          this.hiddenBundledSet = new Set(sanitizeHiddenBundledIds(raw))
-          this._hiddenBundledLoaded = true
-        } catch (err) {
-          console.warn('[plugins] 读取内置插件隐藏配置失败:', err)
-        } finally {
-          this._hiddenBundledLoadPromise = null
-        }
-      })()
-      return this._hiddenBundledLoadPromise
+      this._hiddenBundledLoaded = false
+      const read = (async () => window.ztools.config.get(HIDDEN_BUNDLED_CONFIG_KEY, '[]', 'user_settings.json'))()
+      this._hiddenBundledLoadPromise = read
+      try {
+        const raw = await read
+        if (this._hiddenBundledLoadPromise !== read) return
+        this.hiddenBundledSet = new Set(sanitizeHiddenBundledIds(raw))
+        this._hiddenBundledLoaded = true
+      } finally {
+        if (this._hiddenBundledLoadPromise === read) this._hiddenBundledLoadPromise = null
+      }
     },
 
-    async fetchInstalledPlugins() {
+    async fetchInstalledPlugins(refreshBundledVisibility = false) {
       const requestId = ++this._installedRequestId
       const revision = this._installedRevision
-      await this.ensureHiddenBundledLoaded()
+      try {
+        await this.ensureHiddenBundledLoaded(refreshBundledVisibility)
+      } catch (err) {
+        console.warn('[plugins] 读取内置插件可见性失败，本次只展示已确认的插件:', err)
+      }
       if (requestId !== this._installedRequestId) return this.installedPlugins
+      const canShowBundled = (id) => this._hiddenBundledLoaded && !this.isBundledHidden(id)
       try {
         const locals = await apiGetLocalPlugins()
         if (requestId !== this._installedRequestId) return this.installedPlugins
         if (revision !== this._installedRevision) return this.fetchInstalledPlugins()
-        const bundledEntries = getBundledPluginEntries().filter((p) => !this.isBundledHidden(p.pluginId))
+        const bundledEntries = getBundledPluginEntries().filter((p) => canShowBundled(p.pluginId))
         const officialList = [...bundledEntries, ...getOfficialPluginsList()]
 
         // 识别本地已装插件的下架标记
@@ -898,10 +1158,19 @@ export const usePluginsStore = defineStore('plugins', {
           const pid = normalizePluginId(p.pluginId || p.id)
           if (!pid) continue
           if (p.revoked) {
-            const reason = p.revoked_reason || p.revokedReason || t('pluginCatalog.revokedDisabledReason')
+            const rawReason = p.revoked_reason || p.revokedReason || ''
+            const localizedReason = getLocalizedPluginField(p, 'revokedReason')
+            const reason = localizedReason || t('pluginCatalog.revokedDisabledReason')
+            const itemI18n = p.i18n && typeof p.i18n === 'object' ? p.i18n : null
             this.revokedMap = {
               ...this.revokedMap,
-              [pid]: { revoked: true, reason }
+              [pid]: {
+                revoked: true,
+                reason,
+                ...(rawReason ? { rawReason } : {}),
+                ...(itemI18n ? { i18n: itemI18n } : {}),
+                isDefault: !localizedReason
+              }
             }
             p.enabled = false
           }
@@ -909,8 +1178,9 @@ export const usePluginsStore = defineStore('plugins', {
 
         const localIds = (locals || [])
           .map((p) => String(p.pluginId))
-          .filter((id) => !(isBundledPlugin(id) && this.isBundledHidden(id)))
-        this.installedListLoaded = true
+          .filter((id) => !isBundledPlugin(id) || canShowBundled(id))
+        // 云同步只采纳完整快照，避免把尚未读到可见性配置的内置插件从远端记录中清除。
+        this.installedListLoaded = this._hiddenBundledLoaded
         const officialIds = officialList.map((p) => String(p.pluginId))
 
         // 最新宿主快照决定市场插件安装状态；未隐藏的包内插件仍由客户端提供。
@@ -924,7 +1194,7 @@ export const usePluginsStore = defineStore('plugins', {
         for (const p of locals || []) {
           const key = String(p.pluginId || p.id || '').toLowerCase()
           if (isBundledPlugin(key)) {
-            if (!this.isBundledHidden(key)) {
+            if (canShowBundled(key)) {
               localBundledState.set(key, { lastUsedTime: p.lastUsedTime, enabled: p.enabled })
             }
             continue
@@ -943,7 +1213,7 @@ export const usePluginsStore = defineStore('plugins', {
               builtinMatch.official_badge ||
               builtinMatch.officialBadge ||
               builtinMatch.badge ||
-              '官方'
+              OFFICIAL_BADGE_CODE
             const mergedPlugin = {
               ...p,
               ...builtinMatch,
@@ -963,7 +1233,7 @@ export const usePluginsStore = defineStore('plugins', {
             continue
           }
           if (isOff) {
-            const badge = p.official_badge || p.officialBadge || '官方'
+            const badge = p.official_badge || p.officialBadge || OFFICIAL_BADGE_CODE
             combined.push({
               ...p,
               is_official: true,
@@ -979,7 +1249,7 @@ export const usePluginsStore = defineStore('plugins', {
           const key = String(official.pluginId || '').toLowerCase()
           if (!coveredOfficialKeys.has(key)) {
             coveredOfficialKeys.add(key)
-            const badge = official.official_badge || official.officialBadge || '官方'
+            const badge = official.official_badge || official.officialBadge || OFFICIAL_BADGE_CODE
             const localState = localBundledState.get(key)
             combined.push({
               ...official,
@@ -1011,7 +1281,7 @@ export const usePluginsStore = defineStore('plugins', {
         if (revision !== this._installedRevision) return this.fetchInstalledPlugins()
         console.warn('[plugins] 获取本地插件失败，回退官方内置标杆插件列表:', err)
         this.installedListLoaded = false
-        const bundledEntries = getBundledPluginEntries().filter((p) => !this.isBundledHidden(p.pluginId))
+        const bundledEntries = getBundledPluginEntries().filter((p) => canShowBundled(p.pluginId))
         const officialList = [...bundledEntries, ...getOfficialPluginsList()]
         const officialIds = officialList.map((p) => String(p.pluginId))
         this.installedSet = new Set(officialIds)
@@ -1122,7 +1392,7 @@ export const usePluginsStore = defineStore('plugins', {
           if (payload.error) {
             this.installErrorMap = {
               ...this.installErrorMap,
-              [pluginId]: String(payload.error)
+              [pluginId]: resolveErrorMessage(payload, 'pluginsStore.installFailed')
             }
           }
         }
@@ -1233,7 +1503,7 @@ export const usePluginsStore = defineStore('plugins', {
           ) {
             const launched = await window.__ztoolsOpenLauncherDeclarative(normalizedId, { featureCode })
             if (launched?.cancelled) return launched
-            if (launched?.success !== true) throw new Error(launched?.error || t('launcher.launchPluginFailed'))
+            if (launched?.success !== true) throw new Error(resolveErrorMessage(launched, 'launcher.launchPluginFailed'))
             return { success: true, isDeclarative: true, pluginId: normalizedId }
           }
 
@@ -1366,7 +1636,7 @@ export const usePluginsStore = defineStore('plugins', {
         return { success: true, pluginId: pid }
       } catch (err) {
         console.error('[plugins.installPlugin] 安装失败:', pid, err)
-        const errMsg = err?.message || String(err) || t('pluginsStore.installFailed')
+        const errMsg = resolveErrorMessage(err, 'pluginsStore.installFailed')
         this.installErrorMap = {
           ...this.installErrorMap,
           [pid]: errMsg
@@ -1384,134 +1654,33 @@ export const usePluginsStore = defineStore('plugins', {
       }
     },
 
-    /**
-     * 假卸载（隐藏）内置插件：保留包内文件与本地业务存储，从已安装列表与检索入口隐藏
-     * @param {string} pluginId
-     */
-    async hideBundledPlugin(pluginId) {
-      const canonicalId = normalizePluginId(pluginId).toLowerCase()
-      if (!canonicalId || !isBundledPlugin(canonicalId)) {
-        throw new Error(t('pluginsStore.bundledOnlyAction'))
-      }
-      if (this._togglingBundledSet.has(canonicalId)) {
-        return { success: false, busy: true, message: t('pluginsStore.operationInProgress') }
-      }
-
-      const locking = new Set(this._togglingBundledSet)
-      locking.add(canonicalId)
-      this._togglingBundledSet = locking
-
-      try {
-        await this.ensureHiddenBundledLoaded()
-        const nextHidden = new Set(this.hiddenBundledSet)
-        nextHidden.add(canonicalId)
-
-        if (window.ztools?.config?.set) {
-          const saved = await window.ztools.config.set(
-            HIDDEN_BUNDLED_CONFIG_KEY,
-            JSON.stringify(Array.from(nextHidden)),
-            false,
-            'user_settings.json'
-          )
-          if (saved === false) {
-            throw new Error(t('pluginsStore.saveHideBundledFailed'))
-          }
-        }
-
-        this.hiddenBundledSet = nextHidden
-        this._hiddenBundledLoaded = true
-
-        const nextInstalledSet = new Set(
-          Array.from(this.installedSet).filter(
-            (id) => normalizePluginId(id).toLowerCase() !== canonicalId
-          )
-        )
-        this.installedSet = nextInstalledSet
-        this.installedPlugins = (this.installedPlugins || []).filter(
-          (p) => normalizePluginId(p.pluginId || p.id).toLowerCase() !== canonicalId
-        )
-
-        this.onPluginRuntimeStopped({ pluginId: canonicalId })
-        if (window.ztools?.plugin?.closeWindow) {
-          Promise.resolve(window.ztools.plugin.closeWindow(canonicalId)).catch((err) => {
-            console.warn('[plugins] 关闭已卸载内置插件独立窗口失败:', err)
-          })
-        }
-        track('bundled_plugin_visibility', canonicalId, { action: 'hide' })
-        return { success: true, pluginId: canonicalId, hidden: true }
-      } finally {
-        const unlocking = new Set(this._togglingBundledSet)
-        unlocking.delete(canonicalId)
-        this._togglingBundledSet = unlocking
-      }
+    hideBundledPlugin(pluginId) {
+      return this._setBundledPluginHidden(pluginId, true)
     },
 
-    /**
-     * 还原已被假卸载的内置插件：恢复已安装列表与检索可见性，原有业务数据继续可用
-     * @param {string} pluginId
-     */
-    async restoreBundledPlugin(pluginId) {
-      const canonicalId = normalizePluginId(pluginId).toLowerCase()
-      if (!canonicalId || !isBundledPlugin(canonicalId)) {
-        throw new Error(t('pluginsStore.bundledOnlyRestore'))
+    restoreBundledPlugin(pluginId) {
+      return this._setBundledPluginHidden(pluginId, false)
+    },
+
+    async _setBundledPluginHidden(pluginId, hidden) {
+      const id = normalizePluginId(pluginId).toLowerCase()
+      if (!isBundledPlugin(id)) {
+        throw new Error(t(hidden ? 'pluginsStore.bundledOnlyAction' : 'pluginsStore.bundledOnlyRestore'))
       }
-      if (this._togglingBundledSet.has(canonicalId)) {
+      if (this._togglingBundledSet.has(id)) {
         return { success: false, busy: true, message: t('pluginsStore.operationInProgress') }
       }
 
-      const locking = new Set(this._togglingBundledSet)
-      locking.add(canonicalId)
-      this._togglingBundledSet = locking
-
+      this._togglingBundledSet.add(id)
+      const save = () => persistBundledPluginVisibility(this, id, hidden)
+      const previous = this._bundledVisibilityWrite
+      const write = previous ? previous.then(save, save) : save()
+      this._bundledVisibilityWrite = write
       try {
-        await this.ensureHiddenBundledLoaded()
-        const nextHidden = new Set(this.hiddenBundledSet)
-        nextHidden.delete(canonicalId)
-
-        if (window.ztools?.config?.set) {
-          const saved = await window.ztools.config.set(
-            HIDDEN_BUNDLED_CONFIG_KEY,
-            JSON.stringify(Array.from(nextHidden)),
-            false,
-            'user_settings.json'
-          )
-          if (saved === false) {
-            throw new Error(t('pluginsStore.saveRestoreBundledFailed'))
-          }
-        }
-
-        this.hiddenBundledSet = nextHidden
-        this._hiddenBundledLoaded = true
-        this._installedRevision += 1
-
-        const entry = getBundledPluginEntry(canonicalId)
-        const resolvedId = entry?.pluginId || canonicalId
-        const nextInstalledSet = new Set(this.installedSet)
-        nextInstalledSet.add(resolvedId)
-        this.installedSet = nextInstalledSet
-
-        if (entry && isPluginVisible(entry) && isPluginSupportedOnCurrentPlatform(entry)) {
-          const exists = (this.installedPlugins || []).some(
-            (p) => normalizePluginId(p.pluginId || p.id).toLowerCase() === canonicalId
-          )
-          if (!exists) {
-            const restoredEntry = {
-              ...entry,
-              builtin: true,
-              lastUsedTime: this.recentUsedAt[resolvedId] || 0
-            }
-            this.installedPlugins = [...(this.installedPlugins || []), restoredEntry].sort(
-              (a, b) => (b.lastUsedTime || 0) - (a.lastUsedTime || 0)
-            )
-          }
-        }
-
-        track('bundled_plugin_visibility', canonicalId, { action: 'restore' })
-        return { success: true, pluginId: resolvedId, hidden: false }
+        return await write
       } finally {
-        const unlocking = new Set(this._togglingBundledSet)
-        unlocking.delete(canonicalId)
-        this._togglingBundledSet = unlocking
+        this._togglingBundledSet.delete(id)
+        if (this._bundledVisibilityWrite === write) this._bundledVisibilityWrite = null
       }
     },
 

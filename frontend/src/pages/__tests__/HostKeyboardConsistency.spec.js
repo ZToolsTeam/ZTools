@@ -184,9 +184,16 @@ describe('宿主工作台与悬浮条键盘方向键视觉一致性端到端集�
     expect(wrapper.vm.focusedCardIndex).toBe(0)
 
     // 按 ↓：必须直达正下方第 2 行左列 [2]「图片压缩」，绝不斜跳到 [3]「计算器」！
-    pressKey(window, 'ArrowDown')
+    const firstFavorite = navNodes[0].get('.card-icon-btn').element
+    firstFavorite.focus()
+    expect(document.activeElement).toBe(firstFavorite)
+    pressKey(firstFavorite, 'ArrowDown')
     await nextTick()
     expect(wrapper.vm.focusedCardIndex).toBe(2)
+    expect(document.activeElement).toBe(navNodes[2].element)
+    expect(navNodes[0].get('.card-icon-btn').element.tabIndex).toBe(-1)
+    expect(navNodes[2].get('.card-icon-btn').element.tabIndex).toBe(0)
+    expect(navNodes.filter(node => node.element.tabIndex === 0)).toHaveLength(1)
 
     // 按 →：同排右移到 [3]「计算器」；再按 →（已在第 2 行末列）：原地止步留在 [3]，绝不折行跳到 [4]！
     pressKey(window, 'ArrowRight')

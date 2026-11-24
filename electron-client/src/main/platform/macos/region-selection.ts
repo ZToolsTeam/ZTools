@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, screen } from 'electron'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { errorCodes, ZToolsError } from '../../../contracts/errors.js'
+import { getResolvedLocale, t } from '../../i18n/index.js'
 import type { ScreenRectangle } from '../../services/screen-service.js'
 export const REGION_SELECTION_URL = 'ztools://web/platform/region-selector.html'
 export const REGION_SELECTION_CHANNEL = 'ztools:region-selection'
@@ -14,8 +15,16 @@ interface RegionWindow {
 }
 interface SelectionEvent { sender: unknown; senderFrame: unknown }
 type ScreenEventSource = Pick<typeof screen, 'on' | 'removeListener'>
-function failed() { return new ZToolsError(errorCodes.screenError, '区域选择窗口未完成或关闭未确认') }
-function cancelled() { return new ZToolsError(errorCodes.callerDestroyed, '区域选择已取消') }
+function failed() {
+  return new ZToolsError(errorCodes.screenError, t('regionSelection.error.failed'), {
+    i18nKey: 'regionSelection.error.failed'
+  })
+}
+function cancelled() {
+  return new ZToolsError(errorCodes.callerDestroyed, t('regionSelection.error.cancelled'), {
+    i18nKey: 'regionSelection.error.cancelled'
+  })
+}
 function observeDisplayChanges(source: ScreenEventSource, listener: () => void): () => void {
   const removers: Array<() => void> = []
   let detached = false
@@ -59,9 +68,17 @@ export class MacRegionSelection implements RegionSelectionBackend {
   }
   async select(bounds: ScreenRectangle[], signal: AbortSignal): Promise<ScreenRectangle | undefined> {
     const platform = this.dependencies.platform ?? process.platform
-    if (platform !== 'darwin' && platform !== 'win32') throw new ZToolsError(errorCodes.notSupported, '当前系统不支持框选屏幕区域')
+    if (platform !== 'darwin' && platform !== 'win32') {
+      throw new ZToolsError(errorCodes.notSupported, t('regionSelection.error.unsupported'), {
+        i18nKey: 'regionSelection.error.unsupported'
+      })
+    }
     if (this.#stopped || signal.aborted) throw cancelled()
-    if (this.#active || this.#windows.size) throw new ZToolsError(errorCodes.pluginBusy, '区域选择正在处理中')
+    if (this.#active || this.#windows.size) {
+      throw new ZToolsError(errorCodes.pluginBusy, t('regionSelection.error.busy'), {
+        i18nKey: 'regionSelection.error.busy'
+      })
+    }
     if (!Array.isArray(bounds) || !bounds.length || bounds.length > 8 || bounds.some(rect => !bounded(rect))) throw failed()
     const controller = new AbortController(), combined = AbortSignal.any([controller.signal, signal]), nonce = randomUUID()
     let drain!: () => void
@@ -73,10 +90,14 @@ export class MacRegionSelection implements RegionSelectionBackend {
         let finished = false
         const finish = (rect?: ScreenRectangle, error?: ZToolsError) => { if (finished) return; finished = true; error ? reject(error) : resolve(rect) }
         onAbort = () => finish(undefined, cancelled())
-        timer = setTimeout(() => finish(undefined, new ZToolsError(errorCodes.requestTimeout, '区域选择超时')), this.dependencies.timeoutMs ?? 120000)
+        timer = setTimeout(() => finish(undefined, new ZToolsError(errorCodes.requestTimeout, t('regionSelection.error.timeout'), {
+          i18nKey: 'regionSelection.error.timeout'
+        })), this.dependencies.timeoutMs ?? 120000)
         combined.addEventListener('abort', onAbort, { once: true })
         try {
-          detachDisplayChanges = observeDisplayChanges(this.dependencies.screenEvents ?? screen, () => finish(undefined, new ZToolsError(errorCodes.screenError, '显示器布局已更改，请重新选择')))
+          detachDisplayChanges = observeDisplayChanges(this.dependencies.screenEvents ?? screen, () => finish(undefined, new ZToolsError(errorCodes.screenError, t('regionSelection.error.displayChanged'), {
+            i18nKey: 'regionSelection.error.displayChanged'
+          })))
         } catch {
           finish(undefined, failed())
           return
@@ -103,7 +124,7 @@ export class MacRegionSelection implements RegionSelectionBackend {
             const overlay = new BrowserWindow({ ...rect, ...(platform === 'darwin' ? { type: 'panel' } : {}), frame: false, transparent: true, resizable: false, movable: false,
               hasShadow: false, show: false, alwaysOnTop: true, skipTaskbar: true, fullscreenable: false, acceptFirstMouse: true,
               webPreferences: { preload: this.preload, nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
-                additionalArguments: [`--ztools-region-selection=${token}`] } })
+                additionalArguments: [`--ztools-region-selection=${token}`, `--ztools-locale=${getResolvedLocale()}`] } })
             return overlay
           }))(display, nonce)
           this.#windows.add(window); owned.set(window, { ...display })

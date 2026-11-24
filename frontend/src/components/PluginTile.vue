@@ -11,7 +11,7 @@ const { t } = useAppI18n()
 
 /**
  * 工作台「已安装 / 收藏」横向紧凑启动卡（方案 A）：
- * 左侧图标 + 中间双行（名称与置顶标记 + 单行简介/状态说明）+ 右侧状态/快捷键与悬停快捷菜单入口。
+ * 左侧图标，名称独占首行，状态与简介在第二行；右侧显示快捷键和更多操作。
  * 点击卡片即打开（未安装收藏项进入详情页），悬停或聚焦右侧按钮可呼出快捷操作菜单。
  */
 const props = defineProps({
@@ -52,8 +52,8 @@ const subtitle = computed(() => {
     return t('myPage.tile.uninstalledHint')
   }
   const desc = pluginDesc.value
-  if (desc) return desc
-  const cat = String(props.plugin?.category || '').trim()
+  if (desc) return desc.split(/(?<=[。！？])|(?<=[.!?])\s+/u, 1)[0]
+  const cat = props.plugin?.categoryId || String(props.plugin?.category || '').trim()
   return (cat ? getLocalizedCategoryName(cat) : '') || t('myPage.tile.clickToOpen')
 })
 
@@ -109,16 +109,16 @@ function onMoreClick(event) {
           <PinIcon class="w-3 h-3" style="stroke-width: 2.2" aria-hidden="true" />
         </span>
       </span>
-      <span class="tile-desc">{{ subtitle }}</span>
+      <span class="tile-subline">
+        <RcTag v-if="badgeStatus" variant="text" :tone="badgeStatus.tone" class="tile-status">{{ badgeStatus.text }}</RcTag>
+        <span class="tile-desc">{{ subtitle }}</span>
+      </span>
     </span>
 
     <span class="tile-side">
-      <span class="tile-meta">
-        <RcTag v-if="badgeStatus" variant="soft" :tone="badgeStatus.tone" class="tile-status">
-          {{ badgeStatus.text }}
-        </RcTag>
+      <span v-if="!badgeStatus" class="tile-meta">
         <span
-          v-else-if="!installed"
+          v-if="!installed"
           class="tile-uninstalled-badge"
           :title="t('myPage.tile.notInstalled')"
           aria-hidden="true"
@@ -249,6 +249,13 @@ function onMoreClick(event) {
   display: inline-flex;
   align-items: center;
   color: var(--rc-text-faint);
+}
+
+.tile-subline {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
 }
 
 .tile-desc {

@@ -1,3 +1,4 @@
+import { resolveSdkErrorText } from './environment.js'
 /** SDK2 file calls wait for Main's authoritative cancellation/commit result. */
 class ReferenceTransport extends Transport {
   constructor(config = {}) {
@@ -7,7 +8,7 @@ class ReferenceTransport extends Transport {
     this.referenceDestroyed = false
     this.referenceCleanupMs = config.referenceCleanupMs ?? 30000
     if (!Number.isInteger(this.referenceCleanupMs) || this.referenceCleanupMs < 1 || this.referenceCleanupMs > 30000) {
-      throw this._referenceError('INVALID_REQUEST', '取消等待上限无效')
+      throw this._referenceError('INVALID_REQUEST', resolveSdkErrorText('invalidCancelCleanupLimit'))
     }
   }
   _referenceError(code, message) { const error = new Error(message); error.code = code; return error }
@@ -67,7 +68,7 @@ class ReferenceTransport extends Transport {
     const host = window.__ztoolsElectron
     const cancel = host?.transport?.cancellations?.[method]
     if (host?.contractVersion !== 2 || typeof cancel !== 'function') {
-      if (options.signal) return Promise.reject(this._referenceError('NOT_SUPPORTED', '宿主没有逐方法取消入口'))
+      if (options.signal) return Promise.reject(this._referenceError('NOT_SUPPORTED', resolveSdkErrorText('hostNoPerMethodCancel')))
       return super.call(method, params, options)
     }
     const invoke = host.transport.methods?.[method]
@@ -75,13 +76,13 @@ class ReferenceTransport extends Transport {
     const signal = options.signal
     const timeout = options.timeout ?? this.config.timeout
     const maximumTimeout = method === 'network_http_request' ? 300250 : 120000
-    if (this.referenceDestroyed || signal?.aborted) return Promise.reject(this._referenceError('CALLER_DESTROYED', '文件请求已取消'))
+    if (this.referenceDestroyed || signal?.aborted) return Promise.reject(this._referenceError('CALLER_DESTROYED', resolveSdkErrorText('fileRequestCancelled')))
     if (typeof invoke !== 'function' || (signal && (typeof signal.aborted !== 'boolean' ||
         typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) ||
         (timeout !== Infinity && (!Number.isInteger(timeout) || timeout < 1 || timeout > maximumTimeout))) {
-      return Promise.reject(this._referenceError('INVALID_REQUEST', '文件传输选项无效'))
+      return Promise.reject(this._referenceError('INVALID_REQUEST', resolveSdkErrorText('invalidFileTransferOptions')))
     }
-    if (this.referenceCalls.size >= 64) return Promise.reject(this._referenceError('PERMISSION_DENIED', '文件请求超过上限'))
+    if (this.referenceCalls.size >= 64) return Promise.reject(this._referenceError('PERMISSION_DENIED', resolveSdkErrorText('fileRequestLimitExceeded')))
     const messageId = this._generateMessageId(method)
     const mutating = new Set(['filesystem_write_file', 'filesystem_write_cache', 'filesystem_delete_file',
       'filesystem_copy_file', 'filesystem_move_file', 'filesystem_create_directory', 'filesystem_delete_directory',
@@ -92,8 +93,8 @@ class ReferenceTransport extends Transport {
       const releaseSlot = () => {
         if (invocationFinished && !cleanupPending) this.referenceCalls.delete(messageId)
       }
-      const failure = () => this._referenceError(mutating ? 'FILE_WRITE_OUTCOME_UNKNOWN' : 'FILE_ERROR', '文件请求结束未确认')
-      const cancellationUnconfirmed = () => this._referenceError('CANCELLATION_UNCONFIRMED', '取消请求未确认底层网络请求已结束')
+      const failure = () => this._referenceError(mutating ? 'FILE_WRITE_OUTCOME_UNKNOWN' : 'FILE_ERROR', resolveSdkErrorText('fileRequestOutcomeUnconfirmed'))
+      const cancellationUnconfirmed = () => this._referenceError('CANCELLATION_UNCONFIRMED', resolveSdkErrorText('networkCancelUnconfirmed'))
       const pendingFailure = () => method === 'network_http_request' && requested ? cancellationUnconfirmed() : failure()
       const settle = (value, error) => {
         if (settled) return

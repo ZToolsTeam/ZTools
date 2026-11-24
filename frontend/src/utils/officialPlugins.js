@@ -1,115 +1,13 @@
 /**
- * 官方标杆声明式应用注册与转发中心 (Official Built-in & Store Registry)
+ * 官方应用历史标识与元数据注册表 (Official Plugin Metadata Registry)
  *
- * 体系定调：
- * 1. 第一方内置核心应用 (First-party Built-in Core Apps):
- *    剪贴板历史、短语展开、窗口极速调度、文件秒搜、计算器色彩、系统运维、快捷链接等。
- *    随宿主预置、零外部依赖、开箱即用、免安装。
- * 2. 官方 Store 扩展 (Official Store Extensions):
- *    依赖外部网络/第三方环境的应用（GitHub, Obsidian, Speedtest, Winget, 汇率换算）
- *    已正式移入 plugins/official/* 官方商店目录，支持独立分发与转发渲染。
+ * 说明：
+ * 客户端已彻底移除旧内置示例实现（原 packages/declarative-ui/src/examples）。
+ * 本文件仅保留历史官方 ID、基础元数据与别名映射，供可见性屏蔽（pluginVisibility.js）、
+ * 保留名校验（reservedPluginIds）、品牌图标映射与平台过滤使用，不再包含任何可运行的示例插件实现。
+ * 真实内置插件统一由 bundledPlugins 提供，市场官方插件由 plugins 仓库独立构建分发。
  */
 
-import {
-  GoogleTranslateCommand,
-  KillProcessCommand,
-  EverythingFileSearchCommand,
-  ClipboardHistoryCommand,
-  SnippetsCommand,
-  WindowManagementCommand,
-  SystemCommand,
-  QuicklinksCommand,
-  SettingsCommand,
-  RaycastCoreCommand,
-  RaycastWrappedCommand,
-  TrialNudgesCommand,
-  WindowsShortcutsCommand,
-  GithubDashboardCommand,
-  ObsidianCommand,
-  SpeedtestCommand,
-  WingetCommand,
-  CurrencyExchangeCommand,
-  EmojiPickerCommand,
-  TranslatorCommand,
-  WindowsRunCommand,
-  WindowsTaskbarCommand,
-  ScreenshotsCommand,
-  ApplicationsCommand,
-  DictionaryCommand,
-  PasswordVaultCommand,
-  WifiPasswordRevealCommand,
-  AudioDeviceCommand,
-  CleanKeyboardCommand,
-  DownloadsManagerCommand,
-  FileUnlockCommand,
-  StartupManagerCommand,
-  MonitorControlCommand,
-  CaffeineCommand,
-  DnsBenchmarkCommand,
-  HotkeyRadarCommand,
-  FolderSyncCommand,
-  BrowserBookmarksCommand,
-  PasteStackCommand,
-  OfficeSlimCommand,
-  MdToOfficeCommand,
-  FontManagerCommand,
-  FileInspectorCommand,
-  MediaMetadataCommand,
-  IdWatermarkCommand,
-  PomodoroFocusCommand,
-  VscodeProjectsCommand,
-  HostsSwitcherCommand,
-  EnvManagerCommand,
-  DockerManagerCommand,
-  LanScannerCommand,
-  SshProxyHelperCommand,
-  RegexCronCommand,
-  LinuxHttpDictCommand,
-  GitHelperCommand,
-  SqlHelperCommand,
-  MockDataCommand,
-  JwtUrlCodecCommand,
-  CurlHttpCommand,
-  SslDomainCheckCommand,
-  SvgIconStudioCommand,
-  ChmodCidrCalcCommand,
-  ProcessMonitorCommand,
-  SoftwareManagerCommand,
-  CleanerCommand,
-  DiskAnalyzerCommand,
-  WechatCleanerCommand,
-  QQCleanerCommand,
-  FlowGuardCommand,
-  HardwareInfoCommand,
-  BoostCommand,
-  BatchRenameCommand,
-  BatchVideoCommand,
-  BatchAudioCommand,
-  PdfCommand,
-  MultiDownloadCommand,
-  VideoDownloaderCommand,
-  AppleShortcutsCommand,
-  NavigationCommand,
-  HomebrewCommand,
-  ScriptCommandsCommand,
-  RaycastFocusCommand,
-  CalendarCommand,
-  WebSearchesCommand,
-  NetworkAdapterCommand,
-  NetworkRescueCommand,
-  ContextMenuCommand,
-  WechatMultiCommand,
-  LanShareCommand,
-  MoverCommand,
-  DataRecoveryCommand,
-  ShredderCommand,
-  SystemBackupCommand,
-  SqlitePluginCommand,
-  AiImageCommand,
-  AiVideoCommand,
-  OcrCommand,
-  RecordCommand
-} from '@ztools/declarative-ui'
 import { isBundledPlugin, isStoreOfficialPlugin } from './bundledPlugins.js'
 
 /**
@@ -230,7 +128,7 @@ export const OFFICIAL_PLUGIN_IDS = Object.freeze({
 })
 
 /**
- * 官方标杆应用元数据与组件定义表
+ * 历史官方应用纯元数据定义表（不含示例插件实现）
  */
 export const OFFICIAL_PLUGINS_MAP = Object.freeze({
   // ==================== 第一方核心内置应用 (Core Built-in Apps) ====================
@@ -248,8 +146,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: ClipboardHistoryCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SNIPPETS]: Object.freeze({
@@ -266,8 +163,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: SnippetsCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.WINDOW_MANAGEMENT]: Object.freeze({
@@ -284,8 +180,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: WindowManagementCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.EVERYTHING_SEARCH]: Object.freeze({
@@ -302,8 +197,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: EverythingFileSearchCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SYSTEM]: Object.freeze({
@@ -320,8 +214,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: SystemCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.QUICKLINKS]: Object.freeze({
@@ -338,8 +231,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: QuicklinksCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.KILL_PROCESS]: Object.freeze({
@@ -356,8 +248,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: KillProcessCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.GOOGLE_TRANSLATE]: Object.freeze({
@@ -374,8 +265,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '官方标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: GoogleTranslateCommand
+    enabled: true
   }),
 
   // ==================== M1.5 第四组: 系统治理与组织协同套件 ====================
@@ -393,8 +283,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '系统治理',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: SettingsCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.RAYCAST_CORE]: Object.freeze({
@@ -411,8 +300,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '核心系统',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: RaycastCoreCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.RAYCAST_WRAPPED]: Object.freeze({
@@ -429,8 +317,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '极客战报',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: RaycastWrappedCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.TRIAL_NUDGES]: Object.freeze({
@@ -447,8 +334,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '核心特权',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: TrialNudgesCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.WINDOWS_SHORTCUTS]: Object.freeze({
@@ -465,8 +351,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '原生自动化',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: WindowsShortcutsCommand
+    enabled: true
   }),
 
   // ==================== M1.5 第二组: 高频核心内置应用 (Group 2 Built-in Apps) ====================
@@ -484,8 +369,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: EmojiPickerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.TRANSLATOR]: Object.freeze({
@@ -502,8 +386,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: TranslatorCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.WINDOWS_RUN]: Object.freeze({
@@ -520,8 +403,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: WindowsRunCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.WINDOWS_TASKBAR]: Object.freeze({
@@ -538,8 +420,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: WindowsTaskbarCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SCREENSHOTS]: Object.freeze({
@@ -556,8 +437,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: ScreenshotsCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.APPLICATIONS]: Object.freeze({
@@ -574,8 +454,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: ApplicationsCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.DICTIONARY]: Object.freeze({
@@ -592,8 +471,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: DictionaryCommand
+    enabled: true
   }),
 
   // ==================== 官方 Store 扩展转发 (Official Store Extensions) ====================
@@ -612,8 +490,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     isBuiltin: true,
     isStoreExtension: true,
     isDeclarative: true,
-    enabled: true,
-    command: GithubDashboardCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.OBSIDIAN]: Object.freeze({
@@ -631,8 +508,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     isBuiltin: true,
     isStoreExtension: true,
     isDeclarative: true,
-    enabled: true,
-    command: ObsidianCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SPEEDTEST]: Object.freeze({
@@ -650,8 +526,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     isBuiltin: true,
     isStoreExtension: true,
     isDeclarative: true,
-    enabled: true,
-    command: SpeedtestCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.WINGET]: Object.freeze({
@@ -669,8 +544,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     isBuiltin: true,
     isStoreExtension: true,
     isDeclarative: true,
-    enabled: true,
-    command: WingetCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.CURRENCY_EXCHANGE]: Object.freeze({
@@ -688,8 +562,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     isBuiltin: true,
     isStoreExtension: true,
     isDeclarative: true,
-    enabled: true,
-    command: CurrencyExchangeCommand
+    enabled: true
   }),
 
   // ==================== 新增 5 款装机高频独立套件 ====================
@@ -707,8 +580,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: PasswordVaultCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.WIFI_PASSWORD_REVEAL]: Object.freeze({
@@ -725,8 +597,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: WifiPasswordRevealCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.AUDIO_DEVICE]: Object.freeze({
@@ -743,8 +614,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: AudioDeviceCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.CLEAN_KEYBOARD]: Object.freeze({
@@ -761,8 +631,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: CleanKeyboardCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.DOWNLOADS_MANAGER]: Object.freeze({
@@ -779,8 +648,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: DownloadsManagerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.FILE_UNLOCK]: Object.freeze({
@@ -797,8 +665,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: FileUnlockCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.STARTUP_MANAGER]: Object.freeze({
@@ -815,8 +682,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: StartupManagerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.PROCESS_MONITOR]: Object.freeze({
@@ -833,8 +699,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: ProcessMonitorCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SOFTWARE_MANAGER]: Object.freeze({
@@ -851,8 +716,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: SoftwareManagerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.CLEANER]: Object.freeze({
@@ -869,8 +733,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: CleanerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.DISK_ANALYZER]: Object.freeze({
@@ -887,8 +750,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: DiskAnalyzerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.WECHAT_CLEANER]: Object.freeze({
@@ -905,8 +767,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: WechatCleanerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.QQ_CLEANER]: Object.freeze({
@@ -923,8 +784,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: QQCleanerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.FLOW_GUARD]: Object.freeze({
@@ -941,8 +801,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: FlowGuardCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.HARDWARE_INFO]: Object.freeze({
@@ -959,8 +818,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: HardwareInfoCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.BOOST]: Object.freeze({
@@ -977,8 +835,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: BoostCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.BATCH_RENAME]: Object.freeze({
@@ -995,8 +852,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: BatchRenameCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.BATCH_VIDEO]: Object.freeze({
@@ -1013,8 +869,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: BatchVideoCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.BATCH_AUDIO]: Object.freeze({
@@ -1031,8 +886,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: BatchAudioCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.PDF]: Object.freeze({
@@ -1049,8 +903,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: PdfCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.MULTI_DOWNLOAD]: Object.freeze({
@@ -1067,8 +920,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: MultiDownloadCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.VIDEO_DOWNLOADER]: Object.freeze({
@@ -1085,8 +937,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: VideoDownloaderCommand
+    enabled: true
   }),
 
   // ==================== 新增 macOS 与跨端第一方内置套件 (macOS & Cross-Platform Built-ins) ====================
@@ -1104,8 +955,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: AppleShortcutsCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.NAVIGATION]: Object.freeze({
@@ -1122,8 +972,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: NavigationCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.HOMEBREW]: Object.freeze({
@@ -1140,8 +989,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: HomebrewCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SCRIPT_COMMANDS]: Object.freeze({
@@ -1158,8 +1006,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: ScriptCommandsCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.RAYCAST_FOCUS]: Object.freeze({
@@ -1176,8 +1023,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: RaycastFocusCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.CALENDAR]: Object.freeze({
@@ -1194,8 +1040,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: CalendarCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.WEB_SEARCHES]: Object.freeze({
@@ -1212,8 +1057,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '内置核心',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: WebSearchesCommand
+    enabled: true
   }),
 
   // ==================== 补齐 35 款本地原生标杆插件全集 (35 Local Native Suite) ====================
@@ -1231,8 +1075,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: NetworkAdapterCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.NETWORK_RESCUE]: Object.freeze({
@@ -1249,8 +1092,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: NetworkRescueCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.CONTEXT_MENU]: Object.freeze({
@@ -1267,8 +1109,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: ContextMenuCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.WECHAT_MULTI]: Object.freeze({
@@ -1285,8 +1126,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: WechatMultiCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.LAN_SHARE]: Object.freeze({
@@ -1303,8 +1143,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: LanShareCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.MOVER]: Object.freeze({
@@ -1321,8 +1160,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: MoverCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.DATA_RECOVERY]: Object.freeze({
@@ -1339,8 +1177,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: DataRecoveryCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SHREDDER]: Object.freeze({
@@ -1357,8 +1194,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: ShredderCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SYSTEM_BACKUP]: Object.freeze({
@@ -1375,8 +1211,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: SystemBackupCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SQLITE_PLUGIN]: Object.freeze({
@@ -1393,8 +1228,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: SqlitePluginCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.AI_IMAGE]: Object.freeze({
@@ -1411,8 +1245,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: AiImageCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.AI_VIDEO]: Object.freeze({
@@ -1429,8 +1262,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: AiVideoCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.OCR]: Object.freeze({
@@ -1447,8 +1279,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: OcrCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.RECORD]: Object.freeze({
@@ -1465,8 +1296,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '2.0标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: RecordCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.MONITOR_CONTROL]: Object.freeze({
@@ -1483,8 +1313,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '硬件直控',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: MonitorControlCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.CAFFEINE]: Object.freeze({
@@ -1501,8 +1330,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '电源常亮',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: CaffeineCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.DNS_BENCHMARK]: Object.freeze({
@@ -1519,8 +1347,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '网络加速',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: DnsBenchmarkCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.HOTKEY_RADAR]: Object.freeze({
@@ -1537,8 +1364,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '热键雷达',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: HotkeyRadarCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.FOLDER_SYNC]: Object.freeze({
@@ -1555,8 +1381,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '双向同步',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: FolderSyncCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.BROWSER_BOOKMARKS]: Object.freeze({
@@ -1573,8 +1398,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '多端聚合',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: BrowserBookmarksCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.PASTE_STACK]: Object.freeze({
@@ -1591,8 +1415,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '顺序流水线',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: PasteStackCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.OFFICE_SLIM]: Object.freeze({
@@ -1609,8 +1432,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '无损瘦身',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: OfficeSlimCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.MD_TO_OFFICE]: Object.freeze({
@@ -1627,8 +1449,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '公文三线表',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: MdToOfficeCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.FONT_MANAGER]: Object.freeze({
@@ -1645,8 +1466,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '商用排雷',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: FontManagerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.FILE_INSPECTOR]: Object.freeze({
@@ -1663,8 +1483,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '乱码修复',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: FileInspectorCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.MEDIA_METADATA]: Object.freeze({
@@ -1681,8 +1500,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: 'ID3精修',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: MediaMetadataCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.ID_WATERMARK]: Object.freeze({
@@ -1699,8 +1517,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '防伪水印',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: IdWatermarkCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.POMODORO_FOCUS]: Object.freeze({
@@ -1717,8 +1534,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '心流防打扰',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: PomodoroFocusCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.VSCODE_PROJECTS]: Object.freeze({
@@ -1735,8 +1551,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '多IDE聚合',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: VscodeProjectsCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.HOSTS_SWITCHER]: Object.freeze({
@@ -1753,8 +1568,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '多方案秒切',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: HostsSwitcherCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.ENV_MANAGER]: Object.freeze({
@@ -1771,8 +1585,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: 'PATH排雷',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: EnvManagerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.DOCKER_MANAGER]: Object.freeze({
@@ -1789,8 +1602,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '容器秒控',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: DockerManagerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.LAN_SCANNER]: Object.freeze({
@@ -1807,8 +1619,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: 'WOL唤醒',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: LanScannerCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SSH_PROXY_HELPER]: Object.freeze({
@@ -1825,8 +1636,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: 'SSH与代理',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: SshProxyHelperCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.REGEX_CRON]: Object.freeze({
@@ -1843,8 +1653,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '社区标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: RegexCronCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.LINUX_HTTP_DICT]: Object.freeze({
@@ -1861,8 +1670,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '社区标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: LinuxHttpDictCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.GIT_HELPER]: Object.freeze({
@@ -1879,8 +1687,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '社区标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: GitHelperCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SQL_HELPER]: Object.freeze({
@@ -1897,8 +1704,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '社区标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: SqlHelperCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.MOCK_DATA]: Object.freeze({
@@ -1915,8 +1721,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '社区标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: MockDataCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.JWT_URL_CODEC]: Object.freeze({
@@ -1933,8 +1738,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '社区标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: JwtUrlCodecCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.CURL_HTTP]: Object.freeze({
@@ -1951,8 +1755,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '社区标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: CurlHttpCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SSL_DOMAIN_CHECK]: Object.freeze({
@@ -1969,8 +1772,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '社区标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: SslDomainCheckCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.SVG_ICON_STUDIO]: Object.freeze({
@@ -1987,8 +1789,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '社区标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: SvgIconStudioCommand
+    enabled: true
   }),
 
   [OFFICIAL_PLUGIN_IDS.CHMOD_CIDR_CALC]: Object.freeze({
@@ -2005,8 +1806,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     badge: '社区标杆',
     isBuiltin: true,
     isDeclarative: true,
-    enabled: true,
-    command: ChmodCidrCalcCommand
+    enabled: true
   }),
 })
 
@@ -2055,36 +1855,30 @@ export function isOfficialPlugin(pluginId) {
 }
 
 /**
- * 获取官方应用定义
- * @param {string} pluginId
- * @returns {typeof OFFICIAL_PLUGINS_MAP[string] | undefined}
+ * 获取旧内置示例应用定义
+ * 客户端已彻底移除旧内置示例实现，始终返回 undefined。
+ * @param {string} _pluginId
+ * @returns {undefined}
  */
-export function getOfficialPlugin(pluginId) {
-  if (!pluginId || typeof pluginId !== 'string') return undefined
-  const { normalized, resolved } = resolveOfficialId(pluginId)
-  // 内置插件与插件市场分发的官方插件都以 plugins 仓库的真实实现为准，不再返回同名的旧示例实现
-  if (isBundledPlugin(normalized) || isBundledPlugin(resolved)) return undefined
-  if (isStoreOfficialPlugin(normalized) || isStoreOfficialPlugin(resolved)) return undefined
-  return ownLookup(OFFICIAL_PLUGINS_MAP, resolved) || ownLookup(OFFICIAL_PLUGINS_MAP, pluginId.trim())
+export function getOfficialPlugin(_pluginId) {
+  return undefined
 }
 
 /**
- * 是否随客户端提供：内置插件，或由客户端自身实现的官方应用。这类插件没有安装目录，不能卸载、不能生成桌面快捷方式。
+ * 是否随客户端提供：仅内置插件随客户端提供。这类插件没有安装目录，不能卸载、不能生成桌面快捷方式。
  * 插件市场分发的官方插件（storeOfficialIds）装在插件目录里，可以正常卸载，不算客户端内置应用。
  * @param {string} pluginId
  * @returns {boolean}
  */
 export function isClientProvidedPlugin(pluginId) {
-  return isBundledPlugin(pluginId) || Boolean(getOfficialPlugin(pluginId))
+  return isBundledPlugin(pluginId)
 }
 
 /**
- * 获取全量官方应用清单副本
- * @returns {Array<typeof OFFICIAL_PLUGINS_MAP[string]>}
+ * 获取旧内置示例应用清单
+ * 客户端已彻底移除旧内置示例实现，始终返回空数组。
+ * @returns {Array<never>}
  */
 export function getOfficialPluginsList() {
-  // 市场插件安装后才显示，不能用同名的旧内置实现冒充“已安装”
-  return OFFICIAL_PLUGINS_LIST.filter((p) => !isBundledPlugin(p.pluginId) && !isStoreOfficialPlugin(p.pluginId))
+  return []
 }
-
-

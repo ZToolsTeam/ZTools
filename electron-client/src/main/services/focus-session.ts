@@ -10,10 +10,10 @@ export interface FocusSessionState {
 }
 export interface PersistedFocus { version: 1; anchor: number; session: FocusSessionState }
 export function readFocusState(raw: string): PersistedFocus {
-  if (raw.length > 16_384) throw new Error('专注状态文件过大，原数据已保留')
+  if (raw.length > 16_384) throw new Error('Focus state file is too large; original data preserved')
   const value: unknown = JSON.parse(raw)
   const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
-  if (!object(value) || value.version !== 1 || !Number.isSafeInteger(value.anchor) || Number(value.anchor) < 0 || !object(value.session)) throw new Error('专注状态损坏，原数据已保留')
+  if (!object(value) || value.version !== 1 || !Number.isSafeInteger(value.anchor) || Number(value.anchor) < 0 || !object(value.session)) throw new Error('Focus state is corrupted; original data preserved')
   const s = value.session
   if (!['id', 'title', 'categoryId', 'categoryName'].every(k => typeof s[k] === 'string' && s[k].length > 0 && s[k].length <= 300) ||
       !['totalDurationMs', 'elapsedMs', 'remainingMs', 'completedCycles'].every(k => Number.isSafeInteger(s[k]) && Number(s[k]) >= 0) ||
@@ -23,7 +23,7 @@ export function readFocusState(raw: string): PersistedFocus {
       typeof s.presentation !== 'string' || !['panel', 'menuBar', 'hud'].includes(s.presentation) ||
       typeof s.mode !== 'string' || !['single', 'pomodoro'].includes(s.mode) ||
       typeof s.phase !== 'string' || !['focus', 'short_break', 'long_break'].includes(s.phase) ||
-      !['startedAt', 'pausedAt', 'completedAt'].every(k => s[k] === null || Number.isSafeInteger(s[k]) && Number(s[k]) >= 0)) throw new Error('专注状态损坏，原数据已保留')
+      !['startedAt', 'pausedAt', 'completedAt'].every(k => s[k] === null || Number.isSafeInteger(s[k]) && Number(s[k]) >= 0)) throw new Error('Focus state is corrupted; original data preserved')
   return value as unknown as PersistedFocus
 }
 

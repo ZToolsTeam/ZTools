@@ -14,14 +14,24 @@ import { ClaudeProvider } from './providers/claude.js';
 import { TokenTracker } from './token-tracker.js';
 import { PromptTemplateManager } from './prompt-manager.js';
 import { sniffLocalProviders, createLocalProviderConfig } from './local-sniffer.js';
+import { AiMcpError, type AiMcpErrorCode, type AiMcpMessageParams, tAiMcp } from '../i18n.js';
 
 export class ModelRouterError extends Error {
   public failedAttempts: Array<{ providerId: string; error: string }>;
+  public readonly code?: AiMcpErrorCode;
+  public readonly params?: Readonly<AiMcpMessageParams>;
 
-  constructor(message: string, failedAttempts: Array<{ providerId: string; error: string }> = []) {
+  constructor(
+    message: string,
+    failedAttempts: Array<{ providerId: string; error: string }> = [],
+    code?: AiMcpErrorCode,
+    params?: AiMcpMessageParams
+  ) {
     super(message);
     this.name = 'ModelRouterError';
     this.failedAttempts = failedAttempts;
+    if (code) this.code = code;
+    if (params) this.params = Object.freeze({ ...params });
   }
 }
 
@@ -44,7 +54,7 @@ export class ModelRouter {
    */
   public registerProvider(config: ModelProviderConfig): BaseProvider {
     if (!config.id) {
-      throw new Error('Provider config must have an id');
+      throw new AiMcpError('router.providerIdRequired');
     }
 
     let provider: BaseProvider;
@@ -96,7 +106,7 @@ export class ModelRouter {
    */
   public setDefaultProvider(id: string): void {
     if (!this.providers.has(id)) {
-      throw new Error(`Provider "${id}" is not registered`);
+      throw new AiMcpError('router.providerNotRegistered', { id });
     }
     this.defaultProviderId = id;
   }
@@ -142,12 +152,12 @@ export class ModelRouter {
   private resolveProviderChain(requestedProviderId?: string): BaseProvider[] {
     const primaryId = requestedProviderId || this.defaultProviderId;
     if (!primaryId) {
-      throw new Error('No AI provider registered or selected');
+      throw new AiMcpError('router.noProviderSelected');
     }
 
     const primary = this.providers.get(primaryId);
     if (!primary) {
-      throw new Error(`Primary provider "${primaryId}" not found`);
+      throw new AiMcpError('router.primaryProviderNotFound', { id: primaryId });
     }
 
     const chain: BaseProvider[] = [primary];
@@ -186,7 +196,7 @@ export class ModelRouter {
         }
 
         return response;
-      } catch (err: any) {
+      } catch (err: unknown) {
         const latencyMs = Date.now() - startTime;
         const errorMsg = err instanceof Error ? err.message : String(err);
         failedAttempts.push({ providerId: provider.id, error: errorMsg });
@@ -206,9 +216,12 @@ export class ModelRouter {
       }
     }
 
+    const attempts = failedAttempts.map(a => `${a.providerId} (${a.error})`).join('; ');
     throw new ModelRouterError(
-      `All providers in chain failed: ${failedAttempts.map(a => `${a.providerId} (${a.error})`).join('; ')}`,
-      failedAttempts
+      tAiMcp('router.allProvidersFailed', { attempts }),
+      failedAttempts,
+      'router.allProvidersFailed',
+      { attempts }
     );
   }
 
@@ -248,7 +261,7 @@ export class ModelRouter {
         }
 
         return;
-      } catch (err: any) {
+      } catch (err: unknown) {
         const latencyMs = Date.now() - startTime;
         const errorMsg = err instanceof Error ? err.message : String(err);
         failedAttempts.push({ providerId: provider.id, error: errorMsg });
@@ -269,9 +282,12 @@ export class ModelRouter {
       }
     }
 
+    const attempts = failedAttempts.map(a => `${a.providerId} (${a.error})`).join('; ');
     throw new ModelRouterError(
-      `All stream providers failed: ${failedAttempts.map(a => `${a.providerId} (${a.error})`).join('; ')}`,
-      failedAttempts
+      tAiMcp('router.allStreamProvidersFailed', { attempts }),
+      failedAttempts,
+      'router.allStreamProvidersFailed',
+      { attempts }
     );
   }
 

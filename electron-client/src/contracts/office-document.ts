@@ -9,7 +9,7 @@ export interface OfficeDocumentParams {
   operationId: string
 }
 export function validateOfficeParams(value: unknown): asserts value is OfficeDocumentParams {
-  const invalid = () => new ZToolsError(errorCodes.invalidRequest, 'Office 文档处理参数无效')
+  const invalid = () => new ZToolsError(errorCodes.invalidRequest, 'Invalid Office document parameters')
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw invalid()
   const p = value as Record<string, unknown>
   if (typeof p.action !== 'string' || !['inspect', 'slim', 'extract'].includes(p.action) || Object.keys(p).some(key => !['action', 'path', 'outputPath', 'digest', 'cleanMetadata', 'operationId'].includes(key))) throw invalid()

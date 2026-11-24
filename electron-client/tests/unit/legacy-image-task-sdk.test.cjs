@@ -1,11 +1,35 @@
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
+const path = require('node:path')
 const vm = require('node:vm')
 const test = require('node:test')
 
+const CEF_IPC_SRC_DIR = path.resolve(__dirname, '../../../frontend/public/js/cef-ipc/src')
+
+function stripModuleSyntax(source) {
+  return source
+    .replace(/^\s*import\s+(?:[\s\S]*?\s+from\s+)?['"][^'"]+['"]\s*;?\s*$/gm, '')
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim()
+      if (/^export\s+default\b/.test(trimmed) || /^export\s*\{/.test(trimmed)) return ''
+      return line.replace(/^(\s*)export\s+/, '$1')
+    })
+    .join('\n')
+}
+
+function loadCefIpcSource(relativePath) {
+  const envRaw = fs.readFileSync(path.join(CEF_IPC_SRC_DIR, 'core/environment.js'), 'utf8')
+  const envMarker = envRaw.indexOf('class Environment')
+  if (envMarker === -1) throw new Error('无法定位 core/environment.js 中的 class Environment 分界')
+  const i18nPart = stripModuleSyntax(envRaw.slice(0, envMarker))
+  const targetPart = stripModuleSyntax(fs.readFileSync(path.join(CEF_IPC_SRC_DIR, relativePath), 'utf8'))
+  return `${i18nPart}\n${targetPart}`
+}
+
 function fixture() {
   const handlers = new Map(), calls = [], timers = new Set()
-  const source = fs.readFileSync('../frontend/public/js/cef-ipc/src/api/dllplugin.js', 'utf8').replace(/^export .+$/mg, '')
+  const source = loadCefIpcSource('api/dllplugin.js')
   const Constructor = vm.runInNewContext(source + '\nDLLPluginAPI', {
     console: { log() {}, error() {} }, Date, AbortController, Error,
     setTimeout(fn, ms) { const handle = setTimeout(() => { timers.delete(handle); fn() }, ms); timers.add(handle); return handle },
@@ -42,7 +66,7 @@ test('a lost start reply before task ID delivery is unknown and cannot trigger r
 })
 
 test('legacy image selects an explicit finite observation timeout', async () => {
-  const source = fs.readFileSync('../frontend/public/js/cef-ipc/src/api/image.js', 'utf8').replace(/^export .+$/mg, '')
+  const source = loadCefIpcSource('api/image.js')
   let waitArgs
   const Constructor = vm.runInNewContext(source + '\nImageAPI', { window: { ztools: { dllplugin: {
     callAsync: async () => 'task_image', waitTask: async (...args) => { waitArgs = args; return { result: { width: 2, height: 3 } } },

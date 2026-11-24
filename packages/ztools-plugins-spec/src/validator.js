@@ -22,6 +22,7 @@ export function isOfficialAuthorName(author) {
   if (typeof raw !== 'string') return false
   const key = raw.trim().toLowerCase().replace(/[\s_-]+/g, '')
   if (!key) return false
+  // i18n-allow: official author name impersonation keywords
   return ['ztools', 'ztoolsteam', 'ztools团队'].includes(key) || key.includes('official') || key.includes('官方')
 }
 
@@ -51,13 +52,13 @@ export const PERMISSION_SET = new Set(PERMISSIONS)
  * 插件市场 7 大标准分类 slug ↔ 中文映射（客户端与官网统一按此白名单归类）
  */
 export const PLUGIN_CATEGORY_ID_MAP = Object.freeze({
-  productivity: '办公效率',
-  system: '系统工具',
-  files: '文件管理',
-  media: '图像媒体',
-  developer: '开发工具',
-  network: '网络工具',
-  security: '安全隐私'
+  productivity: '办公效率', // i18n-allow: canonical Chinese category label whitelist
+  system: '系统工具', // i18n-allow: canonical Chinese category label whitelist
+  files: '文件管理', // i18n-allow: canonical Chinese category label whitelist
+  media: '图像媒体', // i18n-allow: canonical Chinese category label whitelist
+  developer: '开发工具', // i18n-allow: canonical Chinese category label whitelist
+  network: '网络工具', // i18n-allow: canonical Chinese category label whitelist
+  security: '安全隐私' // i18n-allow: canonical Chinese category label whitelist
 })
 
 export const PLUGIN_CATEGORY_IDS = Object.freeze(Object.keys(PLUGIN_CATEGORY_ID_MAP))
@@ -168,7 +169,7 @@ export function buildPlatformTargets(platforms) {
   const list = [...new Set(Array.isArray(platforms) ? platforms : [])]
   const unknown = list.filter((p) => !SUPPORTED_PLATFORMS.includes(p))
   if (list.length === 0 || unknown.length > 0) {
-    throw new Error(`平台必须是 ${SUPPORTED_PLATFORMS.join(' / ')} 的非空组合，收到: ${JSON.stringify(platforms)}`)
+    throw new Error(`platforms must be a non-empty subset of ${SUPPORTED_PLATFORMS.join(' / ')}, received: ${JSON.stringify(platforms)}`)
   }
   return SUPPORTED_PLATFORMS.filter((p) => list.includes(p))
     .map((platform) => ({ id: `${platform}-electron-any`, platform, runtime: 'electron', arch: 'any' }))
@@ -189,46 +190,46 @@ export function getManifestPlatforms(manifest) {
   return SUPPORTED_PLATFORMS.filter((p) => found.has(p))
 }
 
-/** 平台说明文字：跨平台 / 仅 Windows / 仅 macOS */
+/** 平台说明文字：Cross-platform / Windows only / macOS only */
 export function describePlatforms(platforms) {
   const list = SUPPORTED_PLATFORMS.filter((p) => Array.isArray(platforms) && platforms.includes(p))
-  if (list.length === SUPPORTED_PLATFORMS.length) return '跨平台'
-  if (list.length === 1) return `仅 ${PLATFORM_LABELS[list[0]]}`
-  return '未声明平台'
+  if (list.length === SUPPORTED_PLATFORMS.length) return 'Cross-platform'
+  if (list.length === 1) return `${PLATFORM_LABELS[list[0]]} only`
+  return 'Undeclared platform'
 }
 
 function validateTargets(manifest, errors) {
   if (manifest.targets === undefined) {
-    errors.push('缺少必填字段: targets（声明插件支持的平台：跨平台写 windows 与 macos 两个目标，单平台只写一个）')
+    errors.push('Missing required field: targets (declare supported platforms: both windows and macos for cross-platform, or a single platform)')
     return
   }
   if (!Array.isArray(manifest.targets) || manifest.targets.length === 0) {
-    errors.push('targets 必须为非空数组')
+    errors.push('targets must be a non-empty array')
     return
   }
   const ids = new Set()
   for (const [idx, target] of manifest.targets.entries()) {
     const label = `targets[${idx}]`
     if (!target || typeof target !== 'object' || Array.isArray(target)) {
-      errors.push(`${label} 必须为对象，例如 { "id": "windows-electron-any", "platform": "windows", "runtime": "electron", "arch": "any" }`)
+      errors.push(`${label} must be an object, e.g. { "id": "windows-electron-any", "platform": "windows", "runtime": "electron", "arch": "any" }`)
       continue
     }
     const unknownKeys = Object.keys(target).filter((key) => !TARGET_KEYS.has(key))
-    if (unknownKeys.length > 0) errors.push(`${label} 包含未知字段: ${unknownKeys.join(', ')}`)
-    if (typeof target.id !== 'string' || !TARGET_ID_REGEX.test(target.id)) errors.push(`${label}.id 无效`)
-    else if (ids.has(target.id)) errors.push(`${label}.id 重复: ${target.id}`)
+    if (unknownKeys.length > 0) errors.push(`${label} contains unknown fields: ${unknownKeys.join(', ')}`)
+    if (typeof target.id !== 'string' || !TARGET_ID_REGEX.test(target.id)) errors.push(`${label}.id is invalid`)
+    else if (ids.has(target.id)) errors.push(`${label}.id is duplicated: ${target.id}`)
     else ids.add(target.id)
-    if (!SUPPORTED_PLATFORMS.includes(target.platform)) errors.push(`${label}.platform 必须为 ${SUPPORTED_PLATFORMS.join(' / ')}`)
-    if (!TARGET_RUNTIMES.has(target.runtime)) errors.push(`${label}.runtime 必须为 ${[...TARGET_RUNTIMES].join(' / ')}`)
-    if (!TARGET_ARCHES.has(target.arch)) errors.push(`${label}.arch 必须为 ${[...TARGET_ARCHES].join(' / ')}`)
-    if (target.runtime === 'legacy-delphi' && target.platform !== 'windows') errors.push(`${label} 的 legacy-delphi 运行时只允许 Windows`)
-    if (target.platform === 'macos' && target.arch === 'ia32') errors.push(`${label} macOS 不支持 ia32 架构`)
+    if (!SUPPORTED_PLATFORMS.includes(target.platform)) errors.push(`${label}.platform must be one of ${SUPPORTED_PLATFORMS.join(' / ')}`)
+    if (!TARGET_RUNTIMES.has(target.runtime)) errors.push(`${label}.runtime must be one of ${[...TARGET_RUNTIMES].join(' / ')}`)
+    if (!TARGET_ARCHES.has(target.arch)) errors.push(`${label}.arch must be one of ${[...TARGET_ARCHES].join(' / ')}`)
+    if (target.runtime === 'legacy-delphi' && target.platform !== 'windows') errors.push(`${label} legacy-delphi runtime is only allowed on Windows`)
+    if (target.platform === 'macos' && target.arch === 'ia32') errors.push(`${label} macOS does not support ia32 architecture`)
   }
   if (getManifestPlatforms(manifest).length === 0) {
-    errors.push('targets 中至少要有一个 runtime 为 electron 的目标，否则任何 ZTools 客户端都无法安装')
+    errors.push('targets must include at least one target with runtime "electron", otherwise no ZTools client can install this plugin')
   }
   if (!Array.isArray(manifest.nativeComponents)) {
-    errors.push('声明 targets 时 nativeComponents 必须为数组；纯 JS 插件写 []')
+    errors.push('nativeComponents must be an array when targets is declared; use [] for pure JS plugins')
   }
 }
 
@@ -236,21 +237,21 @@ function validateCategoryIdField(manifest, errors) {
   if (manifest.categoryId === undefined) return
   if (typeof manifest.categoryId === 'string') {
     if (!PLUGIN_CATEGORY_ID_SET.has(manifest.categoryId)) {
-      errors.push(`未知或非标准的 categoryId: "${manifest.categoryId}"。可选标准分类 slug 为: ${PLUGIN_CATEGORY_IDS.join(' / ')}`)
+      errors.push(`Unknown or non-standard categoryId: "${manifest.categoryId}". Allowed standard category slugs: ${PLUGIN_CATEGORY_IDS.join(' / ')}`)
     }
     return
   }
   if (!Array.isArray(manifest.categoryId) || manifest.categoryId.length === 0 || manifest.categoryId.length > 2) {
-    errors.push(`categoryId 必须为标准分类 slug 或包含 1-2 个标准分类 slug 的数组（可选: ${PLUGIN_CATEGORY_IDS.join(' / ')}）`)
+    errors.push(`categoryId must be a standard category slug or an array of 1-2 standard category slugs (allowed: ${PLUGIN_CATEGORY_IDS.join(' / ')})`)
     return
   }
   const seen = new Set()
   for (const id of manifest.categoryId) {
     if (typeof id !== 'string' || !PLUGIN_CATEGORY_ID_SET.has(id)) {
-      errors.push(`未知或非标准的 categoryId: "${id}"。可选标准分类 slug 为: ${PLUGIN_CATEGORY_IDS.join(' / ')}`)
+      errors.push(`Unknown or non-standard categoryId: "${id}". Allowed standard category slugs: ${PLUGIN_CATEGORY_IDS.join(' / ')}`)
       continue
     }
-    if (seen.has(id)) errors.push(`categoryId 中存在重复声明的分类: "${id}"`)
+    if (seen.has(id)) errors.push(`Duplicate category in categoryId: "${id}"`)
     seen.add(id)
   }
 }
@@ -259,21 +260,21 @@ function validateCategories(manifest, errors) {
   validateCategoryIdField(manifest, errors)
   if (manifest.revoked === true) return
   if (manifest.category === undefined || manifest.category === null || manifest.category === '') {
-    errors.push(`缺少必填字段: category（请选择 1-2 个标准分类: ${PLUGIN_CATEGORIES.join(' / ')}）`)
+    errors.push(`Missing required field: category (choose 1-2 standard categories: ${PLUGIN_CATEGORY_IDS.join(' / ')} or ${PLUGIN_CATEGORIES.join(' / ')})`)
     return
   }
   if (!Array.isArray(manifest.category) || manifest.category.length === 0 || manifest.category.length > 2) {
-    errors.push(`category 必须为包含 1-2 个标准分类的数组（可选: ${PLUGIN_CATEGORIES.join(' / ')}）`)
+    errors.push(`category must be an array of 1-2 standard categories (allowed: ${PLUGIN_CATEGORY_IDS.join(' / ')} or ${PLUGIN_CATEGORIES.join(' / ')})`)
     return
   }
   const seenIds = new Set()
   for (const cat of manifest.category) {
     if (typeof cat !== 'string' || (!PLUGIN_CATEGORY_SET.has(cat) && !PLUGIN_CATEGORY_ID_SET.has(cat))) {
-      errors.push(`未知或非标准的 category: "${cat}"。可选标准分类为: ${PLUGIN_CATEGORIES.join(' / ')}（或对应英文 slug: ${PLUGIN_CATEGORY_IDS.join(' / ')}）`)
+      errors.push(`Unknown or non-standard category: "${cat}". Allowed standard categories: ${PLUGIN_CATEGORIES.join(' / ')} (or English slugs: ${PLUGIN_CATEGORY_IDS.join(' / ')})`)
       continue
     }
     const normalizedId = normalizeCategoryId(cat)
-    if (seenIds.has(normalizedId)) errors.push(`category 中存在重复声明的分类: "${cat}"`)
+    if (seenIds.has(normalizedId)) errors.push(`Duplicate category in category: "${cat}"`)
     seenIds.add(normalizedId)
   }
 }
@@ -304,7 +305,7 @@ export function validatePluginManifest(manifest, options = {}) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return {
       valid: false,
-      errors: ['plugin.json 内容必须为有效的 JSON 对象'],
+      errors: ['plugin.json must be a valid JSON object'],
       warnings: []
     }
   }
@@ -323,49 +324,49 @@ export function validatePluginManifest(manifest, options = {}) {
 
   for (const field of requiredFields) {
     if (manifest[field] === undefined || manifest[field] === null || manifest[field] === '') {
-      errors.push(`缺少必填字段: ${field}`)
+      errors.push(`Missing required field: ${field}`)
     }
   }
 
   // 最低客户端版本（可选；发布脚本还会按插件用到的宿主接口自动提高）
   if (manifest.minAppVersion !== undefined && (typeof manifest.minAppVersion !== 'string' || !APP_VERSION_REGEX.test(manifest.minAppVersion))) {
-    errors.push(`minAppVersion 格式无效: "${manifest.minAppVersion}"（应为 1.1.8.3 这样的客户端版本号）`)
+    errors.push(`Invalid minAppVersion format: "${manifest.minAppVersion}" (expected client version such as 1.1.8.3)`)
   }
 
   // 2. id 校验
   if (manifest.id !== undefined) {
     if (typeof manifest.id !== 'string') {
-      errors.push('id 字段必须为字符串')
+      errors.push('id must be a string')
     } else if (!ID_REGEX.test(manifest.id)) {
-      errors.push(`id 字段格式不符合规范: "${manifest.id}"（必须以小写字母开头，仅允许小写字母、数字与短横线，长度 2-64）`)
+      errors.push(`Invalid id format: "${manifest.id}" (must start with a lowercase letter and contain only lowercase letters, digits, and hyphens; length 2-64)`)
     } else if (RESERVED_PLUGIN_IDS.has(manifest.id) && manifest.revoked !== true) {
       // 已下架的历史条目只保留下架记录，不受影响
-      errors.push(`id "${manifest.id}" 与客户端内置功能重名，客户端会隐藏这个插件，请换一个 ID（完整名单见 reserved-ids.json）`)
+      errors.push(`id "${manifest.id}" conflicts with a built-in client feature and will be hidden by the client; choose another ID (see reserved-ids.json)`)
     }
   }
 
   // 3. name 校验
   if (manifest.name !== undefined) {
     if (typeof manifest.name !== 'string' || manifest.name.trim().length === 0) {
-      errors.push('name 字段必须为非空字符串')
+      errors.push('name must be a non-empty string')
     } else if (manifest.name.length > 50) {
-      errors.push('name 字段长度不能超过 50 个字符')
+      errors.push('name must not exceed 50 characters')
     }
   }
 
   // 4. version 校验
   if (manifest.version !== undefined) {
     if (typeof manifest.version !== 'string') {
-      errors.push('version 字段必须为字符串')
+      errors.push('version must be a string')
     } else if (!SEMVER_REGEX.test(manifest.version)) {
-      errors.push(`version 字段必须遵循语义化版本号格式 (SemVer)，当前为: "${manifest.version}"`)
+      errors.push(`version must follow SemVer format, received: "${manifest.version}"`)
     }
   }
 
   // 5. description 校验
   if (manifest.description !== undefined) {
     if (typeof manifest.description !== 'string' || manifest.description.trim().length === 0) {
-      errors.push('description 字段必须为非空字符串')
+      errors.push('description must be a non-empty string')
     }
   }
 
@@ -373,38 +374,38 @@ export function validatePluginManifest(manifest, options = {}) {
   if (manifest.author !== undefined) {
     if (typeof manifest.author === 'string') {
       if (manifest.author.trim().length === 0) {
-        errors.push('author 字符串不能为空')
+        errors.push('author string must not be empty')
       }
     } else if (typeof manifest.author === 'object' && !Array.isArray(manifest.author)) {
       if (!manifest.author.name || typeof manifest.author.name !== 'string') {
-        errors.push('author 对象必须包含有效的 name 字段')
+        errors.push('author object must contain a valid name field')
       }
     } else {
-      errors.push('author 字段类型必须为字符串或对象')
+      errors.push('author must be a string or an object')
     }
     // 官方名称只给官方名单里的插件用（已下架的历史条目不受影响），防止社区插件冒充官方
     if (isOfficialAuthorName(manifest.author) && manifest.revoked !== true && !OFFICIAL_PLUGIN_IDS.has(manifest.id)) {
-      errors.push(`author 不能使用官方名称（"${typeof manifest.author === 'string' ? manifest.author : manifest.author?.name}"）：只有官方名单 official-ids.json 里的插件可以使用，请写你自己的名字或 GitHub 用户名`)
+      errors.push(`author cannot use an official name ("${typeof manifest.author === 'string' ? manifest.author : manifest.author?.name}"): reserved for plugins listed in official-ids.json; use your own name or GitHub username`)
     }
   }
 
   // 7. permissions 校验
   if (manifest.permissions !== undefined) {
     if (!Array.isArray(manifest.permissions)) {
-      errors.push('permissions 字段必须为数组')
+      errors.push('permissions must be an array')
     } else {
       const seen = new Set()
       for (const perm of manifest.permissions) {
         if (typeof perm !== 'string') {
-          errors.push(`permissions 数组项必须为字符串: ${perm}`)
+          errors.push(`permissions items must be strings: ${perm}`)
           continue
         }
         if (seen.has(perm)) {
-          errors.push(`permissions 中存在重复声明的权限: "${perm}"`)
+          errors.push(`Duplicate permission in permissions: "${perm}"`)
         }
         seen.add(perm)
         if (!PERMISSION_SET.has(perm)) {
-          errors.push(`未知的权限声明: "${perm}"。有效权限项为: ${PERMISSIONS.join(', ')}`)
+          errors.push(`Unknown permission: "${perm}". Valid permissions: ${PERMISSIONS.join(', ')}`)
         }
       }
     }
@@ -413,13 +414,13 @@ export function validatePluginManifest(manifest, options = {}) {
   // 8. entry 校验
   if (manifest.entry !== undefined) {
     if (typeof manifest.entry !== 'string') {
-      errors.push('entry 字段必须为字符串')
+      errors.push('entry must be a string')
     } else if (!SAFE_ENTRY_REGEX.test(manifest.entry)) {
-      errors.push(`entry 路径不合法: "${manifest.entry}"（仅支持安全相对路径，扩展名需为 .html、.js 或 .mjs，禁止路径穿越）`)
+      errors.push(`Invalid entry path: "${manifest.entry}" (must be a safe relative path ending in .html, .js, or .mjs; path traversal is disallowed)`)
     } else if (options.baseDir) {
       const resolvedEntry = path.resolve(options.baseDir, manifest.entry)
       if (!fs.existsSync(resolvedEntry)) {
-        errors.push(`entry 指定的文件不存在: ${manifest.entry}`)
+        errors.push(`entry file does not exist: ${manifest.entry}`)
       }
     }
   }
@@ -427,13 +428,13 @@ export function validatePluginManifest(manifest, options = {}) {
   // 9. icon 校验
   if (manifest.icon !== undefined) {
     if (typeof manifest.icon !== 'string') {
-      errors.push('icon 字段必须为字符串')
+      errors.push('icon must be a string')
     } else if (!SAFE_ICON_REGEX.test(manifest.icon)) {
-      errors.push(`icon 路径不合法: "${manifest.icon}"（仅支持相对路径，扩展名需为 .png、.svg、.jpg、.jpeg、.webp 或 .ico）`)
+      errors.push(`Invalid icon path: "${manifest.icon}" (must be a relative path ending in .png, .svg, .jpg, .jpeg, .webp, or .ico)`)
     } else if (options.baseDir) {
       const resolvedIcon = path.resolve(options.baseDir, manifest.icon)
       if (!fs.existsSync(resolvedIcon)) {
-        errors.push(`icon 指定的文件不存在: ${manifest.icon}`)
+        errors.push(`icon file does not exist: ${manifest.icon}`)
       }
     }
   }
@@ -443,21 +444,21 @@ export function validatePluginManifest(manifest, options = {}) {
     const val = manifest[optionalPathField]
     if (val !== undefined) {
       if (typeof val !== 'string' || val.includes('\0') || /(?:^|[/\\])\.\.(?:[/\\]|$)/.test(val) || path.isAbsolute(val)) {
-        errors.push(`${optionalPathField} 路径不合法: "${val}"（禁止绝对路径或路径穿越）`)
+        errors.push(`Invalid ${optionalPathField} path: "${val}" (absolute paths and path traversal are disallowed)`)
       } else if (options.baseDir && !isPathInsideBaseDir(options.baseDir, val)) {
-        errors.push(`${optionalPathField} 路径越界: "${val}" 不允许脱离插件根目录`)
+        errors.push(`${optionalPathField} path escapes plugin root: "${val}"`)
       }
     }
   }
   if (manifest.window !== undefined) {
     if (typeof manifest.window !== 'object' || Array.isArray(manifest.window)) {
-      errors.push('window 必须为对象')
+      errors.push('window must be an object')
     } else {
       if (manifest.window.width !== undefined && (!Number.isInteger(manifest.window.width) || manifest.window.width <= 0)) {
-        errors.push('window.width 必须为正整数')
+        errors.push('window.width must be a positive integer')
       }
       if (manifest.window.height !== undefined && (!Number.isInteger(manifest.window.height) || manifest.window.height <= 0)) {
-        errors.push('window.height 必须为正整数')
+        errors.push('window.height must be a positive integer')
       }
     }
   }
@@ -467,17 +468,17 @@ export function validatePluginManifest(manifest, options = {}) {
   const VALID_MODES = new Set(['view', 'no-view'])
   if (manifest.mode !== undefined) {
     if (typeof manifest.mode !== 'string' || !VALID_MODES.has(manifest.mode)) {
-      errors.push(`mode 必须为以下取值之一: ${[...VALID_MODES].join(', ')}`)
+      errors.push(`mode must be one of: ${[...VALID_MODES].join(', ')}`)
     }
   }
   if (manifest.alias !== undefined) {
     if (typeof manifest.alias !== 'string' || manifest.alias.length > 32) {
-      errors.push('alias 必须为不超过 32 个字符的字符串')
+      errors.push('alias must be a string of at most 32 characters')
     }
   }
   if (manifest.shortcut !== undefined) {
     if (typeof manifest.shortcut !== 'string' || !manifest.shortcut.trim()) {
-      errors.push('shortcut 必须为非空字符串')
+      errors.push('shortcut must be a non-empty string')
     }
   }
 
@@ -488,40 +489,40 @@ export function validatePluginManifest(manifest, options = {}) {
   // 13. 发布状态：草稿（功能未完成，不发布）与下架（已发布后撤下）
   for (const [flag, reasonKey] of [['draft', 'draftReason'], ['revoked', 'revokedReason']]) {
     if (manifest[flag] !== undefined && typeof manifest[flag] !== 'boolean') {
-      errors.push(`${flag} 字段必须为布尔值`)
+      errors.push(`${flag} must be a boolean`)
     }
     if (manifest[flag] === true && (typeof manifest[reasonKey] !== 'string' || !manifest[reasonKey].trim())) {
-      errors.push(`${flag} 为 true 时必须用 ${reasonKey} 写明原因，方便审核与后续跟进`)
+      errors.push(`${reasonKey} is required when ${flag} is true`)
     }
     if (manifest[reasonKey] !== undefined && typeof manifest[reasonKey] !== 'string') {
-      errors.push(`${reasonKey} 字段必须为字符串`)
+      errors.push(`${reasonKey} must be a string`)
     }
   }
 
   // 13. features 列表校验 (如存在)
   if (manifest.features !== undefined) {
     if (!Array.isArray(manifest.features)) {
-      errors.push('features 字段必须为数组')
+      errors.push('features must be an array')
     } else {
       for (const [idx, feat] of manifest.features.entries()) {
         if (!feat || typeof feat !== 'object' || Array.isArray(feat)) {
-          errors.push(`features[${idx}] 必须为对象`)
+          errors.push(`features[${idx}] must be an object`)
           continue
         }
         if (!feat.code || typeof feat.code !== 'string') {
-          errors.push(`features[${idx}] 缺少有效的 code 字段`)
+          errors.push(`features[${idx}] is missing a valid code field`)
         }
         if (!feat.explain || typeof feat.explain !== 'string') {
-          errors.push(`features[${idx}] 缺少有效的 explain 字段`)
+          errors.push(`features[${idx}] is missing a valid explain field`)
         }
         if (feat.mode !== undefined && (!VALID_MODES.has(feat.mode) || typeof feat.mode !== 'string')) {
-          errors.push(`features[${idx}].mode 必须为以下取值之一: ${[...VALID_MODES].join(', ')}`)
+          errors.push(`features[${idx}].mode must be one of: ${[...VALID_MODES].join(', ')}`)
         }
         if (feat.alias !== undefined && (typeof feat.alias !== 'string' || feat.alias.length > 32)) {
-          errors.push(`features[${idx}].alias 必须为不超过 32 个字符的字符串`)
+          errors.push(`features[${idx}].alias must be a string of at most 32 characters`)
         }
         if (feat.shortcut !== undefined && (typeof feat.shortcut !== 'string' || !feat.shortcut.trim())) {
-          errors.push(`features[${idx}].shortcut 必须为非空字符串`)
+          errors.push(`features[${idx}].shortcut must be a non-empty string`)
         }
       }
     }
@@ -545,39 +546,45 @@ const I18N_ENTRY_KEYS = new Set(['name', 'description', 'keywords', 'revokedReas
 const I18N_FEATURE_KEYS = new Set(['explain', 'cmds'])
 const I18N_SCREENSHOT_KEYS = new Set(['file', 'title'])
 
-function validateI18nFeatures(features, label, errors) {
+function validateI18nFeatures(features, label, errors, topFeatureCodes = null) {
   if (!features || typeof features !== 'object' || Array.isArray(features)) {
-    errors.push(`${label}.features 必须为以功能 code 为键的对象`)
+    errors.push(`${label}.features must be an object keyed by feature code`)
     return
+  }
+  if (topFeatureCodes !== null && topFeatureCodes.size === 0) {
+    errors.push(`${label}.features is declared, but top-level features is not defined`)
   }
   for (const [code, feat] of Object.entries(features)) {
     const featLabel = `${label}.features["${code}"]`
     if (!code.trim()) {
-      errors.push(`${label}.features 包含空的 feature code`)
+      errors.push(`${label}.features contains an empty feature code`)
       continue
     }
+    if (topFeatureCodes !== null && topFeatureCodes.size > 0 && !topFeatureCodes.has(code)) {
+      errors.push(`${featLabel} references unknown feature code "${code}" not present in top-level manifest.features`)
+    }
     if (!feat || typeof feat !== 'object' || Array.isArray(feat)) {
-      errors.push(`${featLabel} 必须为对象`)
+      errors.push(`${featLabel} must be an object`)
       continue
     }
     const unknownFeatKeys = Object.keys(feat).filter((k) => !I18N_FEATURE_KEYS.has(k))
     if (unknownFeatKeys.length > 0) {
-      errors.push(`${featLabel} 包含未知字段: ${unknownFeatKeys.join(', ')}`)
+      errors.push(`${featLabel} contains unknown fields: ${unknownFeatKeys.join(', ')}`)
     }
     if (feat.explain !== undefined) {
       if (typeof feat.explain !== 'string' || feat.explain.trim().length === 0) {
-        errors.push(`${featLabel}.explain 必须为非空字符串`)
+        errors.push(`${featLabel}.explain must be a non-empty string`)
       }
     }
     if (feat.cmds !== undefined) {
       if (!Array.isArray(feat.cmds)) {
-        errors.push(`${featLabel}.cmds 必须为数组`)
+        errors.push(`${featLabel}.cmds must be an array`)
       } else {
         for (const [idx, cmd] of feat.cmds.entries()) {
           const validString = typeof cmd === 'string' && cmd.trim().length > 0
           const validObject = Boolean(cmd) && typeof cmd === 'object' && !Array.isArray(cmd)
           if (!validString && !validObject) {
-            errors.push(`${featLabel}.cmds[${idx}] 必须为非空字符串或对象`)
+            errors.push(`${featLabel}.cmds[${idx}] must be a non-empty string or an object`)
           }
         }
       }
@@ -587,32 +594,32 @@ function validateI18nFeatures(features, label, errors) {
 
 function validateI18nScreenshots(list, label, options, errors) {
   if (!Array.isArray(list)) {
-    errors.push(`${label}.screenshots 必须为数组，例如 [{ "file": "screenshots/en-US/01.png", "title": "Main" }]`)
+    errors.push(`${label}.screenshots must be an array, e.g. [{ "file": "screenshots/en-US/01.png", "title": "Main" }]`)
     return
   }
   if (list.length > SCREENSHOT_LIMITS.maxCount) {
-    errors.push(`${label}.screenshots 最多 ${SCREENSHOT_LIMITS.maxCount} 张，当前 ${list.length} 张`)
+    errors.push(`${label}.screenshots allows at most ${SCREENSHOT_LIMITS.maxCount} items, received ${list.length}`)
   }
   const seen = new Set()
   for (const [idx, shot] of list.entries()) {
     const shotLabel = `${label}.screenshots[${idx}]`
     if (!shot || typeof shot !== 'object' || Array.isArray(shot)) {
-      errors.push(`${shotLabel} 必须为对象，例如 { "file": "screenshots/en-US/01.png", "title": "Main" }`)
+      errors.push(`${shotLabel} must be an object, e.g. { "file": "screenshots/en-US/01.png", "title": "Main" }`)
       continue
     }
     const unknownKeys = Object.keys(shot).filter((k) => !I18N_SCREENSHOT_KEYS.has(k))
     if (unknownKeys.length > 0) {
-      errors.push(`${shotLabel} 包含未知字段: ${unknownKeys.join(', ')}`)
+      errors.push(`${shotLabel} contains unknown fields: ${unknownKeys.join(', ')}`)
     }
     if (shot.title !== undefined && (typeof shot.title !== 'string' || shot.title.trim().length === 0 || shot.title.length > SCREENSHOT_LIMITS.maxTitleLength)) {
-      errors.push(`${shotLabel}.title 必须为 1-${SCREENSHOT_LIMITS.maxTitleLength} 个字符的非空字符串`)
+      errors.push(`${shotLabel}.title must be a non-empty string of 1-${SCREENSHOT_LIMITS.maxTitleLength} characters`)
     }
     if (typeof shot.file !== 'string' || !SCREENSHOT_PATH_REGEX.test(shot.file)) {
-      errors.push(`${shotLabel}.file 不合法: "${shot.file}"（必须是 screenshots/ 目录下的 .png 相对路径，禁止绝对路径与 ..）`)
+      errors.push(`${shotLabel}.file is invalid: "${shot.file}" (must be a relative .png path under screenshots/; absolute paths and .. are disallowed)`)
       continue
     }
     if (seen.has(shot.file)) {
-      errors.push(`${shotLabel}.file 重复: ${shot.file}`)
+      errors.push(`${shotLabel}.file is duplicated: ${shot.file}`)
       continue
     }
     seen.add(shot.file)
@@ -623,70 +630,89 @@ function validateI18nScreenshots(list, label, options, errors) {
   }
 }
 
-function validateManifestI18n(manifest, options, errors) {
-  if (manifest.defaultLocale !== undefined) {
-    if (typeof manifest.defaultLocale !== 'string' || !LOCALE_TAG_REGEX.test(manifest.defaultLocale)) {
-      errors.push(`defaultLocale 格式无效: "${manifest.defaultLocale}"（应为 BCP-47 语言标签，如 zh-CN、en-US）`)
-    }
-  }
-
-  if (manifest.i18n === undefined) return
-  if (!manifest.i18n || typeof manifest.i18n !== 'object' || Array.isArray(manifest.i18n)) {
-    errors.push('i18n 字段必须为以语言标签为键的对象')
+function validateI18nEntryFields(entry, label, errors, { topFeatureCodes = null, screenshotValidator = null } = {}) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    errors.push(`${label} must be an object`)
     return
   }
-
-  for (const [locale, entry] of Object.entries(manifest.i18n)) {
-    if (!LOCALE_TAG_REGEX.test(locale)) {
-      errors.push(`i18n 语言标签格式不合法: "${locale}"（应为 BCP-47 语言标签，如 en-US、zh-CN、ja）`)
+  const unknownKeys = Object.keys(entry).filter((k) => !I18N_ENTRY_KEYS.has(k))
+  if (unknownKeys.length > 0) {
+    errors.push(`${label} contains unknown fields: ${unknownKeys.join(', ')}`)
+  }
+  if (entry.name !== undefined) {
+    if (typeof entry.name !== 'string' || entry.name.trim().length === 0) {
+      errors.push(`${label}.name must be a non-empty string`)
+    } else if (entry.name.length > 50) {
+      errors.push(`${label}.name must not exceed 50 characters`)
     }
-    const label = `i18n["${locale}"]`
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      errors.push(`${label} 必须为对象`)
-      continue
+  }
+  if (entry.description !== undefined) {
+    if (typeof entry.description !== 'string' || entry.description.trim().length === 0) {
+      errors.push(`${label}.description must be a non-empty string`)
+    } else if (entry.description.length > 500) {
+      errors.push(`${label}.description must not exceed 500 characters`)
     }
-    const unknownKeys = Object.keys(entry).filter((k) => !I18N_ENTRY_KEYS.has(k))
-    if (unknownKeys.length > 0) {
-      errors.push(`${label} 包含未知字段: ${unknownKeys.join(', ')}`)
+  }
+  if (entry.revokedReason !== undefined) {
+    if (typeof entry.revokedReason !== 'string' || entry.revokedReason.trim().length === 0) {
+      errors.push(`${label}.revokedReason must be a non-empty string`)
     }
-    if (entry.name !== undefined) {
-      if (typeof entry.name !== 'string' || entry.name.trim().length === 0) {
-        errors.push(`${label}.name 必须为非空字符串`)
-      } else if (entry.name.length > 50) {
-        errors.push(`${label}.name 长度不能超过 50 个字符`)
-      }
-    }
-    if (entry.description !== undefined) {
-      if (typeof entry.description !== 'string' || entry.description.trim().length === 0) {
-        errors.push(`${label}.description 必须为非空字符串`)
-      } else if (entry.description.length > 500) {
-        errors.push(`${label}.description 长度不能超过 500 个字符`)
-      }
-    }
-    if (entry.revokedReason !== undefined) {
-      if (typeof entry.revokedReason !== 'string' || entry.revokedReason.trim().length === 0) {
-        errors.push(`${label}.revokedReason 必须为非空字符串`)
-      }
-    }
-    if (entry.keywords !== undefined) {
-      if (!Array.isArray(entry.keywords)) {
-        errors.push(`${label}.keywords 必须为数组`)
-      } else {
-        for (const [idx, kw] of entry.keywords.entries()) {
-          if (typeof kw !== 'string' || kw.trim().length === 0) {
-            errors.push(`${label}.keywords[${idx}] 必须为非空字符串`)
-          } else if (kw.length > 30) {
-            errors.push(`${label}.keywords[${idx}] 长度不能超过 30 个字符`)
-          }
+  }
+  if (entry.keywords !== undefined) {
+    if (!Array.isArray(entry.keywords)) {
+      errors.push(`${label}.keywords must be an array`)
+    } else {
+      for (const [idx, kw] of entry.keywords.entries()) {
+        if (typeof kw !== 'string' || kw.trim().length === 0) {
+          errors.push(`${label}.keywords[${idx}] must be a non-empty string`)
+        } else if (kw.length > 30) {
+          errors.push(`${label}.keywords[${idx}] must not exceed 30 characters`)
         }
       }
     }
-    if (entry.features !== undefined) {
-      validateI18nFeatures(entry.features, label, errors)
+  }
+  if (entry.features !== undefined) {
+    validateI18nFeatures(entry.features, label, errors, topFeatureCodes)
+  }
+  if (entry.screenshots !== undefined && screenshotValidator) {
+    screenshotValidator(entry.screenshots, label)
+  }
+}
+
+function validateDefaultLocaleField(target, errors) {
+  if (target.defaultLocale !== undefined) {
+    if (typeof target.defaultLocale !== 'string' || !LOCALE_TAG_REGEX.test(target.defaultLocale)) {
+      errors.push(`Invalid defaultLocale format: "${target.defaultLocale}" (expected a BCP-47 locale tag such as zh-CN or en-US)`)
     }
-    if (entry.screenshots !== undefined) {
-      validateI18nScreenshots(entry.screenshots, label, options, errors)
+  }
+}
+
+function validateManifestI18n(manifest, options, errors) {
+  validateDefaultLocaleField(manifest, errors)
+
+  if (manifest.i18n === undefined) return
+  if (!manifest.i18n || typeof manifest.i18n !== 'object' || Array.isArray(manifest.i18n)) {
+    errors.push('i18n must be an object keyed by BCP-47 locale tags')
+    return
+  }
+
+  const topFeatureCodes = new Set(
+    Array.isArray(manifest.features)
+      ? manifest.features
+          .filter((f) => f && typeof f === 'object' && typeof f.code === 'string' && f.code.trim())
+          .map((f) => f.code)
+      : []
+  )
+
+  for (const [locale, entry] of Object.entries(manifest.i18n)) {
+    if (!LOCALE_TAG_REGEX.test(locale)) {
+      errors.push(`Invalid i18n locale tag: "${locale}" (expected a BCP-47 locale tag such as en-US, zh-CN, or ja)`)
     }
+    const label = `i18n["${locale}"]`
+    validateI18nEntryFields(entry, label, errors, {
+      topFeatureCodes,
+      screenshotValidator: (list, entryLabel) => validateI18nScreenshots(list, entryLabel, options, errors)
+    })
   }
 }
 
@@ -730,11 +756,11 @@ export function readPngSize(buf) {
 export function inspectScreenshotFile(baseDir, relPath) {
   const fail = (error) => ({ ok: false, error })
   const abs = path.resolve(baseDir, relPath)
-  if (!isPathInsideBaseDir(baseDir, relPath)) return fail(`截图路径越界: "${relPath}"`)
+  if (!isPathInsideBaseDir(baseDir, relPath)) return fail(`Screenshot path escapes plugin root: "${relPath}"`)
   const stat = fs.lstatSync(abs, { throwIfNoEntry: false })
-  if (!stat) return fail(`截图文件不存在: ${relPath}`)
-  if (stat.isSymbolicLink()) return fail(`截图不能是软链接: ${relPath}`)
-  if (!stat.isFile()) return fail(`截图不是普通文件: ${relPath}`)
+  if (!stat) return fail(`Screenshot file does not exist: ${relPath}`)
+  if (stat.isSymbolicLink()) return fail(`Screenshot must not be a symbolic link: ${relPath}`)
+  if (!stat.isFile()) return fail(`Screenshot must be a regular file: ${relPath}`)
   // 上级目录是软链接时 realpath 会跳出插件目录
   let realBase
   let realFile
@@ -742,12 +768,12 @@ export function inspectScreenshotFile(baseDir, relPath) {
     realBase = fs.realpathSync(baseDir)
     realFile = fs.realpathSync(abs)
   } catch (err) {
-    return fail(`无法读取截图 ${relPath}: ${err.message}`)
+    return fail(`Failed to read screenshot ${relPath}: ${err.message}`)
   }
   const rel = path.relative(realBase, realFile)
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return fail(`截图路径越界: "${relPath}"`)
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return fail(`Screenshot path escapes plugin root: "${relPath}"`)
   if (stat.size > SCREENSHOT_LIMITS.maxBytes) {
-    return fail(`截图 ${relPath} 为 ${(stat.size / 1024).toFixed(0)} KB，超过 ${SCREENSHOT_LIMITS.maxBytes / 1024} KB 上限，请压缩后再提交`)
+    return fail(`Screenshot ${relPath} is ${(stat.size / 1024).toFixed(0)} KB, exceeding the ${SCREENSHOT_LIMITS.maxBytes / 1024} KB limit; compress before submitting`)
   }
   const head = Buffer.alloc(24)
   const fd = fs.openSync(abs, 'r')
@@ -758,10 +784,10 @@ export function inspectScreenshotFile(baseDir, relPath) {
     fs.closeSync(fd)
   }
   const size = readPngSize(head.subarray(0, read))
-  if (!size) return fail(`截图 ${relPath} 不是有效的 PNG 文件（文件头不对，只改扩展名不行）`)
+  if (!size) return fail(`Screenshot ${relPath} is not a valid PNG file (invalid PNG header)`)
   const { minWidth, maxWidth, minHeight, maxHeight } = SCREENSHOT_LIMITS
   if (size.width < minWidth || size.width > maxWidth || size.height < minHeight || size.height > maxHeight) {
-    return fail(`截图 ${relPath} 尺寸为 ${size.width}×${size.height}，应在宽 ${minWidth}–${maxWidth}、高 ${minHeight}–${maxHeight} 像素之间`)
+    return fail(`Screenshot ${relPath} dimensions are ${size.width}x${size.height}; expected width ${minWidth}-${maxWidth} and height ${minHeight}-${maxHeight} pixels`)
   }
   return { ok: true, width: size.width, height: size.height, bytes: stat.size }
 }
@@ -770,30 +796,30 @@ function validateManifestScreenshots(manifest, options, errors) {
   const list = manifest.screenshots
   if (list === undefined) return
   if (!Array.isArray(list)) {
-    errors.push('screenshots 必须为数组，例如 [{ "path": "screenshots/01.png", "title": "主界面" }]')
+    errors.push('screenshots must be an array, e.g. [{ "path": "screenshots/01.png", "title": "Main View" }]')
     return
   }
   if (list.length > SCREENSHOT_LIMITS.maxCount) {
-    errors.push(`screenshots 最多 ${SCREENSHOT_LIMITS.maxCount} 张，当前 ${list.length} 张`)
+    errors.push(`screenshots allows at most ${SCREENSHOT_LIMITS.maxCount} items, received ${list.length}`)
   }
   const seen = new Set()
   for (const [idx, shot] of list.entries()) {
     const label = `screenshots[${idx}]`
     if (!shot || typeof shot !== 'object' || Array.isArray(shot)) {
-      errors.push(`${label} 必须为对象，例如 { "path": "screenshots/01.png", "title": "主界面" }`)
+      errors.push(`${label} must be an object, e.g. { "path": "screenshots/01.png", "title": "Main View" }`)
       continue
     }
     const unknownKeys = Object.keys(shot).filter((key) => !SCREENSHOT_KEYS.has(key))
-    if (unknownKeys.length > 0) errors.push(`${label} 包含未知字段: ${unknownKeys.join(', ')}`)
-    if (shot.title !== undefined && (typeof shot.title !== 'string' || shot.title.length > SCREENSHOT_LIMITS.maxTitleLength)) {
-      errors.push(`${label}.title 必须为不超过 ${SCREENSHOT_LIMITS.maxTitleLength} 个字符的字符串`)
+    if (unknownKeys.length > 0) errors.push(`${label} contains unknown fields: ${unknownKeys.join(', ')}`)
+    if (shot.title !== undefined && (typeof shot.title !== 'string' || shot.title.trim().length === 0 || shot.title.length > SCREENSHOT_LIMITS.maxTitleLength)) {
+      errors.push(`${label}.title must be a non-empty string of 1-${SCREENSHOT_LIMITS.maxTitleLength} characters`)
     }
     if (typeof shot.path !== 'string' || !SCREENSHOT_PATH_REGEX.test(shot.path)) {
-      errors.push(`${label}.path 不合法: "${shot.path}"（必须是 screenshots/ 目录下的 .png 相对路径，如 screenshots/01.png，禁止绝对路径与 ..）`)
+      errors.push(`${label}.path is invalid: "${shot.path}" (must be a relative .png path under screenshots/, e.g. screenshots/01.png; absolute paths and .. are disallowed)`)
       continue
     }
     if (seen.has(shot.path)) {
-      errors.push(`${label}.path 重复: ${shot.path}`)
+      errors.push(`${label}.path is duplicated: ${shot.path}`)
       continue
     }
     seen.add(shot.path)
@@ -807,6 +833,52 @@ function validateManifestScreenshots(manifest, options, errors) {
 const SHA256_REGEX = /^[a-fA-F0-9]{64}$/
 const URL_REGEX = /^https?:\/\/.+/
 
+function validateCatalogScreenshots(list, label, errors) {
+  if (!Array.isArray(list) || list.length > SCREENSHOT_LIMITS.maxCount) {
+    errors.push(`${label} must be an array of at most ${SCREENSHOT_LIMITS.maxCount} items`)
+    return
+  }
+  for (const [idx, shot] of list.entries()) {
+    const ok = shot && typeof shot === 'object' &&
+      typeof shot.url === 'string' && /^https:\/\/[^\s"'<>]+$/.test(shot.url) &&
+      (shot.title === undefined || typeof shot.title === 'string') &&
+      Number.isSafeInteger(shot.width) && shot.width > 0 &&
+      Number.isSafeInteger(shot.height) && shot.height > 0
+    if (!ok) errors.push(`${label}[${idx}] must be { url (https URL), title, width, height }`)
+  }
+}
+
+function validateCatalogI18n(item, errors) {
+  validateDefaultLocaleField(item, errors)
+  validateCategoryIdField(item, errors)
+
+  if (item.i18n === undefined) return
+  if (!item.i18n || typeof item.i18n !== 'object' || Array.isArray(item.i18n)) {
+    errors.push('i18n must be an object keyed by BCP-47 locale tags')
+    return
+  }
+
+  // 目录条目若同时携带顶层 features 数组，则同步做功能 code 交叉校验；否则仅校验结构
+  const topFeatureCodes = Array.isArray(item.features)
+    ? new Set(
+        item.features
+          .filter((f) => f && typeof f === 'object' && typeof f.code === 'string' && f.code.trim())
+          .map((f) => f.code)
+      )
+    : null
+
+  for (const [locale, entry] of Object.entries(item.i18n)) {
+    if (!LOCALE_TAG_REGEX.test(locale)) {
+      errors.push(`Invalid i18n locale tag: "${locale}" (expected a BCP-47 locale tag such as en-US, zh-CN, or ja)`)
+    }
+    const label = `i18n["${locale}"]`
+    validateI18nEntryFields(entry, label, errors, {
+      topFeatureCodes,
+      screenshotValidator: (list, entryLabel) => validateCatalogScreenshots(list, `${entryLabel}.screenshots`, errors)
+    })
+  }
+}
+
 /**
  * 校验商店目录插件条目 (Catalog Plugin Item)
  * @param {object} item - 插件条目
@@ -815,53 +887,43 @@ const URL_REGEX = /^https?:\/\/.+/
 export function validateCatalogPluginItem(item) {
   const errors = []
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
-    return { valid: false, errors: ['插件条目必须为非空对象'] }
+    return { valid: false, errors: ['Plugin catalog item must be a non-null object'] }
   }
 
   if (!item.id || typeof item.id !== 'string' || !ID_REGEX.test(item.id)) {
-    errors.push(`插件 id 无效: "${item.id}"`)
+    errors.push(`Invalid plugin id: "${item.id}"`)
   }
   if (!item.name || typeof item.name !== 'string') {
-    errors.push('插件 name 必填且必须为字符串')
+    errors.push('Plugin name is required and must be a string')
   }
   if (!item.version || typeof item.version !== 'string' || !SEMVER_REGEX.test(item.version)) {
-    errors.push(`插件 version 不符合 semver 格式: "${item.version}"`)
+    errors.push(`Plugin version does not follow SemVer format: "${item.version}"`)
   }
   if (item.downloadUrl !== undefined) {
     if (typeof item.downloadUrl !== 'string' || !URL_REGEX.test(item.downloadUrl)) {
-      errors.push(`downloadUrl 必须为合法的 http/https URL: "${item.downloadUrl}"`)
+      errors.push(`downloadUrl must be a valid http/https URL: "${item.downloadUrl}"`)
     }
   }
   if (item.sha256 !== undefined) {
     if (typeof item.sha256 !== 'string' || !SHA256_REGEX.test(item.sha256)) {
-      errors.push(`sha256 必须为 64 位十六进制哈希: "${item.sha256}"`)
+      errors.push(`sha256 must be a 64-character hexadecimal hash: "${item.sha256}"`)
     }
   }
   if (item.size !== undefined) {
     if (typeof item.size !== 'number' || item.size <= 0 || !Number.isSafeInteger(item.size)) {
-      errors.push(`size 必须为正整数字节大小: "${item.size}"`)
+      errors.push(`size must be a positive integer byte count: "${item.size}"`)
     }
   }
   if (item.minAppVersion !== undefined && (typeof item.minAppVersion !== 'string' || !APP_VERSION_REGEX.test(item.minAppVersion))) {
-    errors.push(`minAppVersion 格式无效: "${item.minAppVersion}"`)
+    errors.push(`Invalid minAppVersion format: "${item.minAppVersion}"`)
   }
   if (item.revoked !== undefined && typeof item.revoked !== 'boolean') {
-    errors.push('revoked 字段必须为布尔值')
+    errors.push('revoked must be a boolean')
   }
   if (item.screenshots !== undefined) {
-    if (!Array.isArray(item.screenshots) || item.screenshots.length > SCREENSHOT_LIMITS.maxCount) {
-      errors.push(`screenshots 必须为不超过 ${SCREENSHOT_LIMITS.maxCount} 项的数组`)
-    } else {
-      for (const [idx, shot] of item.screenshots.entries()) {
-        const ok = shot && typeof shot === 'object' &&
-          typeof shot.url === 'string' && /^https:\/\/[^\s"'<>]+$/.test(shot.url) &&
-          (shot.title === undefined || typeof shot.title === 'string') &&
-          Number.isSafeInteger(shot.width) && shot.width > 0 &&
-          Number.isSafeInteger(shot.height) && shot.height > 0
-        if (!ok) errors.push(`screenshots[${idx}] 必须为 { url（https 地址）, title, width, height }`)
-      }
-    }
+    validateCatalogScreenshots(item.screenshots, 'screenshots', errors)
   }
+  validateCatalogI18n(item, errors)
 
   return {
     valid: errors.length === 0,
@@ -877,11 +939,11 @@ export function validateCatalogPluginItem(item) {
 export function validateStoreCatalog(catalog) {
   const errors = []
   if (!catalog || typeof catalog !== 'object' || Array.isArray(catalog)) {
-    return { valid: false, errors: ['Catalog 必须为非空对象'], totalValid: 0, revokedCount: 0 }
+    return { valid: false, errors: ['Catalog must be a non-null object'], totalValid: 0, revokedCount: 0 }
   }
 
   if (!Array.isArray(catalog.plugins)) {
-    errors.push('catalog.plugins 必须为数组')
+    errors.push('catalog.plugins must be an array')
     return { valid: false, errors, totalValid: 0, revokedCount: 0 }
   }
 
@@ -892,14 +954,14 @@ export function validateStoreCatalog(catalog) {
   for (const [idx, item] of catalog.plugins.entries()) {
     const itemValidation = validateCatalogPluginItem(item)
     if (!itemValidation.valid) {
-      errors.push(`plugins[${idx}] 校验失败: ${itemValidation.errors.join('; ')}`)
+      errors.push(`plugins[${idx}] validation failed: ${itemValidation.errors.join('; ')}`)
     } else {
       totalValid++
       if (item.revoked) {
         revokedCount++
       }
       if (seenIds.has(item.id)) {
-        errors.push(`plugins[${idx}] 存在重复的插件 ID: "${item.id}"`)
+        errors.push(`plugins[${idx}] has a duplicate plugin ID: "${item.id}"`)
       }
       seenIds.add(item.id)
     }

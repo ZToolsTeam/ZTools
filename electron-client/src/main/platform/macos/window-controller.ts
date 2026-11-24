@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { clipboard } from 'electron'
 import { errorCodes, ZToolsError } from '../../../contracts/errors.js'
+import { t } from '../../i18n/index.js'
 
 export { createMacPasteAdapter } from './paste-session.js'
 
@@ -36,22 +37,30 @@ export interface MacosPasteResult {
 export const MACOS_ACCESSIBILITY_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
 
-export const MACOS_ACCESSIBILITY_ERROR_MESSAGE =
-  '请在系统设置 -> 隐私与安全性 -> 辅助功能中授权 ZTools'
+export function getMacosAccessibilityErrorMessage(): string {
+  return t('macosWindow.error.accessibilityRequired')
+}
 
 function isTccAccessibilityDeniedError(err: unknown): boolean {
+  const code = typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : ''
+  if (code === 'EACCES' || code === 'EPERM') return true
   const stderr = typeof err === 'object' && err !== null && 'stderr' in err ? String(err.stderr) : ''
   const text = err instanceof Error ? `${err.message} ${stderr}` : String(err)
-  return /not allowed assistive access|-1719|-25211|not allowed to send keystrokes|辅助功能|accessibility/i.test(
+  return /not allowed assistive access|-1719|-25211|-1743|not allowed to send keystrokes|accessibility|permission denied/i.test(
     text
   )
 }
 
 export function macAccessibilityDeniedError(): ZToolsError {
+  const detail = getMacosAccessibilityErrorMessage()
   return new ZToolsError(
     errorCodes.permissionDenied,
-    `已复制，但无法自动粘贴：${MACOS_ACCESSIBILITY_ERROR_MESSAGE}`,
-    { hostCode: 'ACCESSIBILITY_PERMISSION_DENIED' }
+    t('macosWindow.error.copiedAutoPasteFailed', { detail }),
+    {
+      hostCode: 'ACCESSIBILITY_PERMISSION_DENIED',
+      i18nKey: 'macosWindow.error.copiedAutoPasteFailed',
+      i18nParams: { detail }
+    }
   )
 }
 
@@ -64,7 +73,7 @@ export async function getFrontmostWindowBounds(): Promise<MacosWindowControllerR
       success: false,
       ok: false,
       errorCode: 'PLATFORM_NOT_SUPPORTED',
-      error: '当前非 macOS 平台'
+      error: t('macosWindow.error.notMacos')
     }
   }
 
@@ -81,7 +90,7 @@ export async function getFrontmostWindowBounds(): Promise<MacosWindowControllerR
       }
     }
     if (!target || target.windows.length === 0) {
-      JSON.stringify({ ok: false, errorCode: "NO_ACTIVE_WINDOW", error: "未检测到活动窗口" });
+      JSON.stringify({ ok: false, errorCode: "NO_ACTIVE_WINDOW" });
     } else {
       const win = target.windows[0];
       const pos = win.position();
@@ -117,16 +126,17 @@ export async function getFrontmostWindowBounds(): Promise<MacosWindowControllerR
       success: false,
       ok: false,
       errorCode: parsed?.errorCode || 'NO_ACTIVE_WINDOW',
-      error: parsed?.error || '未找到活动窗口'
+      error: t('macosWindow.error.noActiveWindow')
     }
   } catch (err) {
     if (isTccAccessibilityDeniedError(err)) {
+      const accessibilityMessage = getMacosAccessibilityErrorMessage()
       return {
         success: false,
         ok: false,
         errorCode: 'ACCESSIBILITY_PERMISSION_DENIED',
-        error: MACOS_ACCESSIBILITY_ERROR_MESSAGE,
-        message: MACOS_ACCESSIBILITY_ERROR_MESSAGE
+        error: accessibilityMessage,
+        message: accessibilityMessage
       }
     }
     const errMsg = err instanceof Error ? err.message : String(err)
@@ -162,7 +172,7 @@ export async function setFrontmostWindowBounds(
       action: safeAction,
       rect: safeBounds,
       errorCode: 'PLATFORM_NOT_SUPPORTED',
-      error: '当前非 macOS 平台'
+      error: t('macosWindow.error.notMacos')
     }
   }
 
@@ -179,7 +189,7 @@ export async function setFrontmostWindowBounds(
       }
     }
     if (!target || target.windows.length === 0) {
-      JSON.stringify({ ok: false, errorCode: "NO_ACTIVE_WINDOW", error: "未检测到可调度的前台窗口" });
+      JSON.stringify({ ok: false, errorCode: "NO_ACTIVE_WINDOW" });
     } else {
       const win = target.windows[0];
       const act = ${JSON.stringify(safeAction)};
@@ -212,25 +222,27 @@ export async function setFrontmostWindowBounds(
         rect: parsed.rect || safeBounds
       }
     }
+    const noWindowMessage = t('macosWindow.error.noForegroundWindow')
     return {
       success: false,
       ok: false,
       action: safeAction,
       rect: safeBounds,
       errorCode: parsed?.errorCode || 'NO_ACTIVE_WINDOW',
-      error: parsed?.error || '未检测到可调度的前台窗口',
-      message: parsed?.error || '未检测到可调度的前台窗口'
+      error: noWindowMessage,
+      message: noWindowMessage
     }
   } catch (err) {
     if (isTccAccessibilityDeniedError(err)) {
+      const accessibilityMessage = getMacosAccessibilityErrorMessage()
       return {
         success: false,
         ok: false,
         action: safeAction,
         rect: safeBounds,
         errorCode: 'ACCESSIBILITY_PERMISSION_DENIED',
-        error: MACOS_ACCESSIBILITY_ERROR_MESSAGE,
-        message: MACOS_ACCESSIBILITY_ERROR_MESSAGE
+        error: accessibilityMessage,
+        message: accessibilityMessage
       }
     }
     const errMsg = err instanceof Error ? err.message : String(err)
@@ -327,7 +339,7 @@ export async function pasteToActiveWindowOnMac(
         clipboardWritten,
         cursorOffset: safeOffset,
         errorCode: 'ACCESSIBILITY_PERMISSION_DENIED',
-        error: '已复制到剪贴板（开启辅助功能权限后可自动粘贴）'
+        error: t('macosWindow.error.copiedEnableAccessibility')
       }
     }
     return {

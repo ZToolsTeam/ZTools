@@ -66,7 +66,7 @@ test('真实文件占用、身份复核、正常结束、重新扫描和不覆�
   const row = before.processes.find(p => p.pid === child.pid)
   assert.ok(row); assert.equal(row.protected, false); assert.ok(row.paths.some(p => p.includes('\\nfile.txt')))
   assert.equal(before.processes.length, 1, '固定目标的自有 broker 不能冒充占用进程')
-  await assert.rejects(f.call({ action: 'terminate', sessionId: before.sessionId, pids: [child.pid], mode: 'graceful' }, { ...caller, pluginInstanceId: 'another' }), /过期/)
+  await assert.rejects(f.call({ action: 'terminate', sessionId: before.sessionId, pids: [child.pid], mode: 'graceful' }, { ...caller, pluginInstanceId: 'another' }), /expired/)
   const ended = await f.call({ action: 'terminate', sessionId: before.sessionId, pids: [child.pid], mode: 'graceful' }) as { success: boolean; terminated: number[]; snapshot: FileLockSnapshot }
   assert.equal(ended.success, true); assert.deepEqual(ended.terminated, [child.pid]); assert.equal(ended.snapshot.processes.length, 0)
   assert.throws(() => process.kill(child.pid!, 0))
@@ -79,7 +79,7 @@ test('文件夹递归检测真实子文件占用，目标已有同名目录时�
   const inside = path.join(directory, 'nested', 'held.txt'); await fs.writeFile(inside, 'source content'); await fs.writeFile(path.join(destination, 'keep'), 'existing')
   const child = await holder(t, inside), snapshot = await f.inspect(directory)
   assert.ok(snapshot.processes.some(p => p.pid === child.pid))
-  await assert.rejects(f.call({ action: 'rename', sessionId: snapshot.sessionId, name: 'destination' }), /占用/)
+  await assert.rejects(f.call({ action: 'rename', sessionId: snapshot.sessionId, name: 'destination' }), /still locked/)
   const exited = once(child, 'exit'); child.stdin.end(); await exited
   const fresh = await f.inspect(directory)
   await assert.rejects(f.call({ action: 'rename', sessionId: fresh.sessionId, name: 'destination' }))
@@ -100,21 +100,21 @@ test('同 PID 的启动身份变化时拒绝发信号，真实测试进程和文
   const originalIdentity = locks.identity.bind(locks)
   locks.identity = async (pid, s) => { const identity = await originalIdentity(pid, s); return identity && pid === child.pid ? { ...identity, started: 'different start time' } : identity }
   const result = await f.call({ action: 'terminate', sessionId: snapshot.sessionId, pids: [child.pid], mode: 'force' }) as { success: boolean; failures: Array<{ message: string }> }
-  assert.equal(result.success, false); assert.match(result.failures[0]!.message, /身份|占用/); process.kill(child.pid!, 0)
+  assert.equal(result.success, false); assert.match(result.failures[0]!.message, /identity|lock/i); process.kill(child.pid!, 0)
   assert.equal(await fs.readFile(f.file, 'utf8'), '独立测试原文件')
 })
 test('目标被替换或是链接时拒绝操作，新旧文件都保留', { skip: !mac }, async t => {
   const f = await fixture(t), snapshot = await f.inspect(), original = path.join(f.root, 'original')
   await fs.rename(f.file, original); await fs.writeFile(f.file, 'replacement')
-  await assert.rejects(f.call({ action: 'trash', sessionId: snapshot.sessionId }), /替换/)
+  await assert.rejects(f.call({ action: 'trash', sessionId: snapshot.sessionId }), /replaced/)
   assert.equal(await fs.readFile(original, 'utf8'), '独立测试原文件'); assert.equal(await fs.readFile(f.file, 'utf8'), 'replacement')
-  const link = path.join(f.root, 'link'); await fs.symlink(f.file, link); await assert.rejects(f.inspect(link), /链接/)
-  const hard = path.join(f.root, 'hard'); await fs.link(f.file, hard); await assert.rejects(f.inspect(hard), /链接/)
+  const link = path.join(f.root, 'link'); await fs.symlink(f.file, link); await assert.rejects(f.inspect(link), /symbolic links|hard links/)
+  const hard = path.join(f.root, 'hard'); await fs.link(f.file, hard); await assert.rejects(f.inspect(hard), /symbolic links|hard links/)
 })
 test('保护根目录允许检测，但拒绝改名或回收', { skip: !mac }, async t => {
   const f = await fixture(t, new MacFileLocks(), true), snapshot = await f.inspect()
-  assert.match(snapshot.mutationBlockedReason, /数据目录/)
-  await assert.rejects(f.call({ action: 'trash', sessionId: snapshot.sessionId }), /数据目录/)
+  assert.match(snapshot.mutationBlockedReason, /data directories/)
+  await assert.rejects(f.call({ action: 'trash', sessionId: snapshot.sessionId }), /data directories/)
   assert.equal(await fs.readFile(f.file, 'utf8'), '独立测试原文件')
 })
 test('扫描失败、超时、输出不完整绝不当成无占用；取消等待自有子进程结束', { skip: !mac }, async t => {
@@ -126,7 +126,7 @@ test('扫描失败、超时、输出不完整绝不当成无占用；取消等�
   const f = await fixture(t, locks), pending = f.inspect()
   const rejected = assert.rejects(pending, /取消/)
   while (!blocked) await new Promise(resolve => setTimeout(resolve, 10))
-  await assert.rejects(f.inspect(), /正在操作/)
+  await assert.rejects(f.inspect(), /already in progress/)
   await f.call({ action: 'cancel' }); await rejected
   assert.equal(await fs.readFile(f.file, 'utf8'), '独立测试原文件')
   for (const mode of ['failure', 'malformed']) {
@@ -168,6 +168,6 @@ test('多个窗口清理时全部尝试退出，首次清理失败的 broker 保
   t.after(async () => { await service.stop(); await fs.rm(root, { recursive: true, force: true }) })
   await service.handle({ action: 'inspect', targetPath: file }, caller, signal())
   await service.handle({ action: 'inspect', targetPath: file }, { ...caller, webContentsId: 51 }, signal())
-  await assert.rejects(service.stop(), /退出未确认/)
+  await assert.rejects(service.stop(), /exits were not confirmed/)
   assert.deepEqual(counts, [1, 1]); await service.stop(); assert.deepEqual(counts, [2, 1])
 })

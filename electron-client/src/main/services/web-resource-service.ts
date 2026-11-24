@@ -68,7 +68,7 @@ function isWithin(root: string, candidate: string): boolean {
 
 function normalizeVersion(value: string): string {
   if (!VERSION_PATTERN.test(value)) {
-    throw new ZToolsError(errorCodes.dataCorrupt, 'Web 资源版本格式无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid web resource version format')
   }
   return value
 }
@@ -77,7 +77,7 @@ function requireNotAborted(signal: AbortSignal): void {
   if (!signal.aborted) return
   throw signal.reason instanceof Error
     ? signal.reason
-    : new ZToolsError(errorCodes.appStopping, 'Web 更新已取消')
+    : new ZToolsError(errorCodes.appStopping, 'Web resource update cancelled')
 }
 
 function validateArchivePath(fileName: string): string[] {
@@ -87,7 +87,7 @@ function validateArchivePath(fileName: string): string[] {
     fileName.includes('\0') ||
     fileName.includes('\\')
   ) {
-    throw new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP 包含无效路径')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP archive contains an invalid path')
   }
   const normalized = fileName.endsWith('/') ? fileName.slice(0, -1) : fileName
   const segments = normalized.split('/')
@@ -104,7 +104,7 @@ function validateArchivePath(fileName: string): string[] {
       WINDOWS_DEVICE_PATTERN.test(segment)
     )
   ) {
-    throw new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP 包含不安全路径')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP archive contains an unsafe path')
   }
   return segments
 }
@@ -134,7 +134,7 @@ async function requireOrdinaryFile(target: string, message: string): Promise<voi
 }
 
 async function validateOrdinaryTree(root: string): Promise<void> {
-  await requireOrdinaryDirectory(root, 'Web 资源根不是普通目录')
+  await requireOrdinaryDirectory(root, 'Web resource root is not an ordinary directory')
   const pending = [path.resolve(root)]
   while (pending.length > 0) {
     const current = pending.pop() as string
@@ -142,12 +142,12 @@ async function validateOrdinaryTree(root: string): Promise<void> {
     for (const entry of entries) {
       const target = path.join(current, entry.name)
       if (entry.isSymbolicLink()) {
-        throw new ZToolsError(errorCodes.dataCorrupt, 'Web 资源不能包含符号链接')
+        throw new ZToolsError(errorCodes.dataCorrupt, 'Web resources cannot contain symbolic links')
       }
       if (entry.isDirectory()) {
         pending.push(target)
       } else if (!entry.isFile()) {
-        throw new ZToolsError(errorCodes.dataCorrupt, 'Web 资源包含不支持的文件类型')
+        throw new ZToolsError(errorCodes.dataCorrupt, 'Web resources contain unsupported file types')
       }
     }
   }
@@ -158,7 +158,7 @@ const COPY_CONCURRENCY = 8
 // Electron's ASAR filesystem supports file reads but not recursive fs.cp; copy
 // the bundled tree through ordinary reads so first-run production startup works.
 async function copyBundledTree(source: string, destination: string): Promise<void> {
-  await requireOrdinaryDirectory(source, 'Web 资源根不是普通目录')
+  await requireOrdinaryDirectory(source, 'Web resource root is not an ordinary directory')
   await fs.mkdir(destination)
   const fileTasks: Array<{ sourcePath: string; destinationPath: string }> = []
   const pendingDirs: Array<{ sourceDir: string; destinationDir: string }> = [
@@ -172,7 +172,7 @@ async function copyBundledTree(source: string, destination: string): Promise<voi
       const sourcePath = path.join(sourceDir, entry.name)
       const destinationPath = path.join(destinationDir, entry.name)
       if (entry.isSymbolicLink()) {
-        throw new ZToolsError(errorCodes.dataCorrupt, 'Web 资源不能包含符号链接')
+        throw new ZToolsError(errorCodes.dataCorrupt, 'Web resources cannot contain symbolic links')
       }
       if (entry.isDirectory()) {
         await fs.mkdir(destinationPath)
@@ -180,7 +180,7 @@ async function copyBundledTree(source: string, destination: string): Promise<voi
       } else if (entry.isFile()) {
         fileTasks.push({ sourcePath, destinationPath })
       } else {
-        throw new ZToolsError(errorCodes.dataCorrupt, 'Web 资源包含不支持的文件类型')
+        throw new ZToolsError(errorCodes.dataCorrupt, 'Web resources contain unsupported file types')
       }
     }
   }
@@ -200,16 +200,16 @@ async function copyBundledTree(source: string, destination: string): Promise<voi
 
 async function readWebVersion(root: string): Promise<string> {
   const versionFile = path.join(root, 'version.json')
-  await requireOrdinaryFile(versionFile, 'Web 资源缺少 version.json')
+  await requireOrdinaryFile(versionFile, 'Web resources are missing version.json')
   const stats = await fs.stat(versionFile)
   if (stats.size > MAX_VERSION_BYTES) {
-    throw new ZToolsError(errorCodes.fileTooLarge, 'Web version.json 超过大小限制')
+    throw new ZToolsError(errorCodes.fileTooLarge, 'Web version.json exceeds size limit')
   }
   let value: unknown
   try {
     value = JSON.parse((await fs.readFile(versionFile, 'utf8')).replace(/^\uFEFF/, ''))
   } catch {
-    throw new ZToolsError(errorCodes.dataCorrupt, 'Web version.json 不是有效 JSON')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Web version.json is not valid JSON')
   }
   if (
     typeof value !== 'object' ||
@@ -217,17 +217,17 @@ async function readWebVersion(root: string): Promise<string> {
     !('version' in value) ||
     typeof value.version !== 'string'
   ) {
-    throw new ZToolsError(errorCodes.dataCorrupt, 'Web version.json 缺少有效版本')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Web version.json is missing a valid version')
   }
   return normalizeVersion(value.version)
 }
 
 async function validateWebRoot(root: string, expectedVersion?: string): Promise<string> {
   await validateOrdinaryTree(root)
-  await requireOrdinaryFile(path.join(root, 'index.html'), 'Web 资源缺少入口 index.html')
+  await requireOrdinaryFile(path.join(root, 'index.html'), 'Web resources are missing entry index.html')
   const version = await readWebVersion(root)
   if (expectedVersion !== undefined && version !== expectedVersion) {
-    throw new ZToolsError(errorCodes.dataCorrupt, 'Web 资源版本与更新请求不一致')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Web resource version does not match update request')
   }
   return version
 }
@@ -360,25 +360,25 @@ export class WebResourceService {
   }
 
   get root(): string {
-    if (!this.#active) throw new Error('Web 资源服务尚未初始化')
+    if (!this.#active) throw new Error('WebResourceService is not initialized')
     return path.join(this.#versionsRoot, this.#active.directory)
   }
 
   get version(): string {
-    if (!this.#active) throw new Error('Web 资源服务尚未初始化')
+    if (!this.#active) throw new Error('WebResourceService is not initialized')
     return this.#active.version
   }
 
   async initialize(): Promise<void> {
     if (this.#initialized) return
     await fs.mkdir(this.#webRoot, { recursive: true })
-    await requireOrdinaryDirectory(this.#webRoot, 'Web 资源目录不是普通目录')
+    await requireOrdinaryDirectory(this.#webRoot, 'Web resource directory is not an ordinary directory')
     await fs.mkdir(this.#versionsRoot, { recursive: true })
     await fs.mkdir(this.#stagingRoot, { recursive: true })
     await fs.mkdir(this.#transactionRoot, { recursive: true })
-    await requireOrdinaryDirectory(this.#versionsRoot, 'Web 版本目录不是普通目录')
-    await requireOrdinaryDirectory(this.#stagingRoot, 'Web 暂存目录不是普通目录')
-    await requireOrdinaryDirectory(this.#transactionRoot, 'Web 事务目录不是普通目录')
+    await requireOrdinaryDirectory(this.#versionsRoot, 'Web versions directory is not an ordinary directory')
+    await requireOrdinaryDirectory(this.#stagingRoot, 'Web staging directory is not an ordinary directory')
+    await requireOrdinaryDirectory(this.#transactionRoot, 'Web transactions directory is not an ordinary directory')
     await this.#recoverTransactions()
 
     let active = await this.#readActivePointer()
@@ -395,8 +395,8 @@ export class WebResourceService {
   async #inspectBundled(): Promise<BundledInfo> {
     // 仅验证入口文件与版本清单并计算指纹，避免每次冷启动都对 app.asar 全树遍历触发大量 ASAR fs.Stats 调用；
     // 真正需要复制落地时，copyBundledTree 与目标盘 validateWebRoot 会完整校验文件类型与符号链接。
-    await requireOrdinaryDirectory(this.#bundledRoot, 'Web 资源根不是普通目录')
-    await requireOrdinaryFile(path.join(this.#bundledRoot, 'index.html'), 'Web 资源缺少入口 index.html')
+    await requireOrdinaryDirectory(this.#bundledRoot, 'Web resource root is not an ordinary directory')
+    await requireOrdinaryFile(path.join(this.#bundledRoot, 'index.html'), 'Web resources are missing entry index.html')
     const version = await readWebVersion(this.#bundledRoot)
     return { version, fingerprint: await readBundledFingerprint(this.#bundledRoot) }
   }
@@ -486,21 +486,21 @@ export class WebResourceService {
     requestedVersion: string,
     signal: AbortSignal
   ): Promise<WebResourceUpdateResult> {
-    if (!this.#initialized || !this.#active) throw new Error('Web 资源服务尚未初始化')
+    if (!this.#initialized || !this.#active) throw new Error('WebResourceService is not initialized')
     if (this.#pendingOperationId) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'Web 资源已有待确认事务')
+      throw new ZToolsError(errorCodes.invalidRequest, 'A pending web resource transaction already exists')
     }
     const version = normalizeVersion(requestedVersion)
     const archive = path.resolve(archivePath)
     if (path.extname(archive).toLowerCase() !== '.zip') {
-      throw new ZToolsError(errorCodes.invalidRequest, 'Web 更新包必须是 ZIP')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Web update package must be a ZIP archive')
     }
     const archiveStats = await lstatOrUndefined(archive)
     if (!archiveStats?.isFile() || archiveStats.isSymbolicLink()) {
-      throw new ZToolsError(errorCodes.dataCorrupt, 'Web 更新包不是普通文件')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Web update package is not an ordinary file')
     }
     if (archiveStats.size > WEB_ARCHIVE_LIMIT) {
-      throw new ZToolsError(errorCodes.fileTooLarge, 'Web 更新包超过大小限制')
+      throw new ZToolsError(errorCodes.fileTooLarge, 'Web update package exceeds size limit')
     }
     requireNotAborted(signal)
 
@@ -558,7 +558,7 @@ export class WebResourceService {
             operationId,
             error: rollbackError
           })
-          throw new ZToolsError(errorCodes.storageError, 'Web 更新失败且旧资源指针恢复失败')
+          throw new ZToolsError(errorCodes.storageError, 'Web update failed and previous active pointer rollback failed')
         }
       }
       await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined)
@@ -566,12 +566,12 @@ export class WebResourceService {
       await fs.rm(transactionPath, { force: true }).catch(() => undefined)
       throw error instanceof ZToolsError
         ? error
-        : new ZToolsError(errorCodes.dataCorrupt, 'Web 更新包解压或切换失败')
+        : new ZToolsError(errorCodes.dataCorrupt, 'Failed to extract or activate web update package')
     }
   }
 
   async #confirm(operationId: string): Promise<void> {
-    if (!this.#initialized) throw new Error('Web 资源服务尚未初始化')
+    if (!this.#initialized) throw new Error('WebResourceService is not initialized')
     if (this.#pendingOperationId !== operationId) return
     const transactionPath = path.join(this.#transactionRoot, `${operationId}.json`)
     await fs.rm(transactionPath, { force: true })
@@ -580,7 +580,7 @@ export class WebResourceService {
   }
 
   async #rollback(operationId: string): Promise<void> {
-    if (!this.#initialized || !this.#active) throw new Error('Web 资源服务尚未初始化')
+    if (!this.#initialized || !this.#active) throw new Error('WebResourceService is not initialized')
     const transactionPath = path.join(this.#transactionRoot, `${operationId}.json`)
     const value = await readJson(transactionPath)
     if (!isTransaction(value)) return
@@ -593,7 +593,7 @@ export class WebResourceService {
       !isDirectChild(this.#stagingRoot, value.staging) ||
       path.basename(path.resolve(value.staging)) !== value.operationId
     ) {
-      throw new ZToolsError(errorCodes.dataCorrupt, 'Web 事务日志路径无效')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid web transaction log path')
     }
     if (this.#active.operationId === value.next.operationId) {
       await validateWebRoot(path.join(this.#versionsRoot, value.previous.directory), value.previous.version)
@@ -682,24 +682,24 @@ export class WebResourceService {
           entry.uncompressedSize < 0 ||
           entry.uncompressedSize > ENTRY_EXPANDED_LIMIT
         ) {
-          throw new ZToolsError(errorCodes.fileTooLarge, 'Web ZIP 单个文件超过大小限制')
+          throw new ZToolsError(errorCodes.fileTooLarge, 'Web ZIP entry exceeds single-file size limit')
         }
         expanded += entry.uncompressedSize
         if (entries > MAX_ARCHIVE_ENTRIES || expanded > WEB_EXPANDED_LIMIT) {
-          throw new ZToolsError(errorCodes.fileTooLarge, 'Web ZIP 解压规模超过上限')
+          throw new ZToolsError(errorCodes.fileTooLarge, 'Web ZIP extracted size or entry count exceeds limit')
         }
         if (entry.isEncrypted() || !entry.canDecodeFileData() || isSymlink(entry)) {
-          throw new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP 包含不支持或不安全的条目')
+          throw new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP contains unsupported or unsafe entry')
         }
         const segments = validateArchivePath(entry.fileName)
         const relative = segments.join(path.sep)
         const target = path.resolve(destination, relative)
         if (!isWithin(destination, target) || target === path.resolve(destination)) {
-          throw new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP 路径越界')
+          throw new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP path traversal detected')
         }
         const key = relative.toLowerCase()
         if (names.has(key)) {
-          throw new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP 包含大小写冲突或重复路径')
+          throw new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP contains duplicate or case-conflicting paths')
         }
         names.add(key)
         if (entry.fileName.endsWith('/')) {
@@ -714,7 +714,7 @@ export class WebResourceService {
       requireNotAborted(signal)
       throw error instanceof ZToolsError
         ? error
-        : new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP 损坏或无法解压')
+        : new ZToolsError(errorCodes.dataCorrupt, 'Web ZIP archive is corrupted or cannot be extracted')
     } finally {
       zip.close()
     }

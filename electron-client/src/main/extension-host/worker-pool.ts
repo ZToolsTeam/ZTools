@@ -271,7 +271,8 @@ export class WorkerPool {
       env: {
         ...process.env,
         NODE_PATH: this.nodePath,
-        NODE_COMPILE_CACHE: this.compileCacheDir
+        NODE_COMPILE_CACHE: this.compileCacheDir,
+        ZTOOLS_LOCALE: getResolvedLocale()
       }
     })
 

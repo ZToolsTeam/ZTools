@@ -9,7 +9,7 @@ import { parseBookmarkTree, parseFirefoxRows, type BookmarkSource } from './book
 function validateFirefoxTables(db: DatabaseSync) {
   for (const [table, required] of Object.entries({ moz_bookmarks: ['id', 'parent', 'type', 'title', 'fk', 'dateAdded'], moz_places: ['id', 'url'] })) {
     const tables = db.prepare('SELECT * FROM pragma_table_list WHERE schema=? AND name=?').all('main', table)
-    if (tables.length !== 1 || tables[0]!.type !== 'table' || tables[0]!.wr !== 0) throw new Error(`Firefox ${table} 表结构无效，未读取此配置`)
+    if (tables.length !== 1 || tables[0]!.type !== 'table' || tables[0]!.wr !== 0) throw new Error(`Invalid Firefox ${table} table schema; profile skipped`)
     const columns = db.prepare('SELECT * FROM pragma_table_xinfo(?)').all(table)
     const keys = columns.filter(column => column.pk !== 0)
     const indexes = db.prepare('SELECT origin FROM pragma_index_list(?)').all(table)
@@ -17,7 +17,7 @@ function validateFirefoxTables(db: DatabaseSync) {
     if (keys.length !== 1 || keys[0]!.name !== 'id' || String(keys[0]!.type).toUpperCase() !== 'INTEGER' ||
         indexes.some(index => index.origin === 'pk') ||
         required.some(name => !columns.some(column => column.name === name && column.hidden === 0))) {
-      throw new Error(`Firefox ${table} 表结构无效，未读取此配置`)
+      throw new Error(`Invalid Firefox ${table} table schema; profile skipped`)
     }
   }
 }
@@ -40,9 +40,9 @@ function readFirefoxRows(db: DatabaseSync) {
   const rows: Record<string, unknown>[] = []
   let bytes = 0
   for (const row of query.iterate()) {
-    if (row.invalid) throw new Error('Firefox 书签字段类型无效或长度超限')
+    if (row.invalid) throw new Error('Invalid Firefox bookmark field type or length limit exceeded')
     bytes += Buffer.byteLength(JSON.stringify(row))
-    if (bytes > 7 * 1024 * 1024) throw new Error('Firefox 书签原始结果超过 7 MiB')
+    if (bytes > 7 * 1024 * 1024) throw new Error('Firefox raw bookmark result exceeds 7 MiB')
     rows.push(row)
   }
   return rows
@@ -56,7 +56,7 @@ export function readBookmarkSource(source: BookmarkSource) {
       : JSON.parse(bytes.toString('utf8'))
     return parseBookmarkTree(data, source)
   }
-  if (fs.statSync(source.file).size > 1024 * 1024 * 1024) throw new Error('Firefox 数据库超过 1 GiB')
+  if (fs.statSync(source.file).size > 1024 * 1024 * 1024) throw new Error('Firefox database exceeds 1 GiB')
   // SQLite 自身读取一致的主库和 WAL；不复制活动数据库、不写回书签，也不执行 checkpoint。
   const db = new DatabaseSync(source.file, { readOnly: true, timeout: 1500, enableDoubleQuotedStringLiterals: false, allowExtension: false })
   try {
@@ -71,9 +71,9 @@ export function scanBrowserBookmarks(env: BookmarkEnvironment): BookmarkScan {
   for (const source of sources) {
     try {
       const items = readBookmarkSource(source), bytes = Buffer.byteLength(JSON.stringify(items))
-      if (result.bookmarks.length + items.length > 20000 || size + bytes > 7 * 1024 * 1024) throw new Error('总结果超过 20000 条或 7 MiB，本配置未载入')
+      if (result.bookmarks.length + items.length > 20000 || size + bytes > 7 * 1024 * 1024) throw new Error('Total bookmark result exceeds 20000 items or 7 MiB; profile skipped')
       result.bookmarks.push(...items); size += bytes; result.sourcesRead++
-    } catch (error) { warnings.push(`${source.browserLabel} / ${source.profile}：${errorMessage(error, source.browser)}`) }
+    } catch (error) { warnings.push(`${source.browserLabel} / ${source.profile}: ${errorMessage(error, source.browser)}`) }
   }
   return validateBookmarkScan(result)
 }

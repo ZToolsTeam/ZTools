@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { tSync } from '../i18n.js'
 
 export interface EncryptedPayload {
   version: 1
@@ -25,10 +26,11 @@ export class DecryptionError extends Error {
 export function encryptAesGcm(
   plaintext: string | Buffer,
   key: Buffer,
-  aad?: string | Buffer
+  aad?: string | Buffer,
+  locale?: string
 ): EncryptedPayload {
   if (key.length !== 32) {
-    throw new Error(`AES-256-GCM 密钥长度必须为 32 字节，当前为 ${key.length} 字节`)
+    throw new Error(tSync('aesGcm.invalidKeyLength', { length: key.length }, locale))
   }
 
   const plainBuf = Buffer.isBuffer(plaintext) ? plaintext : Buffer.from(plaintext, 'utf8')
@@ -68,14 +70,24 @@ export function encryptAesGcm(
  */
 export function decryptAesGcm(
   payload: EncryptedPayload,
-  key: Buffer
+  key: Buffer,
+  locale?: string
 ): Buffer {
   if (key.length !== 32) {
-    throw new DecryptionError(`AES-256-GCM 密钥长度必须为 32 字节，当前为 ${key.length} 字节`)
+    throw new DecryptionError(tSync('aesGcm.invalidKeyLength', { length: key.length }, locale))
   }
 
   if (payload.algorithm !== 'aes-256-gcm' || payload.version !== 1) {
-    throw new DecryptionError(`不支持的加密算法或封包版本: ${payload.algorithm} v${payload.version}`)
+    throw new DecryptionError(
+      tSync(
+        'aesGcm.unsupportedAlgorithm',
+        {
+          algorithm: String(payload.algorithm),
+          version: String(payload.version)
+        },
+        locale
+      )
+    )
   }
 
   try {
@@ -84,10 +96,10 @@ export function decryptAesGcm(
     const ciphertext = Buffer.from(payload.ciphertext, 'base64')
 
     if (iv.length !== 12) {
-      throw new DecryptionError(`无效的 IV 长度: ${iv.length} 字节`)
+      throw new DecryptionError(tSync('aesGcm.invalidIvLength', { length: iv.length }, locale))
     }
     if (tag.length !== 16) {
-      throw new DecryptionError(`无效的认证标签 Tag 长度: ${tag.length} 字节`)
+      throw new DecryptionError(tSync('aesGcm.invalidTagLength', { length: tag.length }, locale))
     }
 
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
@@ -104,7 +116,7 @@ export function decryptAesGcm(
     if (error instanceof DecryptionError) {
       throw error
     }
-    throw new DecryptionError('AES-256-GCM 认证解密失败：密文被篡改、密钥不匹配或数据损坏', error)
+    throw new DecryptionError(tSync('aesGcm.decryptionFailed', undefined, locale), error)
   }
 }
 
@@ -113,7 +125,8 @@ export function decryptAesGcm(
  */
 export function decryptAesGcmString(
   payload: EncryptedPayload,
-  key: Buffer
+  key: Buffer,
+  locale?: string
 ): string {
-  return decryptAesGcm(payload, key).toString('utf8')
+  return decryptAesGcm(payload, key, locale).toString('utf8')
 }

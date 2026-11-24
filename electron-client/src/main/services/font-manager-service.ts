@@ -16,8 +16,8 @@ export class FontManagerService {
   }
   async execute(value: unknown, caller: CallerIdentity, signal: AbortSignal) {
     validateFontRequest(value)
-    if (this.#stopped || this.#jobs.size >= 4) throw new Error('字体读取繁忙，请稍后重试')
-    if ([...this.#jobs].some(job => job.id === value.operationId && job.caller.webContentsId === caller.webContentsId && job.caller.pluginId === caller.pluginId)) throw new Error('字体操作标识重复')
+    if (this.#stopped || this.#jobs.size >= 4) throw new Error('Font service is busy; try again later')
+    if ([...this.#jobs].some(job => job.id === value.operationId && job.caller.webContentsId === caller.webContentsId && job.caller.pluginId === caller.pluginId)) throw new Error('Duplicate font operation ID')
     const job = { caller, id: value.operationId, controller: new AbortController() }
     signal = AbortSignal.any([signal, job.controller.signal]); signal.throwIfAborted()
     this.#jobs.add(job)
@@ -29,7 +29,7 @@ export class FontManagerService {
       const fonts = await this.provider.list(signal); signal.throwIfAborted()
       if (value.action === 'list') return { success: true, fonts }
       const file = fonts.find(font => font.id === value.id)?.filePath
-      if (!file || !path.isAbsolute(file) || !(await fs.stat(file)).isFile()) throw new Error('该字体没有可定位的本地文件，请重新扫描')
+      if (!file || !path.isAbsolute(file) || !(await fs.stat(file)).isFile()) throw new Error('Font has no locatable local file; rescan and retry')
       signal.throwIfAborted(); this.reveal(file)
       return { success: true, revealRequested: true }
     } finally { this.#jobs.delete(job) }

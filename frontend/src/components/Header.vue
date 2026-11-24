@@ -61,6 +61,7 @@ const onSearch = (q) => {
 // 已经在插件市场页时，输入即时筛选列表：防抖后替换地址里的搜索词，不新增历史记录
 const LIST_FILTER_DEBOUNCE_MS = 250
 let listFilterTimer = null
+let pendingFilterRoute = null
 const clearListFilterTimer = () => {
   if (listFilterTimer) clearTimeout(listFilterTimer)
   listFilterTimer = null
@@ -76,10 +77,24 @@ watch(keyword, (val) => {
     const query = { ...route.query }
     if (next) query.q = next
     else delete query.q
-    router.replace({ name: ROUTES.LIST.name, params: route.params, query })
+    const target = { name: ROUTES.LIST.name, params: route.params, query }
+    const path = router.resolve(target).fullPath
+    pendingFilterRoute = path
+    router.replace(target)
       .catch((err) => console.warn('[Header] 更新插件市场搜索词失败:', err))
+      .finally(() => {
+        if (pendingFilterRoute === path) pendingFilterRoute = null
+      })
   }, LIST_FILTER_DEBOUNCE_MS)
 })
+
+// 分类切换、返回历史、空结果恢复和悬浮条入口都以市场 URL 为准。
+watch(() => route.fullPath, (path) => {
+  if (route.name !== ROUTES.LIST.name || (pendingFilterRoute && path === pendingFilterRoute)) return
+  clearListFilterTimer()
+  const routeKeyword = String(route.query?.q || '')
+  if (keyword.value.trim() !== routeKeyword) keyword.value = routeKeyword
+}, { immediate: true })
 
 // 跳转到诊断页
 const goDiagnostics = () => {

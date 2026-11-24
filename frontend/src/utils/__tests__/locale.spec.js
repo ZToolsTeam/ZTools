@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest'
+import * as specLocale from '@ztools/plugins-spec/locale'
 import {
   SUPPORTED_LOCALES,
   DEFAULT_LOCALE,
   LOCALE_OPTIONS,
+  stripLocaleSuffix,
+  matchSupportedLocale,
+  isSupportedLocale,
+  normalizeLocaleSetting,
   resolveLocale
 } from '../locale.js'
 
@@ -19,6 +24,20 @@ describe('locale utils', () => {
         expect(Object.isFrozen(option)).toBe(true)
         expect(typeof option.labelKey).toBe('string')
         expect(typeof option.nativeLabel).toBe('string')
+      }
+    })
+  })
+
+  describe('matchSupportedLocale', () => {
+    it('strictly matches Chinese and English variants and returns null for third locales or system', () => {
+      for (const zh of ['zh', 'zh-CN', 'zh_TW', 'zh-Hans-SG', 'zh_CN.UTF-8']) {
+        expect(matchSupportedLocale(zh)).toBe('zh-CN')
+      }
+      for (const en of ['en', 'EN', 'en-US', 'en_GB', 'en_AU.UTF-8']) {
+        expect(matchSupportedLocale(en)).toBe('en-US')
+      }
+      for (const third of ['ja-JP', 'fr-FR', 'ko-KR', 'de-DE', 'system', '', '   ', null, undefined, 123, {}]) {
+        expect(matchSupportedLocale(third)).toBeNull()
       }
     })
   })
@@ -99,6 +118,23 @@ describe('locale utils', () => {
       expect(resolveLocale('system', 'system')).toBe('en-US')
       expect(resolveLocale('system', '')).toBe('en-US')
       expect(resolveLocale('system', null)).toBe('en-US')
+    })
+
+    it('reuses @ztools/plugins-spec/locale single source of truth helpers', () => {
+      expect(stripLocaleSuffix).toBe(specLocale.stripLocaleSuffix)
+      expect(matchSupportedLocale).toBe(specLocale.matchSupportedLocale)
+      expect(isSupportedLocale).toBe(specLocale.isSupportedLocale)
+      expect(normalizeLocaleSetting).toBe(specLocale.normalizeLocaleSetting)
+
+      expect(stripLocaleSuffix('zh_CN.UTF-8')).toBe('zh-CN')
+      expect(stripLocaleSuffix('en_US@euro')).toBe('en-US')
+      expect(normalizeLocaleSetting('zh_Hans')).toBe('zh-CN')
+      expect(normalizeLocaleSetting('en-GB')).toBe('en-US')
+      expect(normalizeLocaleSetting('system')).toBe('system')
+      expect(normalizeLocaleSetting('ja-JP')).toBe('system')
+
+      expect(resolveLocale(['system', 'fr-FR', 'zh_CN.UTF-8'])).toBe('zh-CN')
+      expect(resolveLocale(['ja-JP', 'ko-KR'])).toBe('en-US')
     })
   })
 })

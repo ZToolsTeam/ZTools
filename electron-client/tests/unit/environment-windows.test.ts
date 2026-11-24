@@ -31,7 +31,7 @@ test('Windows：真实读取用户与系统环境，不被首次模块进度或 
 test('Windows：执行错误及 stderr 仍失败，未忽略真实错误', windows, async () => {
   const executable = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
   for (const script of ["throw 'test failure'", "[Console]::Error.Write('test stderr')"]) {
-    await assert.rejects(runEnvironmentCommand(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], undefined, signal()), /系统环境组件执行失败/)
+    await assert.rejects(runEnvironmentCommand(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], undefined, signal()), /System environment helper execution failed/)
   }
 })
 
@@ -54,7 +54,7 @@ test('Windows：新目录和旧空目录建立私有 ACL，真实备份可并发
     const record = JSON.parse(await fs.readFile(file, 'utf8'))
     record.before.raw = 'tampered'
     await fs.writeFile(file, JSON.stringify(record))
-    await assert.rejects(reopened.load(records[0].id), /校验失败/)
+    await assert.rejects(reopened.load(records[0].id), /checksum verification failed/)
   }
 })
 
@@ -63,10 +63,10 @@ test('Windows：已有非空宽权限目录和目录链接拒绝访问，保留�
   await fs.mkdir(directory)
   const original = path.join(directory, 'keep.txt')
   await fs.writeFile(original, 'must remain')
-  await assert.rejects(new EnvironmentBackupStore(directory).list(), /系统环境组件执行失败/)
+  await assert.rejects(new EnvironmentBackupStore(directory).list(), /System environment helper execution failed/)
   assert.equal(await fs.readFile(original, 'utf8'), 'must remain')
   const linked = path.join(root, 'junction')
   await fs.symlink(directory, linked, 'junction')
-  await assert.rejects(new EnvironmentBackupStore(linked).list(), /系统环境组件执行失败/)
+  await assert.rejects(new EnvironmentBackupStore(linked).list(), /System environment helper execution failed/)
   assert.equal(await fs.readFile(original, 'utf8'), 'must remain')
 })

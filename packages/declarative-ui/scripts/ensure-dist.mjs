@@ -7,7 +7,7 @@
  * frontend 的 predev / prebuild / pretest 都会调用本脚本；只有需要时才编译。
  *
  * 编译器沿用仓库约定：优先使用 electron-client 自带的 TypeScript（ai-mcp、sync-crypto 同样如此），
- * 其次是根目录 / 本包的 node_modules；都没有时给出明确的中文提示。
+ * 其次是根目录 / 本包的 node_modules；都没有时给出明确的错误提示。
  */
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -37,11 +37,11 @@ export function newestMtime(target) {
 /** dist 缺失，或 src / tsconfig 比 dist 入口新，则需要编译 */
 export function needsBuild(root = packageRoot) {
   const entry = path.join(root, 'dist', 'index.js')
-  if (!fs.existsSync(entry)) return { build: true, reason: 'dist 不存在' }
+  if (!fs.existsSync(entry)) return { build: true, reason: 'dist is missing' }
   const distTime = fs.statSync(entry).mtimeMs
   const sourceTime = Math.max(newestMtime(path.join(root, 'src')), newestMtime(path.join(root, 'tsconfig.json')))
-  if (sourceTime > distTime) return { build: true, reason: '源码比 dist 新' }
-  return { build: false, reason: 'dist 已是最新' }
+  if (sourceTime > distTime) return { build: true, reason: 'source is newer than dist' }
+  return { build: false, reason: 'dist is up to date' }
 }
 
 /** 按仓库约定查找 TypeScript 编译器 */
@@ -60,18 +60,18 @@ export function ensureDist({ root = packageRoot, repo = repoRoot, run = spawnSyn
   const tsc = findTsc(root, repo)
   if (!tsc) {
     throw new Error(
-      '@ztools/declarative-ui 需要编译，但找不到 TypeScript。\n' +
-      '请先在 electron-client 目录执行 npm install（仓库统一使用它自带的 TypeScript）。'
+      '@ztools/declarative-ui requires compilation, but TypeScript was not found.\n' +
+      'Run `npm install` in the electron-client directory first (this repository uses its bundled TypeScript).'
     )
   }
-  log(`[declarative-ui] ${decision.reason}，正在编译 dist ...`)
+  log(`[declarative-ui] ${decision.reason}, building dist...`)
   const result = run(process.execPath, [tsc, '-p', path.join(root, 'tsconfig.json')], { cwd: root, stdio: 'inherit' })
   if (result.error) throw result.error
   if (result.status !== 0) {
-    throw new Error(`@ztools/declarative-ui 编译失败（退出码 ${result.status ?? 'unknown'}），请查看上方 TypeScript 报错`)
+    throw new Error(`@ztools/declarative-ui build failed (exit code ${result.status ?? 'unknown'}). See the TypeScript errors above.`)
   }
   if (!fs.existsSync(path.join(root, 'dist', 'index.js'))) {
-    throw new Error('@ztools/declarative-ui 编译完成但缺少 dist/index.js')
+    throw new Error('@ztools/declarative-ui build finished, but dist/index.js is missing')
   }
   // tsc 不会改写内容未变的文件；显式刷新入口时间，避免下次误判为过期。
   // Date 只精确到毫秒，而文件时间有亚毫秒精度：同一毫秒内写过的源码会显得比入口新，所以至少比最新源码晚 1ms

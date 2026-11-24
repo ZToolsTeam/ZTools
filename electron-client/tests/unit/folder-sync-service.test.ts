@@ -51,7 +51,7 @@ macTest('真实原生链路：同尺寸同时间的内容差异、空文件、�
     assert.equal(await read(path.join(result.recoveryPaths[0]!, 'backup/same.txt')), 'old')
     assert.equal(await read(path.join(f.source, 'same.txt')), 'new')
     assert.equal((await fs.stat(path.join(f.target, 'empty.txt'))).size, 0)
-    await assert.rejects(f.apply(plan), /失效/)
+    await assert.rejects(f.apply(plan), /expired/)
     assert.equal((await f.compare()).diffs.length, 0)
   } finally { await f.close() }
 })
@@ -61,7 +61,7 @@ macTest('双向冲突不猜方向；新文件可分别复制到两边', async ()
     await fs.writeFile(path.join(f.source, 'left'), 'l'); await fs.writeFile(path.join(f.target, 'right'), 'r')
     await fs.writeFile(path.join(f.source, 'conflict'), 'a'); await fs.writeFile(path.join(f.target, 'conflict'), 'b')
     const plan = await f.compare('two-way'); assert.equal(plan.diffs.find(item => item.relPath === 'conflict')?.direction, 'conflict')
-    await assert.rejects(f.apply(plan), /冲突/)
+    await assert.rejects(f.apply(plan), /conflicts/)
     const result = await f.apply(plan, ['left', 'right']); assert.equal(result.syncedCount, 2)
     assert.equal(await read(path.join(f.source, 'right')), 'r'); assert.equal(await read(path.join(f.target, 'left')), 'l')
     assert.equal(await read(path.join(f.source, 'conflict')), 'a'); assert.equal(await read(path.join(f.target, 'conflict')), 'b')
@@ -114,7 +114,7 @@ macTest('比对后内容改变即使时间和大小未变也必须重新比对',
     const file = path.join(f.source, 'a'); await fs.writeFile(file, 'new'); await fs.writeFile(path.join(f.target, 'a'), 'old')
     await fs.utimes(file, 1700000000, 1700000000); const plan = await f.compare()
     await fs.writeFile(file, 'NEW'); await fs.utimes(file, 1700000000, 1700000000)
-    const result = await f.apply(plan); assert.equal(result.ok, false); assert.match(result.error!, /变化/)
+    const result = await f.apply(plan); assert.equal(result.ok, false); assert.match(result.error!, /changed/)
     assert.equal(await read(path.join(f.target, 'a')), 'old')
   } finally { await f.close() }
 })
@@ -132,7 +132,7 @@ macTest('落盘失败恢复原文件；若同名文件并发出现则保留双�
       const result = await f.apply(await f.compare()); assert.equal(result.ok, false)
       assert.equal(await read(path.join(f.target, 'a')), collision ? 'concurrent' : 'old')
       assert.equal(await read(path.join(result.recoveryPaths[0]!, 'backup/a')), 'old')
-      if (collision) { assert.equal(await read(path.join(result.recoveryPaths[0]!, 'original/a')), 'old'); assert.match(result.error!, /恢复未确认/) }
+      if (collision) { assert.equal(await read(path.join(result.recoveryPaths[0]!, 'original/a')), 'old'); assert.match(result.error!, /in-place restore not confirmed/) }
     } finally { await f.close() }
   }
 })
@@ -149,7 +149,7 @@ macTest('[回归] 原文件已移入备份后原生组件失效（停止或超�
     await fs.writeFile(path.join(f.source, 'a'), 'new'); await fs.writeFile(path.join(f.target, 'a'), 'old')
     const result = await f.apply(await f.compare()); assert.equal(result.ok, false)
     assert.equal(await read(path.join(f.target, 'a')), 'old')
-    assert.doesNotMatch(result.error!, /恢复未确认/)
+    assert.doesNotMatch(result.error!, /in-place restore not confirmed/)
     await assert.rejects(fs.stat(path.join(result.recoveryPaths[0]!, 'original/a')), { code: 'ENOENT' })
     assert.equal(await read(path.join(result.recoveryPaths[0]!, 'backup/a')), 'old')
   } finally { await f.close() }
@@ -167,8 +167,8 @@ macTest('外来窗口不能消费计划，关闭所属窗口释放计划', async
   const f = await fixture()
   try {
     await fs.writeFile(path.join(f.source, 'a'), 'new'); const plan = await f.compare()
-    await assert.rejects(f.service.execute({ action: 'execute', operationId: 'foreign', planId: plan.planId, selectedRelPaths: ['a'] }, { ...caller, webContentsId: 871 }, signal()), /失效/)
-    await f.service.closeOwner(caller.webContentsId); await assert.rejects(f.apply(plan), /失效/)
+    await assert.rejects(f.service.execute({ action: 'execute', operationId: 'foreign', planId: plan.planId, selectedRelPaths: ['a'] }, { ...caller, webContentsId: 871 }, signal()), /expired/)
+    await f.service.closeOwner(caller.webContentsId); await assert.rejects(f.apply(plan), /expired/)
     await assert.rejects(fs.stat(path.join(f.target, 'a')), { code: 'ENOENT' })
   } finally { await f.close() }
 })

@@ -253,6 +253,13 @@ describe('vSwitchKeyboard Directive', () => {
       expect(stopPropagationSpy).toHaveBeenCalled()
     })
 
+    it.each([false, true])('Tab 保留浏览器原生焦点导航，shiftKey=%s', (shiftKey) => {
+      vSwitchKeyboard.mounted(element)
+      const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, cancelable: true })
+      element.dispatchEvent(event)
+      expect(event.defaultPrevented).toBe(false)
+    })
+
     it('should block other single keys without modifiers', () => {
       vSwitchKeyboard.mounted(element)
       const handler = element._switchKeyboardHandler
@@ -262,7 +269,6 @@ describe('vSwitchKeyboard Directive', () => {
         'b',
         'ArrowUp',
         'ArrowDown',
-        'Tab',
         'Escape',
         '1',
         '2'
@@ -341,7 +347,7 @@ describe('vSwitchKeyboard Directive', () => {
       // 使用 fast-check 生成非 Enter/Space 的按键
       fc.assert(
         fc.property(
-          fc.string().filter((key) => key !== 'Enter' && key !== ' '),
+          fc.string().filter((key) => key !== 'Enter' && key !== ' ' && key !== 'Tab'),
           (key) => {
             const event = new KeyboardEvent('keydown', {
               key,

@@ -665,7 +665,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function rejectUnknownKeys(value: Record<string, unknown>, allowed: readonly string[]): void {
   const fields = Object.keys(value).filter((key) => !allowed.includes(key))
   if (fields.length > 0) {
-    throw new ZToolsError(errorCodes.invalidRequest, '方法参数包含未知字段', {
+    throw new ZToolsError(errorCodes.invalidRequest, 'Method parameters contain unknown fields', {
       path: 'params',
       fields: fields.slice(0, 8)
     })
@@ -680,7 +680,7 @@ function requireString(
   const item = value[key]
   const min = options.min ?? 0
   if (typeof item !== 'string' || item.length < min || item.length > options.max) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 无效`, { path: key })
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} is invalid`, { path: key })
   }
   return item
 }
@@ -688,13 +688,13 @@ function requireString(
 function optionalString(value: Record<string, unknown>, key: string, max: number): void {
   const item = value[key]
   if (item !== undefined && (typeof item !== 'string' || item.length > max)) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 无效`, { path: key })
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} is invalid`, { path: key })
   }
 }
 
 function requireBoolean(value: Record<string, unknown>, key: string): void {
   if (typeof value[key] !== 'boolean') {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 无效`, { path: key })
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} is invalid`, { path: key })
   }
 }
 
@@ -705,7 +705,7 @@ function requireInteger(
 ): void {
   const item = value[key]
   if (!Number.isInteger(item) || (item as number) < options.min || (item as number) > options.max) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 超出范围`, { path: key })
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} is out of range`, { path: key })
   }
 }
 
@@ -738,7 +738,7 @@ function validateDialogParams(params: Record<string, unknown>, kind: 'open' | 's
       params.properties.length > allowedProperties.size ||
       params.properties.some((item) => typeof item !== 'string' || !allowedProperties.has(item))
     ) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'properties 无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid properties')
     }
   }
 }
@@ -748,10 +748,10 @@ function requireSerializable(value: unknown, key: string, max: number): void {
   try {
     encoded = JSON.stringify(value)
   } catch {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 必须可序列化`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} must be JSON-serializable`)
   }
   if (encoded === undefined || Buffer.byteLength(encoded, 'utf8') > max) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 超过大小上限`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} exceeds maximum size limit`)
   }
 }
 
@@ -766,7 +766,7 @@ function requirePluginIdentifier(value: Record<string, unknown>, key: string): s
     pluginId.endsWith('.') ||
     /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(pluginId)
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 格式无效`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} has invalid format`)
   }
   return pluginId
 }
@@ -774,7 +774,7 @@ function requirePluginIdentifier(value: Record<string, unknown>, key: string): s
 function requirePluginInstanceId(value: Record<string, unknown>, key: string): string {
   const instanceId = requireString(value, key, { min: 36, max: 36 })
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(instanceId)) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 必须是有效 UUID`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} must be a valid UUID`)
   }
   return instanceId
 }
@@ -782,14 +782,14 @@ function requirePluginInstanceId(value: Record<string, unknown>, key: string): s
 function requireDllFunction(value: Record<string, unknown>): void {
   const func = requireString(value, 'func', { min: 1, max: 128 })
   if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/.test(func)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'func 格式无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid func format')
   }
 }
 
 function requireDllTaskId(value: Record<string, unknown>): void {
   const taskId = requireString(value, 'taskId', { min: 1, max: 256 })
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(taskId)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'taskId 格式无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid taskId format')
   }
 }
 
@@ -810,7 +810,7 @@ function validateDllPluginCall(params: Record<string, unknown>): void {
   requirePluginIdentifier(params, 'plugin')
   requireDllFunction(params)
   if (!isRecord(params.params)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'params 必须是对象')
+    throw new ZToolsError(errorCodes.invalidRequest, 'params must be an object')
   }
   requireSerializable(params.params, 'params', 768 * 1024)
 }
@@ -818,14 +818,14 @@ function validateDllPluginCall(params: Record<string, unknown>): void {
 function requireDatabaseKey(value: Record<string, unknown>, key = 'key'): void {
   const databaseKey = requireString(value, key, { min: 1, max: 8192 })
   if (databaseKey.includes('\0')) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 包含空字符`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} contains null characters`)
   }
 }
 
 function requireCredentialKey(value: Record<string, unknown>): void {
   const key = requireString(value, 'key', { min: 1, max: 128 })
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(key)) {
-    throw new ZToolsError(errorCodes.invalidRequest, '凭据 key 格式无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid credential key format')
   }
 }
 
@@ -834,15 +834,15 @@ function validateDatabasePut(params: Record<string, unknown>): void {
   requireDatabasePluginId(params)
   requireDatabaseKey(params)
   if (!Object.hasOwn(params, 'value')) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'value 字段缺失')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Missing required value field')
   }
   if (params.is_base64 !== undefined && typeof params.is_base64 !== 'boolean') {
-    throw new ZToolsError(errorCodes.invalidRequest, 'is_base64 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid is_base64')
   }
   if (params.is_base64 === true) {
     const encoded = requireString(params, 'value', { max: 24 * 1024 * 1024 })
     if (!isValidFileBase64(encoded)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'value 不是有效 Base64')
+      throw new ZToolsError(errorCodes.invalidRequest, 'value is not valid Base64')
     }
     return
   }
@@ -853,24 +853,24 @@ function validateDatabaseBatch(params: Record<string, unknown>): void {
   rejectUnknownKeys(params, ['plugin_id', 'operations'])
   requireDatabasePluginId(params)
   if (!Array.isArray(params.operations) || params.operations.length < 1 || params.operations.length > 1024) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'operations 数量超出范围')
+    throw new ZToolsError(errorCodes.invalidRequest, 'operations count is out of range')
   }
   requireSerializable(params.operations, 'operations', 16 * 1024 * 1024)
   for (const operation of params.operations) {
     if (!isRecord(operation)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'operation 必须是对象')
+      throw new ZToolsError(errorCodes.invalidRequest, 'operation must be an object')
     }
     if (operation.op === 'put') {
       rejectUnknownKeys(operation, ['op', 'key', 'value'])
       requireDatabaseKey(operation)
       if (!Object.hasOwn(operation, 'value')) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'operation.value 字段缺失')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Missing required operation.value field')
       }
     } else if (operation.op === 'delete') {
       rejectUnknownKeys(operation, ['op', 'key'])
       requireDatabaseKey(operation)
     } else {
-      throw new ZToolsError(errorCodes.invalidRequest, 'operation.op 无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid operation.op')
     }
   }
 }
@@ -887,7 +887,7 @@ function requireConfigPath(value: Record<string, unknown>, key: string): void {
         segment === 'constructor'
     )
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 包含无效分段`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} contains invalid segments`)
   }
 }
 
@@ -896,7 +896,7 @@ function requireEventKey(value: Record<string, unknown>, key: string): string {
   if (item === '*') return item
   const normalized = item.startsWith('channel:') ? item.slice('channel:'.length) : item
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(normalized)) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 无效`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} is invalid`)
   }
   return item
 }
@@ -920,14 +920,14 @@ function requireHttpUrl(value: Record<string, unknown>, key: string): URL {
   try {
     parsed = new URL(source)
   } catch {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 无效`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} is invalid`)
   }
   if (
     (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
     parsed.username !== '' ||
     parsed.password !== ''
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 只允许无凭据的 HTTP/HTTPS URL`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} only allows credential-free HTTP/HTTPS URLs`)
   }
   return parsed
 }
@@ -936,7 +936,7 @@ function validateNetworkHeaders(value: Record<string, unknown>, key: string): vo
   const headers = value[key]
   if (headers === undefined) return
   if (!isRecord(headers) || Object.keys(headers).length > 64) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 无效`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} is invalid`)
   }
   let totalBytes = 0
   for (const [name, item] of Object.entries(headers)) {
@@ -947,19 +947,19 @@ function validateNetworkHeaders(value: Record<string, unknown>, key: string): vo
       item.length > 16 * 1024 ||
       /[\r\n\0]/.test(item)
     ) {
-      throw new ZToolsError(errorCodes.invalidRequest, `${key} 包含无效请求头`)
+      throw new ZToolsError(errorCodes.invalidRequest, `${key} contains invalid HTTP headers`)
     }
     totalBytes += Buffer.byteLength(name, 'utf8') + Buffer.byteLength(item, 'utf8')
   }
   if (totalBytes > 64 * 1024) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 超过大小上限`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} exceeds maximum size limit`)
   }
 }
 
 function validateNetworkRequest(params: Record<string, unknown>): void {
   rejectUnknownKeys(params, ['method', 'url', 'headers', 'body', 'timeout'])
   if (!['GET', 'HEAD', 'POST', 'PUT', 'DELETE'].includes(String(params.method))) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'method 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid method')
   }
   requireHttpUrl(params, 'url')
   validateNetworkHeaders(params, 'headers')
@@ -974,13 +974,13 @@ function validateNetworkTransfer(params: Record<string, unknown>, upload: boolea
   )
   requireHttpUrl(params, 'url')
   const transferPath = requireString(params, upload ? 'filePath' : 'savePath', { min: 1, max: 32 * 1024 })
-  if (transferPath.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, '文件路径无效')
+  if (transferPath.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid file path')
   validateNetworkHeaders(params, 'headers')
   if (params.timeout !== undefined) requireInteger(params, 'timeout', { min: 1, max: MAX_TIMEOUT_MS })
   if (upload && params.fieldName !== undefined) {
     const fieldName = requireString(params, 'fieldName', { min: 1, max: 128 })
     if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(fieldName)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'fieldName 无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid fieldName')
     }
   }
 }
@@ -1000,7 +1000,7 @@ function validateNetworkCookie(params: Record<string, unknown>): void {
   const name = requireString(params, 'name', { min: 1, max: 256 })
   const cookieValue = requireString(params, 'value', { max: 4096 })
   if (/[^!#$%&'*+.^_`|~0-9A-Za-z-]/.test(name) || /[\u0000-\u001F\u007F;]/.test(cookieValue)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'Cookie 名称或值无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid Cookie name or value')
   }
   if (params.url !== undefined) requireHttpUrl(params, 'url')
   optionalString(params, 'domain', 253)
@@ -1011,15 +1011,15 @@ function validateNetworkCookie(params: Record<string, unknown>): void {
       hostname.length === 0 ||
       labels.some((label) => !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label))
     ) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'domain 无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid domain')
     }
   }
   if (params.url === undefined && params.domain === undefined) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'Cookie 必须提供 url 或 domain')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Cookie must specify either url or domain')
   }
   optionalString(params, 'path', 4096)
   if (typeof params.path === 'string' && !params.path.startsWith('/')) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'path 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid path')
   }
   if (params.secure !== undefined) requireBoolean(params, 'secure')
   if (params.httpOnly !== undefined) requireBoolean(params, 'httpOnly')
@@ -1030,13 +1030,13 @@ function validateNetworkCookie(params: Record<string, unknown>): void {
       params.expirationDate < 0 ||
       params.expirationDate > 253_402_300_799)
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'expirationDate 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid expirationDate')
   }
   if (
     params.sameSite !== undefined &&
     !['unspecified', 'no_restriction', 'lax', 'strict'].includes(String(params.sameSite))
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'sameSite 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid sameSite')
   }
 }
 
@@ -1050,7 +1050,7 @@ function validateNetworkProxy(params: Record<string, unknown>): void {
   try {
     parsed = new URL(`http://${host}/`)
   } catch {
-    throw new ZToolsError(errorCodes.invalidRequest, 'host 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid host')
   }
   if (
     parsed.username !== '' ||
@@ -1061,18 +1061,18 @@ function validateNetworkProxy(params: Record<string, unknown>): void {
     parsed.hostname === '' ||
     parsed.port !== ''
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'host 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid host')
   }
 }
 
 function requireFilePath(value: Record<string, unknown>, key: string): void {
   const item = requireString(value, key, { min: 1, max: 32 * 1024 })
-  if (item.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, `${key} 无效`)
+  if (item.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, `${key} is invalid`)
 }
 
 function requireScreenshotPath(value: Record<string, unknown>): void {
   const item = requireString(value, 'filePath', { min: 1, max: 4096 })
-  if (item.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, 'filePath 无效', { path: 'filePath' })
+  if (item.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid filePath', { path: 'filePath' })
 }
 
 function validateCalendarQuery(value: Record<string, unknown>): void {
@@ -1084,7 +1084,7 @@ function validateCalendarQuery(value: Record<string, unknown>): void {
 
 function requireFileEncoding(value: Record<string, unknown>): void {
   if (value.encoding !== 'utf8' && value.encoding !== 'base64') {
-    throw new ZToolsError(errorCodes.invalidRequest, 'encoding 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid encoding')
   }
 }
 
@@ -1114,13 +1114,13 @@ export function isValidFileBase64(content: string): boolean {
 function validateFileWrite(params: Record<string, unknown>): void {
   rejectUnknownKeys(params, ['path', 'encoding', 'content', 'overwrite'])
   if (params.overwrite !== undefined && typeof params.overwrite !== 'boolean') {
-    throw new ZToolsError(errorCodes.invalidRequest, 'overwrite 必须是布尔值')
+    throw new ZToolsError(errorCodes.invalidRequest, 'overwrite must be a boolean')
   }
   requireFilePath(params, 'path')
   requireFileEncoding(params)
   const content = requireString(params, 'content', { max: 23 * 1024 * 1024 })
   if (params.encoding === 'base64' && !isValidFileBase64(content)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'content 不是有效 Base64')
+    throw new ZToolsError(errorCodes.invalidRequest, 'content is not valid Base64')
   }
 }
 
@@ -1132,7 +1132,7 @@ function validateFileCache(params: Record<string, unknown>, write: boolean): voi
     /^[A-Za-z]:/.test(relativePath) ||
     relativePath.split(/[\\/]+/).some((part) => part === '..' || part === '')
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'relativePath 必须是安全相对路径')
+    throw new ZToolsError(errorCodes.invalidRequest, 'relativePath must be a safe relative path')
   }
   requireFileEncoding(params)
   if (write) validateFileWrite({ path: relativePath, encoding: params.encoding, content: params.content })
@@ -1148,10 +1148,10 @@ function requireFileOffset(value: Record<string, unknown>, key: string): void {
 function requireBase64Content(value: Record<string, unknown>, key: string): void {
   const content = requireString(value, key, { max: Math.ceil(MAX_FILE_CHUNK_BYTES / 3) * 4 + 4 })
   if (!isValidFileBase64(content)) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 不是有效 Base64`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} is not valid Base64`)
   }
   if (Buffer.byteLength(content, 'base64') > MAX_FILE_CHUNK_BYTES) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 超过分块大小上限`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} exceeds chunk size limit`)
   }
 }
 
@@ -1172,7 +1172,7 @@ function validateFileWriteChunk(params: Record<string, unknown>): void {
   rejectUnknownKeys(params, ['handle', 'offset', 'content'])
   const handle = requireString(params, 'handle', { min: 1, max: 128 })
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(handle)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'handle 格式无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid handle format')
   }
   requireFileOffset(params, 'offset')
   requireBase64Content(params, 'content')
@@ -1182,7 +1182,7 @@ function validateFileWriteHandle(params: Record<string, unknown>): void {
   rejectUnknownKeys(params, ['handle'])
   const handle = requireString(params, 'handle', { min: 1, max: 128 })
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(handle)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'handle 格式无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid handle format')
   }
 }
 
@@ -1202,19 +1202,19 @@ function validateFileCacheWriteStart(params: Record<string, unknown>): void {
 function requirePopoutHandoffId(value: Record<string, unknown>, key: string): void {
   const id = requireString(value, key, { min: 16, max: 64 })
   if (!POPOUT_HANDOFF_ID_PATTERN.test(id)) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 格式无效`, { path: key })
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} has invalid format`, { path: key })
   }
 }
 
 function validatePopoutHandoff(value: unknown): void {
-  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, 'handoff 无效', { path: 'handoff' })
+  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid handoff', { path: 'handoff' })
   rejectUnknownKeys(value, ['id', 'pluginId', 'featureCode', 'state', 'paths'])
   requirePopoutHandoffId(value, 'id')
   requirePluginIdentifier(value, 'pluginId')
   optionalString(value, 'featureCode', 128)
   const state = requireString(value, 'state', { min: 2, max: POPOUT_HANDOFF_MAX_STATE_BYTES })
   if (Buffer.byteLength(state, 'utf8') > POPOUT_HANDOFF_MAX_STATE_BYTES) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'state 超过大小上限', { path: 'state' })
+    throw new ZToolsError(errorCodes.invalidRequest, 'state exceeds maximum size limit', { path: 'state' })
   }
   if (value.paths !== undefined) {
     requireStringArray(value, 'paths', {
@@ -1223,7 +1223,7 @@ function validatePopoutHandoff(value: unknown): void {
       maxBytes: POPOUT_HANDOFF_MAX_PATHS_BYTES
     })
     if ((value.paths as string[]).some((item) => item.length === 0)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'paths 包含空路径', { path: 'paths' })
+      throw new ZToolsError(errorCodes.invalidRequest, 'paths contains an empty path', { path: 'paths' })
     }
   }
 }
@@ -1235,17 +1235,17 @@ function requireStringArray(
 ): void {
   const items = value[key]
   if (!Array.isArray(items) || items.length > options.maxItems) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 无效`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} is invalid`)
   }
   let totalBytes = 0
   for (const item of items) {
     if (typeof item !== 'string' || item.length > options.maxItemLength || item.includes('\0')) {
-      throw new ZToolsError(errorCodes.invalidRequest, `${key} 包含无效参数`)
+      throw new ZToolsError(errorCodes.invalidRequest, `${key} contains invalid arguments`)
     }
     totalBytes += Buffer.byteLength(item, 'utf8')
   }
   if (totalBytes > options.maxBytes) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 超过大小上限`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} exceeds maximum size limit`)
   }
 }
 
@@ -1258,19 +1258,19 @@ function validateProcessStart(params: Record<string, unknown>): void {
     maxBytes: 64 * 1024
   })
   const workingDir = requireString(params, 'workingDir', { max: 32 * 1024 })
-  if (workingDir.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, 'workingDir 无效')
+  if (workingDir.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid workingDir')
   requireBoolean(params, 'show')
 }
 
 function validateScreenPoint(value: unknown, key: string): void {
-  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, `${key} 无效`)
+  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, `${key} is invalid`)
   rejectUnknownKeys(value, ['x', 'y'])
   requireInteger(value, 'x', { min: -1_000_000, max: 1_000_000 })
   requireInteger(value, 'y', { min: -1_000_000, max: 1_000_000 })
 }
 
 function validateScreenRect(value: unknown, key: string): void {
-  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, `${key} 无效`)
+  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, `${key} is invalid`)
   rejectUnknownKeys(value, ['x', 'y', 'width', 'height'])
   requireInteger(value, 'x', { min: -1_000_000, max: 1_000_000 })
   requireInteger(value, 'y', { min: -1_000_000, max: 1_000_000 })
@@ -1287,13 +1287,13 @@ function validateClipboardText(params: Record<string, unknown>): void {
   const hasText = Object.hasOwn(params, 'text')
   const hasTempFile = Object.hasOwn(params, 'tempFile')
   if (hasText === hasTempFile) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'text 和 tempFile 必须且只能提供一个')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Exactly one of text or tempFile must be provided')
   }
   if (hasText) {
     // 与 ClipboardService 的 8 MiB（UTF-8 字节）上限一致；超限明确报 RESPONSE_TOO_LARGE（字符数超限时不必再算字节）
     const text = requireString(params, 'text', { min: 1, max: Number.MAX_SAFE_INTEGER })
     if (text.length > MAX_CLIPBOARD_TEXT_BYTES || Buffer.byteLength(text, 'utf8') > MAX_CLIPBOARD_TEXT_BYTES) {
-      throw new ZToolsError(errorCodes.responseTooLarge, '剪贴板文本超过 8 MiB 上限', { path: 'text' })
+      throw new ZToolsError(errorCodes.responseTooLarge, 'Clipboard text exceeds the 8 MiB limit', { path: 'text' })
     }
   }
   if (hasTempFile) requireFilePath(params, 'tempFile')
@@ -1308,7 +1308,7 @@ function validateClipboardImage(params: Record<string, unknown>): void {
     (image.startsWith('data:') && (comma < 0 || !/^data:image\/(?:bmp|jpeg|jpg|png);base64$/i.test(image.slice(0, comma)))) ||
     !isValidFileBase64(encoded)
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'image 不是受支持的 Base64 图片')
+    throw new ZToolsError(errorCodes.invalidRequest, 'image is not a supported Base64 image')
   }
 }
 
@@ -1316,12 +1316,12 @@ function requireEnvelopeId(value: Record<string, unknown>, key: string, optional
   const item = value[key]
   if (optional && item === undefined) return
   if (typeof item !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/.test(item)) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 无效`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} is invalid`)
   }
 }
 
 function validateEventEnvelope(value: unknown, request: boolean): void {
-  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, 'envelope 必须是对象')
+  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, 'envelope must be an object')
   rejectUnknownKeys(value, [
     'envelopeId',
     'version',
@@ -1337,29 +1337,29 @@ function validateEventEnvelope(value: unknown, request: boolean): void {
     'timeout'
   ])
   requireEnvelopeId(value, 'envelopeId')
-  if (value.version !== 'v1') throw new ZToolsError(errorCodes.invalidRequest, 'version 无效')
+  if (value.version !== 'v1') throw new ZToolsError(errorCodes.invalidRequest, 'Invalid version')
   if (!Number.isSafeInteger(value.timestamp) || (value.timestamp as number) < 0) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'timestamp 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid timestamp')
   }
   requireEventKey(value, 'type')
   const scope = requireString(value, 'scope', { min: 1, max: 64 })
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(scope)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'scope 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid scope')
   }
   if (value.channel !== undefined) {
     const channel = { channel: value.channel }
     requireEventKey(channel, 'channel')
   }
-  if (!isRecord(value.source)) throw new ZToolsError(errorCodes.invalidRequest, 'source 无效')
+  if (!isRecord(value.source)) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid source')
   rejectUnknownKeys(value.source, ['kind'])
   requireString(value.source, 'kind', { min: 1, max: 32 })
-  if (!isRecord(value.target)) throw new ZToolsError(errorCodes.invalidRequest, 'target 无效')
+  if (!isRecord(value.target)) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid target')
   rejectUnknownKeys(value.target, ['broadcast'])
   if (value.target.broadcast !== true) {
-    throw new ZToolsError(errorCodes.invalidRequest, '当前仅支持广播事件')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Only broadcast events are currently supported')
   }
   if (!Object.hasOwn(value, 'payload')) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'payload 字段缺失')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Missing required payload field')
   }
   requireSerializable(value.payload, 'payload', 256 * 1024)
   requireEnvelopeId(value, 'correlationId', true)
@@ -1368,7 +1368,7 @@ function validateEventEnvelope(value: unknown, request: boolean): void {
     requireInteger(value, 'timeout', { min: 1, max: MAX_TIMEOUT_MS })
   }
   if (request && value.replyTo !== undefined) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'event_request 不允许 replyTo')
+    throw new ZToolsError(errorCodes.invalidRequest, 'event_request does not allow replyTo')
   }
 }
 
@@ -1388,7 +1388,7 @@ function validateUserSetToken(params: Record<string, unknown>): void {
   optionalString(params, 'email', 320)
   optionalString(params, 'expires_at', 64)
   if (typeof params.expires_at === 'string' && params.expires_at !== '' && !Number.isFinite(Date.parse(params.expires_at))) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'expires_at 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid expires_at')
   }
 }
 
@@ -1403,7 +1403,7 @@ function validateAnalyticsReport(params: Record<string, unknown>): void {
   }
   if (params.user_id !== undefined && params.user_id !== null) {
     if (typeof params.user_id !== 'string' || params.user_id.length > 64) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'user_id 无效', { path: 'user_id' })
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid user_id', { path: 'user_id' })
     }
   }
 }
@@ -1411,28 +1411,28 @@ function validateAnalyticsReport(params: Record<string, unknown>): void {
 function validateUpdatePackage(params: Record<string, unknown>, requirePackage: boolean): void {
   rejectUnknownKeys(params, ['type', 'version', 'downloadUrl', 'checksum', 'fileSize', 'minAppVersion'])
   if (params.type !== undefined && params.type !== 'app' && params.type !== 'web') {
-    throw new ZToolsError(errorCodes.invalidRequest, 'type 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid type')
   }
   const packageKeys = ['version', 'downloadUrl', 'checksum', 'fileSize'] as const
   const suppliedPackageKeys = packageKeys.filter((key) => params[key] !== undefined)
   if (!requirePackage && suppliedPackageKeys.length === 0) return
   if (suppliedPackageKeys.length !== packageKeys.length) {
-    throw new ZToolsError(errorCodes.invalidRequest, '更新包字段必须完整提供')
+    throw new ZToolsError(errorCodes.invalidRequest, 'All update package fields must be provided')
   }
   const version = requireString(params, 'version', { min: 1, max: 64 })
   if (!/^\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'version 格式无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid version format')
   }
   requireHttpUrl(params, 'downloadUrl')
   const checksum = requireString(params, 'checksum', { max: 128 })
   if (checksum !== '' && !/^(?:sha256:)?[a-f0-9]{64}$/i.test(checksum)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'checksum 必须为空或 SHA-256')
+    throw new ZToolsError(errorCodes.invalidRequest, 'checksum must be empty or a valid SHA-256 hash')
   }
   requireInteger(params, 'fileSize', { min: 0, max: 2 * 1024 * 1024 * 1024 })
   if (params.minAppVersion !== undefined) {
     const minAppVersion = requireString(params, 'minAppVersion', { min: 1, max: 64 })
     if (!/^\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(minAppVersion)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'minAppVersion 格式无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid minAppVersion format')
     }
   }
 }
@@ -1457,7 +1457,7 @@ function validatePrivilegedExecute(params: Record<string, unknown>): void {
 function requireTriggerIdentifier(value: Record<string, unknown>, key: string): string {
   const identifier = requireString(value, key, { min: 1, max: 128 })
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(identifier)) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} 格式无效`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} has invalid format`)
   }
   return identifier
 }
@@ -1553,12 +1553,12 @@ function requireHotkey(value: Record<string, unknown>, key: string): string {
   const hotkey = requireString(value, key, { min: 1, max: 128 }).trim()
   if (isDoubleModifier(hotkey)) {
     if (!doubleModifierOf(hotkey)) {
-      throw new ZToolsError(errorCodes.invalidRequest, `${key} 双击修饰键格式无效`)
+      throw new ZToolsError(errorCodes.invalidRequest, `${key} has invalid double-tap modifier format`)
     }
     return hotkey
   }
   if (!isValidElectronAccelerator(hotkey)) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${key} Electron 快捷键格式无效`)
+    throw new ZToolsError(errorCodes.invalidRequest, `${key} has invalid Electron accelerator format`)
   }
   const blacklistReason = getGlobalHotkeyBlacklistReason(hotkey)
   if (blacklistReason) {
@@ -1573,18 +1573,18 @@ const VALID_MOUSE_HOOK_ACTIONS = new Set(['press', 'long'])
 function validateMouseHookTriggerConfig(config: Record<string, unknown>): void {
   rejectUnknownKeys(config, ['kind', 'button', 'action', 'longPressMs', 'fullscreenDnd'])
   if (config.kind !== 'mouse') {
-    throw new ZToolsError(errorCodes.invalidRequest, 'hook.config.kind 必须为 mouse')
+    throw new ZToolsError(errorCodes.invalidRequest, 'hook.config.kind must be mouse')
   }
   const button = String(config.button ?? '')
   const action = String(config.action ?? '')
   if (!VALID_MOUSE_HOOK_BUTTONS.has(button)) {
-    throw new ZToolsError(errorCodes.invalidRequest, '鼠标触发按键无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid mouse trigger button')
   }
   if (!VALID_MOUSE_HOOK_ACTIONS.has(action)) {
-    throw new ZToolsError(errorCodes.invalidRequest, '鼠标触发动作无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid mouse trigger action')
   }
   if (button === 'right' && action === 'press') {
-    throw new ZToolsError(errorCodes.invalidRequest, '为避免破坏系统右键菜单，右键仅支持长按触发')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Right mouse button only supports long press to avoid interfering with the system context menu')
   }
   requireInteger(config, 'longPressMs', { min: 200, max: 500 })
   if (config.fullscreenDnd !== undefined) {
@@ -1593,13 +1593,13 @@ function validateMouseHookTriggerConfig(config: Record<string, unknown>): void {
 }
 
 function validateTriggerAction(value: unknown): void {
-  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, 'action 必须是对象')
+  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, 'action must be an object')
   rejectUnknownKeys(value, ['mode', 'target', 'params'])
   if (!['builtin', 'dll', 'script', 'window'].includes(String(value.mode))) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'action.mode 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid action.mode')
   }
   requireString(value, 'target', { min: 1, max: 256 })
-  if (!isRecord(value.params)) throw new ZToolsError(errorCodes.invalidRequest, 'action.params 必须是对象')
+  if (!isRecord(value.params)) throw new ZToolsError(errorCodes.invalidRequest, 'action.params must be an object')
   requireSerializable(value.params, 'action.params', 64 * 1024)
 }
 
@@ -1622,10 +1622,10 @@ function validateTriggerRegister(params: Record<string, unknown>): void {
   ])
   if (params.id !== undefined) requireTriggerIdentifier(params, 'id')
   if (!['hotkey', 'timer', 'hook', 'clipboard', 'network'].includes(String(params.type))) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'type 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid type')
   }
   requireBoolean(params, 'enabled')
-  if (!isRecord(params.config)) throw new ZToolsError(errorCodes.invalidRequest, 'config 必须是对象')
+  if (!isRecord(params.config)) throw new ZToolsError(errorCodes.invalidRequest, 'config must be an object')
   requireSerializable(params.config, 'config', 64 * 1024)
   if (params.type === 'hotkey') {
     rejectUnknownKeys(params.config, ['key', 'fullscreenDnd'])
@@ -1640,7 +1640,7 @@ function validateTriggerRegister(params: Record<string, unknown>): void {
   const hasNestedAction = params.action !== undefined
   const hasFlatAction = ['actionMode', 'actionTarget', 'actionParams'].some((key) => params[key] !== undefined)
   if (hasNestedAction === hasFlatAction) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'action 必须使用嵌套或扁平格式之一')
+    throw new ZToolsError(errorCodes.invalidRequest, 'action must use either nested or flat format')
   }
   if (hasNestedAction) {
     validateTriggerAction(params.action)
@@ -1654,8 +1654,12 @@ function validateTriggerRegister(params: Record<string, unknown>): void {
   const action = hasNestedAction ? params.action as Record<string, unknown> : {
     mode: params.actionMode, target: params.actionTarget, params: params.actionParams
   }
-  if (action.mode === 'builtin' && action.target !== 'toggle_main_window') {
-    throw new ZToolsError(errorCodes.invalidRequest, '不支持的内置触发动作')
+  if (
+    action.mode === 'builtin' &&
+    action.target !== 'toggle_main_window' &&
+    action.target !== 'toggle_launcher'
+  ) {
+    throw new ZToolsError(errorCodes.invalidRequest, 'Unsupported built-in trigger action')
   }
   requirePluginIdentifier(params, 'pluginId')
   if (params.priority !== undefined) {
@@ -1664,12 +1668,12 @@ function validateTriggerRegister(params: Record<string, unknown>): void {
 }
 
 export function validateMethodParams(method: AllowedMethod, params: unknown): void {
-  if (!isRecord(params)) throw new ZToolsError(errorCodes.invalidRequest, '方法参数必须是对象')
+  if (!isRecord(params)) throw new ZToolsError(errorCodes.invalidRequest, 'Method parameters must be an object')
   switch (method) {
     case 'app_ready':
       rejectUnknownKeys(params, ['status'])
       if (params.status !== 'initialized') {
-        throw new ZToolsError(errorCodes.invalidRequest, 'app_ready.status 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid app_ready.status')
       }
       return
     case 'diagnostics_get':
@@ -1677,7 +1681,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       if (params.requestIds !== undefined) {
         if (!Array.isArray(params.requestIds) || params.requestIds.length > 64 ||
             params.requestIds.some(value => typeof value !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(value))) {
-          throw new ZToolsError(errorCodes.invalidRequest, 'diagnostics_get.requestIds 无效')
+          throw new ZToolsError(errorCodes.invalidRequest, 'Invalid diagnostics_get.requestIds')
         }
       }
       return
@@ -1693,7 +1697,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireConfigPath(params, 'path')
       requireString(params, 'value', { max: 512 * 1024 })
       if (typeof params.sync_enabled !== 'boolean') {
-        throw new ZToolsError(errorCodes.invalidRequest, 'sync_enabled 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid sync_enabled')
       }
       return
     case 'settings_get':
@@ -1704,7 +1708,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, ['key', 'value'])
       requireConfigPath(params, 'key')
       if (!Object.hasOwn(params, 'value') || params.value === undefined) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'value 字段缺失')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Missing required value field')
       }
       return
     case 'features_get':
@@ -1718,12 +1722,12 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       if (params.key !== undefined) {
         requireString(params, 'key', { min: 1, max: 64 })
         if (typeof params.enabled !== 'boolean') {
-          throw new ZToolsError(errorCodes.invalidRequest, 'enabled 必须是布尔值')
+          throw new ZToolsError(errorCodes.invalidRequest, 'enabled must be a boolean')
         }
       }
       if (params.features !== undefined) {
         if (typeof params.features !== 'object' || params.features === null || Array.isArray(params.features)) {
-          throw new ZToolsError(errorCodes.invalidRequest, 'features 必须是对象')
+          throw new ZToolsError(errorCodes.invalidRequest, 'features must be an object')
         }
       }
       return
@@ -1761,7 +1765,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requirePluginIdentifier(params, 'pluginId')
       if (params.payload !== undefined) {
         if (!isRecord(params.payload)) {
-          throw new ZToolsError(errorCodes.invalidRequest, 'payload 必须是对象')
+          throw new ZToolsError(errorCodes.invalidRequest, 'payload must be an object')
         }
         requireSerializable(params.payload, 'payload', 64 * 1024)
       }
@@ -1784,7 +1788,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requirePluginIdentifier(params, 'pluginId')
       requireString(params, 'preservationId', { min: 1, max: 256 })
       if (!Array.isArray(params.assets) || params.assets.length === 0 || params.assets.length > 256) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'assets 必须是 1 到 256 项')
+        throw new ZToolsError(errorCodes.invalidRequest, 'assets must contain between 1 and 256 items')
       }
       requireStringArray(params, 'assets', {
         maxItems: 256,
@@ -1804,11 +1808,11 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireHttpUrl(params, 'url')
       const version = requireString(params, 'version', { min: 1, max: 64 })
       if (!/^\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'version 格式无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid version format')
       }
       optionalString(params, 'checksum', 128)
       if (typeof params.checksum === 'string' && params.checksum !== '' && !/^(?:sha256:)?[a-f0-9]{64}$/i.test(params.checksum)) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'checksum 必须是 SHA-256')
+        throw new ZToolsError(errorCodes.invalidRequest, 'checksum must be a valid SHA-256 hash')
       }
       requireInteger(params, 'fileSize', { min: 0, max: 100 * 1024 * 1024 })
       return
@@ -1816,7 +1820,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'update_check':
       rejectUnknownKeys(params, ['source'])
       if (params.source !== 'startup' && params.source !== 'manual') {
-        throw new ZToolsError(errorCodes.invalidRequest, 'source 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid source')
       }
       return
     case 'update_get_version':
@@ -1839,7 +1843,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireString(params, 'name', { max: 1024 })
       requireString(params, 'value', { max: 768 * 1024 })
       if (params.view !== 32 && params.view !== 64) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'view 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid view')
       }
       return
     case 'builtin_reg_delete':
@@ -1847,7 +1851,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireString(params, 'path', { min: 1, max: 4096 })
       requireString(params, 'name', { max: 1024 })
       if (params.view !== 32 && params.view !== 64) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'view 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid view')
       }
       return
     case 'builtin_file_write':
@@ -1913,7 +1917,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, ['capability'])
       const capability = requireString(params, 'capability', { min: 1, max: 128 })
       if (!isRuntimeCapabilityId(capability)) {
-        throw new ZToolsError(errorCodes.invalidRequest, '未知运行时能力')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Unknown runtime capability')
       }
       return
     }
@@ -1922,7 +1926,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, ['capability'])
       const capability = requireString(params, 'capability', { min: 1, max: 128 })
       if (!isRuntimeCapabilityId(capability)) {
-        throw new ZToolsError(errorCodes.invalidRequest, '未知运行时能力')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Unknown runtime capability')
       }
       return
     }
@@ -1939,7 +1943,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
         'app', 'home', 'appData', 'userData', 'temp', 'desktop',
         'documents', 'downloads', 'music', 'pictures', 'videos', 'cache'
       ].includes(String(params.name))) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'name 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid name')
       }
       return
     case 'system_list_common_folders':
@@ -1956,7 +1960,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
         requireInteger(params, 'limit', { min: 1, max: 200 })
       }
       if (params.scope !== undefined && (typeof params.scope !== 'string' || !SYSTEM_SEARCH_FILES_SCOPES.includes(params.scope))) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'scope 无效', { path: 'scope' })
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid scope', { path: 'scope' })
       }
       return
     case 'system_shutdown':
@@ -1976,8 +1980,8 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'system_power_session':
       rejectUnknownKeys(params, ['action', 'mode', 'durationMinutes'])
       requireString(params, 'action', { min: 1, max: 16 })
-      if (!['status', 'start', 'stop', 'toggle'].includes(String(params.action))) throw new ZToolsError(errorCodes.invalidRequest, '防休眠操作无效')
-      if (params.mode !== undefined && params.mode !== 'display' && params.mode !== 'system') throw new ZToolsError(errorCodes.invalidRequest, '防休眠模式无效')
+      if (!['status', 'start', 'stop', 'toggle'].includes(String(params.action))) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid power session action')
+      if (params.mode !== undefined && params.mode !== 'display' && params.mode !== 'system') throw new ZToolsError(errorCodes.invalidRequest, 'Invalid power session mode')
       if (params.durationMinutes !== undefined) requireInteger(params, 'durationMinutes', { min: 0, max: 10080 })
       return
     case 'system_simulate_key_press':
@@ -2000,11 +2004,11 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'system_simulate_mouse_click': {
       rejectUnknownKeys(params, ['button', 'x', 'y'])
       if (!['left', 'right', 'middle'].includes(String(params.button))) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'button 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid button')
       }
       const hasX = params.x !== undefined
       const hasY = params.y !== undefined
-      if (hasX !== hasY) throw new ZToolsError(errorCodes.invalidRequest, 'x 和 y 必须同时提供')
+      if (hasX !== hasY) throw new ZToolsError(errorCodes.invalidRequest, 'x and y must be provided together')
       if (hasX) {
         requireInteger(params, 'x', { min: -1_000_000, max: 1_000_000 })
         requireInteger(params, 'y', { min: -1_000_000, max: 1_000_000 })
@@ -2020,7 +2024,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       if (params.drive !== undefined) {
         const drive = requireString(params, 'drive', { min: 1, max: 4096 })
         if (/[\u0000-\u001f\u007f]/.test(drive) || !(/^[A-Za-z]:[\\/]/.test(drive) || drive.startsWith('/'))) {
-          throw new ZToolsError(errorCodes.invalidRequest, 'drive 必须是绝对卷路径')
+          throw new ZToolsError(errorCodes.invalidRequest, 'drive must be an absolute volume path')
         }
       }
       return
@@ -2094,7 +2098,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'window_set_opacity':
       rejectUnknownKeys(params, ['opacity'])
       if (typeof params.opacity !== 'number' || !Number.isFinite(params.opacity) || params.opacity < 0 || params.opacity > 1) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'opacity 超出范围')
+        throw new ZToolsError(errorCodes.invalidRequest, 'opacity is out of range')
       }
       return
     case 'window_set_always_on_top':
@@ -2108,19 +2112,19 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'window_show_record_bar':
       rejectUnknownKeys(params, ['duration', 'taskId'])
       if (params.duration !== undefined && (typeof params.duration !== 'number' || !Number.isFinite(params.duration) || params.duration < 0)) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'duration 必须为非负数字')
+        throw new ZToolsError(errorCodes.invalidRequest, 'duration must be a non-negative number')
       }
       if (params.taskId !== undefined && (typeof params.taskId !== 'string' || params.taskId.length > 256)) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'taskId 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid taskId')
       }
       return
     case 'window_update_record_bar':
       rejectUnknownKeys(params, ['duration', 'status'])
       if (params.duration !== undefined && (typeof params.duration !== 'number' || !Number.isFinite(params.duration) || params.duration < 0)) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'duration 必须为非负数字')
+        throw new ZToolsError(errorCodes.invalidRequest, 'duration must be a non-negative number')
       }
       if (params.status !== undefined && typeof params.status !== 'string') {
-        throw new ZToolsError(errorCodes.invalidRequest, 'status 必须为字符串')
+        throw new ZToolsError(errorCodes.invalidRequest, 'status must be a string')
       }
       return
     case 'window_hide_record_bar':
@@ -2131,7 +2135,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireBoolean(params, 'confirmed')
       requireBoolean(params, 'doNotAskAgain')
       if (params.action !== 'exit' && params.action !== 'minimize' && params.action !== 'cancel') {
-        throw new ZToolsError(errorCodes.invalidRequest, 'action 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid action')
       }
       return
     case 'event_subscribe':
@@ -2231,7 +2235,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireFilePath(params, 'path')
       requireString(params, 'pattern', { min: 1, max: 256 })
       if (/[\\/\0]/.test(String(params.pattern))) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'pattern 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid pattern')
       }
       return
     case 'filesystem_combine_path':
@@ -2286,7 +2290,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       // 0/1（launchd/init）与负数（进程组）一律拒绝
       requireInteger(params, 'pid', { min: 2, max: 0xffff_ffff })
       if (params.mode !== 'graceful' && params.mode !== 'force') {
-        throw new ZToolsError(errorCodes.invalidRequest, 'mode 无效', { path: 'mode' })
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid mode', { path: 'mode' })
       }
       if (params.tree !== undefined) requireBoolean(params, 'tree')
       if (params.timeoutMs !== undefined) {
@@ -2298,7 +2302,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       if (params.expectedName !== undefined) {
         const expectedName = requireString(params, 'expectedName', { min: 1, max: 260 })
         if (expectedName.includes('\0')) {
-          throw new ZToolsError(errorCodes.invalidRequest, 'expectedName 无效', { path: 'expectedName' })
+          throw new ZToolsError(errorCodes.invalidRequest, 'Invalid expectedName', { path: 'expectedName' })
         }
       }
       return
@@ -2310,14 +2314,14 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'declarative_session_close':
       rejectUnknownKeys(params, ['sessionId'])
       if (!DECLARATIVE_SESSION_ID_PATTERN.test(requireString(params, 'sessionId', { min: 1, max: 64 }))) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'sessionId 无效', { path: 'sessionId' })
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid sessionId', { path: 'sessionId' })
       }
       return
     case 'process_kill_by_name':
       rejectUnknownKeys(params, ['name', 'force'])
       const processName = requireString(params, 'name', { min: 1, max: 260 })
       if (/[\\/\0]/.test(processName)) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'name 必须是进程名')
+        throw new ZToolsError(errorCodes.invalidRequest, 'name must be a process name')
       }
       requireBoolean(params, 'force')
       return
@@ -2366,7 +2370,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireDatabasePluginId(params)
       requireDatabaseKey(params)
       if (params.is_base64 !== undefined && typeof params.is_base64 !== 'boolean') {
-        throw new ZToolsError(errorCodes.invalidRequest, 'is_base64 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid is_base64')
       }
       return
     case 'db_delete':
@@ -2380,7 +2384,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, ['plugin_id', 'prefix', 'limit'])
       requireDatabasePluginId(params)
       if (requireString(params, 'prefix', { max: 8192 }).includes('\0')) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'prefix 包含空字符')
+        throw new ZToolsError(errorCodes.invalidRequest, 'prefix contains null characters')
       }
       requireInteger(params, 'limit', { min: 0, max: 10_000 })
       return
@@ -2446,7 +2450,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
         maxBytes: 128 * 1024
       })
       if ((params.filePaths as string[]).length === 0) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'filePaths 不能为空')
+        throw new ZToolsError(errorCodes.invalidRequest, 'filePaths cannot be empty')
       }
       return
     case 'clipboard_hide_and_type':
@@ -2457,7 +2461,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, ['pluginId', 'revoked', 'reason'])
       requireString(params, 'pluginId', { min: 1, max: 64 })
       if (typeof params.revoked !== 'boolean') {
-        throw new ZToolsError(errorCodes.invalidRequest, 'revoked 必须是布尔值')
+        throw new ZToolsError(errorCodes.invalidRequest, 'revoked must be a boolean')
       }
       if (params.reason !== undefined) {
         requireString(params, 'reason', { min: 1, max: 512 })
@@ -2470,7 +2474,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, ['id', 'paste'])
       requireString(params, 'id', { min: 1, max: 64 })
       if (params.paste !== undefined && typeof params.paste !== 'boolean') {
-        throw new ZToolsError(errorCodes.invalidRequest, 'paste 必须是布尔值')
+        throw new ZToolsError(errorCodes.invalidRequest, 'paste must be a boolean')
       }
       return
     case 'clipboard_history_toggle_pin':
@@ -2573,8 +2577,8 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, ['title', 'categoryId', 'durationMinutes', 'mode'])
       if (params.title !== undefined) requireString(params, 'title', { min: 1, max: 300 })
       if (params.categoryId !== undefined) requireString(params, 'categoryId', { min: 1, max: 128 })
-      if (params.durationMinutes !== undefined && (typeof params.durationMinutes !== 'number' || !Number.isFinite(params.durationMinutes) || params.durationMinutes < 1 || params.durationMinutes > 1440)) throw new ZToolsError(errorCodes.invalidRequest, 'durationMinutes 必须为 1～1440 分钟')
-      if (params.mode !== undefined && params.mode !== 'single' && params.mode !== 'pomodoro') throw new ZToolsError(errorCodes.invalidRequest, 'mode 无效')
+      if (params.durationMinutes !== undefined && (typeof params.durationMinutes !== 'number' || !Number.isFinite(params.durationMinutes) || params.durationMinutes < 1 || params.durationMinutes > 1440)) throw new ZToolsError(errorCodes.invalidRequest, 'durationMinutes must be between 1 and 1440 minutes')
+      if (params.mode !== undefined && params.mode !== 'single' && params.mode !== 'pomodoro') throw new ZToolsError(errorCodes.invalidRequest, 'Invalid mode')
       return
     case 'focus_toggle':
     case 'focus_pause':
@@ -2626,7 +2630,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       validateCalendarQuery(params)
       if (params.limit !== undefined) requireInteger(params, 'limit', { min: 1, max: 1000 })
       if (params.order !== undefined && params.order !== 'asc' && params.order !== 'desc') {
-        throw new ZToolsError(errorCodes.invalidRequest, 'order 无效', { path: 'order' })
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid order', { path: 'order' })
       }
       return
     case 'calendar_count_events':
@@ -2944,12 +2948,12 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       for (const key of ['id', 'name', 'idOrName']) {
         if (params[key] !== undefined) {
           const identity = requireString(params, key, { min: 1, max: 1024 })
-          if (identity.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, '音频设备标识无效')
+          if (identity.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid audio device identifier')
         }
       }
-      if (params.type !== undefined && params.type !== 'input' && params.type !== 'output') throw new ZToolsError(errorCodes.invalidRequest, '音频方向无效')
-      if (method === 'audio_set_default_device' && params.id === undefined && params.name === undefined && params.idOrName === undefined) throw new ZToolsError(errorCodes.invalidRequest, '缺少音频设备标识')
-      if (method === 'audio_set_volume' && (typeof params.volume !== 'number' || !Number.isFinite(params.volume) || params.volume < 0 || params.volume > 100)) throw new ZToolsError(errorCodes.invalidRequest, '音量必须在 0 到 100 之间')
+      if (params.type !== undefined && params.type !== 'input' && params.type !== 'output') throw new ZToolsError(errorCodes.invalidRequest, 'Invalid audio direction')
+      if (method === 'audio_set_default_device' && params.id === undefined && params.name === undefined && params.idOrName === undefined) throw new ZToolsError(errorCodes.invalidRequest, 'Missing audio device identifier')
+      if (method === 'audio_set_volume' && (typeof params.volume !== 'number' || !Number.isFinite(params.volume) || params.volume < 0 || params.volume > 100)) throw new ZToolsError(errorCodes.invalidRequest, 'volume must be between 0 and 100')
       if (params.muted !== undefined) requireBoolean(params, 'muted')
       return
     }
@@ -2979,7 +2983,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       return
     default: {
       const exhaustive: never = method
-      throw new ZToolsError(errorCodes.methodNotFound, `未知方法: ${String(exhaustive)}`)
+      throw new ZToolsError(errorCodes.methodNotFound, `Unknown method: ${String(exhaustive)}`)
     }
   }
 }

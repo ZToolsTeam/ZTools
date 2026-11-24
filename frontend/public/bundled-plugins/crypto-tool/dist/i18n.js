@@ -1,5 +1,5 @@
 import { createTranslator } from "@ztools/declarative-ui";
-export const t = createTranslator({
+const rawT = createTranslator({
     "zh-CN": {
         encryptFailed: "加密失败",
         decryptFailed: "解密失败",
@@ -90,13 +90,39 @@ export const t = createTranslator({
         sectionResultsCount: "计算结果（输入 {count} 字符）",
         sectionResults: "计算结果",
         uuidGenFailed: "生成失败",
-        uuidGenAction: "生成 UUID",
-        uuidNavTitle: "UUID 批量生成",
-        uuidPlaceholder: "输入数量：1 到 1000，留空生成 1 个",
+        uuidGenAction: "重新生成",
+        uuidNavTitle: "UUID 生成器",
+        uuidPlaceholder: "输入数量 (1-1000) 自动重生成，或输入关键词过滤…",
         uuidGeneratedTitle: "已生成 {count} 个 UUID",
-        uuidDefaultTitle: "生成 UUID v4",
-        uuidSubtitle: "使用系统安全随机数，每行一个",
-        uuidCopyAll: "复制全部 UUID"
+        uuidDefaultTitle: "生成 UUID",
+        uuidSubtitle: "使用系统安全随机数，回车即复制",
+        uuidCopyOne: "复制此 UUID",
+        uuidCopyAll: "复制全部 UUID",
+        uuidCopiedOneToast: "已复制 UUID",
+        uuidCopiedAllToast: "已复制全部 {count} 个 UUID",
+        uuidRegeneratedToast: "已生成 {count} 个 {version} UUID",
+        uuidVersionTooltip: "选择 UUID 版本",
+        uuidVersionV4: "UUID v4（随机）",
+        uuidVersionV7: "UUID v7（时间有序）",
+        uuidVersionV1: "UUID v1（时间戳）",
+        uuidFormatStandard: "标准小写",
+        uuidFormatUpper: "标准大写",
+        uuidFormatNoDash: "无连字符小写",
+        uuidFormatNoDashUpper: "无连字符大写",
+        uuidFormatSubmenu: "切换输出格式",
+        uuidCountSubmenu: "快速设置生成数量",
+        uuidCountOption: "生成 {count} 个",
+        uuidSectionResults: "生成结果（{count} 条 · {version} · {format}）",
+        uuidSectionFormats: "常用格式切换",
+        uuidEnterCopyHint: "回车复制",
+        uuidFormatSelected: "当前选中",
+        uuidFormatSwitchHint: "回车切换",
+        uuidSetFormatAction: "切换为{format}",
+        uuidRegenerateWithFormat: "重新生成并应用此格式",
+        uuidFormatSwitchedToast: "已切换为{format}",
+        uuidNoMatchTitle: "未找到匹配的 UUID",
+        uuidNoMatchSub: "清空过滤词或重新生成当前批次",
+        uuidClearFilter: "清除过滤"
     },
     "en-US": {
         encryptFailed: "Encryption failed",
@@ -151,7 +177,7 @@ export const t = createTranslator({
         cannotDecode: "Cannot Decode",
         base64EncodedSub: "Base64 Encoded (UTF-8)",
         base64DecodedSub: "Base64 Decoded (UTF-8)",
-        charCount: "{count} chars",
+        charCount: "{count} [[count:char|chars]]",
         base64EmptyTitle: "Enter text or paste a Base64 string",
         base64EmptySub: "Shows both encode & decode results; supports standard and URL-safe Base64",
         base64InvalidTitle: "Invalid Base64, cannot decode",
@@ -162,7 +188,7 @@ export const t = createTranslator({
         fileSha512Sub: "File SHA-512 · {name}",
         fileNameMd: "**File**: `{name}`",
         filePathMd: "**Path**: `{path}`",
-        fileSizeMd: "**Size**: {bytes} bytes",
+        fileSizeMd: "**Size**: {bytes} [[bytes:byte|bytes]]",
         hashEmptyTitle: "Type above to compute MD5 / SHA / Base64 in real time",
         hashEmptySub: "Press {mod}+K for AES cipher, HMAC, and UUID generator",
         loneSurrogateTitle: "Input contains unpaired Unicode surrogates",
@@ -185,15 +211,51 @@ export const t = createTranslator({
         globalActionsTitle: "Global Actions",
         otherToolsSubmenu: "More Crypto Tools",
         sectionFileHash: "File Hash: {name} ({path})",
-        sectionResultsCount: "Results ({count} chars)",
+        sectionResultsCount: "Results ({count} [[count:char|chars]])",
         sectionResults: "Results",
         uuidGenFailed: "Generation failed",
-        uuidGenAction: "Generate UUID",
-        uuidNavTitle: "Batch UUID Generator",
-        uuidPlaceholder: "Enter count (1 to 1000, blank for 1)",
+        uuidGenAction: "Regenerate",
+        uuidNavTitle: "UUID Generator",
+        uuidPlaceholder: "Enter count (1-1000) to regenerate, or type to filter…",
         uuidGeneratedTitle: "Generated {count} UUID(s)",
-        uuidDefaultTitle: "Generate UUID v4",
-        uuidSubtitle: "Cryptographically secure random UUIDs, one per line",
-        uuidCopyAll: "Copy All UUIDs"
+        uuidDefaultTitle: "Generate UUID",
+        uuidSubtitle: "Cryptographically secure UUIDs, press Enter to copy",
+        uuidCopyOne: "Copy UUID",
+        uuidCopyAll: "Copy All UUIDs",
+        uuidCopiedOneToast: "UUID copied",
+        uuidCopiedAllToast: "Copied all {count} [[count:UUID|UUIDs]]",
+        uuidRegeneratedToast: "Generated {count} {version} [[count:UUID|UUIDs]]",
+        uuidVersionTooltip: "Select UUID Version",
+        uuidVersionV4: "UUID v4 (Random)",
+        uuidVersionV7: "UUID v7 (Time-ordered)",
+        uuidVersionV1: "UUID v1 (Timestamp)",
+        uuidFormatStandard: "Standard Lowercase",
+        uuidFormatUpper: "Standard Uppercase",
+        uuidFormatNoDash: "No-Dash Lowercase",
+        uuidFormatNoDashUpper: "No-Dash Uppercase",
+        uuidFormatSubmenu: "Output Format",
+        uuidCountSubmenu: "Batch Count",
+        uuidCountOption: "Generate {count}",
+        uuidSectionResults: "Results ({count} · {version} · {format})",
+        uuidSectionFormats: "Output Formats",
+        uuidEnterCopyHint: "Enter to copy",
+        uuidFormatSelected: "Selected",
+        uuidFormatSwitchHint: "Enter to switch",
+        uuidSetFormatAction: "Switch to {format}",
+        uuidRegenerateWithFormat: "Regenerate with This Format",
+        uuidFormatSwitchedToast: "Switched to {format}",
+        uuidNoMatchTitle: "No matching UUIDs",
+        uuidNoMatchSub: "Clear filter or regenerate the batch",
+        uuidClearFilter: "Clear Filter"
     }
-}, { defaultLocale: "zh-CN" });
+}, { defaultLocale: "en-US" });
+export const t = (key, params) => {
+    const out = rawT(key, params);
+    if (!out.includes('[['))
+        return out;
+    return out.replace(/\[\[([A-Za-z0-9_.-]+):([^|\]]+)\|([^\]]+)\]\]/g, (_m, k, one, other) => {
+        const v = params?.[k];
+        const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/,/g, ''));
+        return n === 1 ? one : other;
+    });
+};

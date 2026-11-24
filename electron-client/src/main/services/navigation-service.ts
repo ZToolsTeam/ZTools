@@ -10,6 +10,7 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { t } from '../i18n/index.js'
 import type { SidecarManager } from './sidecar-manager.js'
 
 const execFileAsync = promisify(execFile)
@@ -62,10 +63,10 @@ export interface NavigationServiceOptions {
 
 /** macOS 窗口脚本找不到目标进程时的返回值（应用已退出） */
 const MACOS_WINDOW_NOT_FOUND = 'not_found'
-const MACOS_WINDOW_NOT_FOUND_ERROR = '窗口所属的应用已退出'
+const MACOS_WINDOW_NOT_FOUND_ERROR = 'Application owning the window has exited'
 /** 当前平台没有对应实现、什么也没执行时返回的错误，调用方据此提示「不支持」而不是成功 */
-const NAVIGATION_UNSUPPORTED_ERROR = 'unsupported: 当前系统不支持该操作'
-const MENU_CLICK_UNSUPPORTED_ERROR = 'unsupported: 当前系统不支持点击菜单命令，仅 macOS 支持'
+const NAVIGATION_UNSUPPORTED_ERROR = 'unsupported: operation is not supported on the current platform'
+const MENU_CLICK_UNSUPPORTED_ERROR = 'unsupported: clicking menu items is only supported on macOS'
 
 /** 激活 pid 对应应用并抬起指定序号的窗口（argv: pid, 窗口序号） */
 const MACOS_ACTIVATE_WINDOW_JXA = `
@@ -156,7 +157,7 @@ function run() {
     } catch (e) {
       lastErr = e;
       var msg = String(e);
-      if (/assistive|not allowed|not authori[sz]ed|permission|辅助功能|权限|-1719|-25211|-1743/i.test(msg)) {
+      if (/assistive|not allowed|not authori[sz]ed|permission|accessibility|EACCES|EPERM|-1719|-25211|-1743/i.test(msg)) {
         throw new Error("ACCESSIBILITY_PERMISSION_DENIED: " + msg);
       }
     }
@@ -250,8 +251,8 @@ export class NavigationService {
       try {
         windows = await this.queryWindowsFromSystem()
       } catch (err) {
-        const detail = err instanceof Error && err.message ? `：${err.message}` : ''
-        throw new Error(`无法读取系统窗口列表，请检查辅助功能与自动化权限${detail}`, { cause: err })
+        const detail = err instanceof Error && err.message ? `: ${err.message}` : ''
+        throw new Error(`Unable to read system window list; check accessibility and automation permissions${detail}`, { cause: err })
       }
     }
 
@@ -424,7 +425,7 @@ export class NavigationService {
           }
         })
       } catch (error) {
-        throw new Error('无法读取应用菜单，请检查辅助功能与自动化权限', { cause: error })
+        throw new Error('Unable to read application menu; check accessibility and automation permissions', { cause: error })
       }
     } else if (this.platform === 'win32') {
       try {
@@ -436,7 +437,7 @@ export class NavigationService {
           items.push(
             {
               id: `win-act:${win.hwnd}`,
-              title: `切换到窗口: ${shortTitle}`,
+              title: t('navigation.windowAction.switchTo', { title: shortTitle }),
               appName,
               path: ['Window', `Activate: ${shortTitle}`],
               shortcut: 'Alt+Tab',
@@ -445,7 +446,7 @@ export class NavigationService {
             },
             {
               id: `win-max:${win.hwnd}`,
-              title: `[${appName}] 最大化窗口 (Maximize)`,
+              title: t('navigation.windowAction.maximize', { appName }),
               appName,
               path: ['Window', 'Maximize'],
               shortcut: 'Win+Up',
@@ -454,7 +455,7 @@ export class NavigationService {
             },
             {
               id: `win-left:${win.hwnd}`,
-              title: `[${appName}] 左半屏分屏 (Left Half)`,
+              title: t('navigation.windowAction.leftHalf', { appName }),
               appName,
               path: ['Window', 'Move to Left Half'],
               shortcut: 'Win+Left',
@@ -463,7 +464,7 @@ export class NavigationService {
             },
             {
               id: `win-right:${win.hwnd}`,
-              title: `[${appName}] 右半屏分屏 (Right Half)`,
+              title: t('navigation.windowAction.rightHalf', { appName }),
               appName,
               path: ['Window', 'Move to Right Half'],
               shortcut: 'Win+Right',
@@ -472,7 +473,7 @@ export class NavigationService {
             },
             {
               id: `win-close:${win.hwnd}`,
-              title: `[${appName}] 关闭窗口: ${shortTitle}`,
+              title: t('navigation.windowAction.close', { appName, title: shortTitle }),
               appName,
               path: ['File', `Close: ${shortTitle}`],
               shortcut: 'Alt+F4',
@@ -482,7 +483,7 @@ export class NavigationService {
           )
         }
       } catch (error) {
-        throw new Error('无法读取应用菜单，请检查辅助功能与自动化权限', { cause: error })
+        throw new Error('Unable to read application menu; check accessibility and automation permissions', { cause: error })
       }
     }
 
@@ -532,17 +533,17 @@ export class NavigationService {
         const clicked = `Window > ${preset}`
         const activated = await this.activateWindow(targetHwnd)
         if (!activated.success) {
-          return { success: false, clicked, error: activated.error ?? '激活目标窗口失败' }
+          return { success: false, clicked, error: activated.error ?? 'Failed to activate target window' }
         }
         if (!this.sidecars) {
           // 窗口布局由原生辅助进程执行，没有辅助进程时什么也没做，不能报成功
-          return { success: false, clicked, error: '窗口布局需要原生辅助进程，当前不可用' }
+          return { success: false, clicked, error: 'Window layout requires the native helper process, which is currently unavailable' }
         }
         try {
           const managed = await this.sidecars.manageWindow(preset)
           return managed.success
             ? { success: true, clicked }
-            : { success: false, clicked, error: managed.error ?? '窗口布局调整失败' }
+            : { success: false, clicked, error: managed.error ?? 'Failed to adjust window layout' }
         } catch (err: unknown) {
           return { success: false, clicked, error: err instanceof Error ? err.message : String(err) }
         }
@@ -562,7 +563,7 @@ export class NavigationService {
     }
 
     if (!targetPath || targetPath.length < 2) {
-      return { success: false, error: '无效的菜单路径 (需要至少包含顶级菜单与菜单项名称)' }
+      return { success: false, error: 'Invalid menu path (requires at least a top-level menu and a menu item name)' }
     }
 
     const topMenuName = String(targetPath[0] ?? '').trim()

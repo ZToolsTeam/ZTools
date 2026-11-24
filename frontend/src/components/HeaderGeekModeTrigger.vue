@@ -4,7 +4,7 @@
     @mouseenter="handleMouseEnter"
     @mouseleave="handleMouseLeave"
   >
-    <!-- 切到悬浮条：图标按钮 + 快捷键，与设计稿一致 -->
+    <!-- 切到悬浮条：图标按钮（Ctrl+U 快捷键在全局保留，按钮本身不再展示快捷键提示） -->
     <button
       ref="triggerBtnRef"
       type="button"
@@ -18,8 +18,6 @@
         <path d="M7 12h6" />
       </svg>
       <span class="launcher-trigger-text whitespace-nowrap">{{ t('geekTrigger.label') }}</span>
-      <!-- 这里显示的是「切到悬浮条」本身的快捷键；全局唤醒键在悬停说明里介绍 -->
-      <ShortcutKeys :combo="TOGGLE_MODE_SHORTCUT" />
     </button>
 
     <!-- 悬停引导浮层 -->
@@ -158,7 +156,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   height: 32px;
-  padding: 0 6px 0 8px;
+  padding: 0 8px;
   border: 1px solid transparent;
   border-radius: var(--rc-radius-md);
   background: transparent;

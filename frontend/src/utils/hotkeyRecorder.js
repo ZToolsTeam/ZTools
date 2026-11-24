@@ -1,10 +1,18 @@
 import { BUILTIN_SHORTCUT_HINTS, SHELL_SHORTCUTS } from '@/utils/shellShortcuts'
 import { t } from '@/i18n'
 
-export const HOTKEY_RULE_DESCRIPTION = t('hotkey.recorder.ruleBase')
+export const HOTKEY_RULE_DESCRIPTION_KEY = 'hotkey.recorder.ruleBase'
+export const HOTKEY_WAIT_TEXT_KEY = 'hotkey.recorder.waitDefault'
+export const HOTKEY_UNSUPPORTED_TEXT_KEY = 'hotkey.recorder.unsupportedWin'
 
-export const HOTKEY_WAIT_TEXT = t('hotkey.recorder.waitDefault')
-export const HOTKEY_UNSUPPORTED_TEXT = t('hotkey.recorder.unsupportedWin')
+/** 动态获取默认快捷键规则说明（避免模块顶层静态调用 t() 导致热切换冻结） */
+export const getDefaultHotkeyRuleDescription = () => t(HOTKEY_RULE_DESCRIPTION_KEY)
+
+/** 动态获取默认等待录入提示 */
+export const getDefaultHotkeyWaitText = () => t(HOTKEY_WAIT_TEXT_KEY)
+
+/** 动态获取默认不支持提示 */
+export const getDefaultHotkeyUnsupportedText = () => t(HOTKEY_UNSUPPORTED_TEXT_KEY)
 
 const DOUBLE_MODIFIER_CANONICAL = Object.freeze({
   doublectrl: 'DoubleCtrl',
@@ -251,17 +259,102 @@ export function getShellReserveWarning(hotkey) {
   return t('hotkey.recorder.shellReserveWarning', { label: t(labelKey) })
 }
 
+const SAFE_SHORTCUT_MODIFIER_TOKENS = new Set([
+  'ctrl',
+  'control',
+  'alt',
+  'option',
+  'shift',
+  'cmd',
+  'command',
+  'meta',
+  'super',
+  'win',
+  'commandorcontrol',
+  'cmdorctrl',
+  '⌘',
+  '⌥',
+  '⇧',
+  '⌃'
+])
+
+const SAFE_SHORTCUT_KEY_TOKENS = new Set([
+  'space',
+  'spacebar',
+  'tab',
+  'enter',
+  'return',
+  'escape',
+  'esc',
+  'backspace',
+  'delete',
+  'del',
+  'insert',
+  'ins',
+  'home',
+  'end',
+  'pageup',
+  'pagedown',
+  'pgup',
+  'pgdn',
+  'up',
+  'down',
+  'left',
+  'right',
+  'arrowup',
+  'arrowdown',
+  'arrowleft',
+  'arrowright',
+  'plus',
+  'minus',
+  'comma',
+  'period',
+  'slash',
+  'backslash',
+  'backquote'
+])
+
+function isSafeShortcutToken(token) {
+  if (!token || /\s/.test(token)) return false
+  const lower = token.toLowerCase()
+  if (SAFE_SHORTCUT_MODIFIER_TOKENS.has(lower) || SAFE_SHORTCUT_KEY_TOKENS.has(lower)) {
+    return true
+  }
+  if (/^f([1-9]|1[0-9]|2[0-4])$/.test(lower)) return true
+  // 单字符物理键（A-Z、0-9 及常用标点如 ` ~ , . / - = [ ] ; ' \）
+  if (token.length === 1 && /^[\x21-\x7e]$/.test(token) && token !== '(' && token !== ')') {
+    return true
+  }
+  return false
+}
+
+function isPendingModifierSequence(text) {
+  if (typeof text !== 'string') return false
+  const trimmed = text.trim()
+  if (!trimmed.endsWith('+...')) return false
+  const prefix = trimmed.slice(0, -4)
+  if (!prefix) return false
+  const parts = prefix.split('+').map((part) => part.trim())
+  return parts.length > 0 && parts.every((part) => SAFE_SHORTCUT_MODIFIER_TOKENS.has(part.toLowerCase()))
+}
+
 /**
- * 判断快捷键字符串是否可安全传给 <ShortcutKeys>（禁止传入含本地化说明文字的错误字符串）
+ * 判断快捷键字符串是否可安全传给 <ShortcutKeys>（禁止传入中英文说明提示语、括号注释或未知状态文本）
  */
 export function isSafeShortcutKeysCombo(hotkey, platform = 'unknown', supportsDoubleModifierHotkeys = false) {
-  if (typeof hotkey !== 'string' || !hotkey.trim()) return false
-  // 排除包含全角/半角括号或中文提示的说明字符串（如「平台未识别」「Unsupported by host」）
-  if (/[\u4e00-\u9fff（）()]/.test(hotkey)) return false
-  if (isDoubleModifierHotkey(hotkey)) {
+  if (typeof hotkey !== 'string') return false
+  const trimmed = hotkey.trim()
+  if (!trimmed) return false
+  // 排除包含全角/半角括号、中文字符、句末省略号或句子级说明文本的提示字符串
+  if (/[\u4e00-\u9fff（）()]/.test(trimmed) || trimmed.includes('...')) return false
+  if (isDoubleModifierHotkey(trimmed)) {
     return platform === 'windows' && Boolean(supportsDoubleModifierHotkeys)
   }
-  return true
+  const tokens = trimmed.split('+').map((part) => part.trim())
+  if (tokens.length === 0 || tokens.length > 5 || tokens.some((part) => !part)) {
+    return false
+  }
+  return tokens.every(isSafeShortcutToken)
 }
 
 export function getHotkeyWaitText(platform = 'unknown', allowDoubleTap = false) {
@@ -529,8 +622,7 @@ export function interpretRecorderKeydown(event, options = {}) {
   }
   const isKeys =
     result.status === 'pending' &&
-    String(result.text).endsWith('...') &&
-    !/[\u4e00-\u9fff（）()]/.test(String(result.text))
+    isPendingModifierSequence(result.text)
   return { action: result.status, hotkey: result.hotkey, text: result.text, isKeys }
 }
 

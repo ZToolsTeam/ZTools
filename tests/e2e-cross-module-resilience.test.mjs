@@ -2,17 +2,17 @@
  * ZTools 端到端全链路集成与异常混沌压力测试套件
  * (E2E Cross-Module Resilience & Chaos Fault-Injection Test Suite)
  * 
- * 覆盖 10 大核心关键链路：
+ * 覆盖核心关键链路：
  * 1. UI 唤醒与帧同步异常与竞态压力测试 (FrameSync + HotKey Chaos)
  * 2. 原生侧车中途崩溃、乱码传输与服务降级容灾测试 (Sidecar Chaos)
  * 3. Raycast 声明式应用运行时异常隔离 (Declarative Runtime Exception Isolation)
  * 4. GitOps 恶意插件伪装与绕过静态检测对抗测试 (AST Security Evasion)
  * 5. AI 智能调度与 MCP 工具链全链路串联及容灾 (AI + MCP E2E Loop & Failover)
  * 6. 去中心化 E2EE 存储篡改与冲突容灾测试 (E2EE Chaos)
- * 7. Raycast 闭源内置 3 大核心能力端到端集成与破坏性容灾测试 (Core Productivity Chaos)
  * 8. 开源版本地优先：不登录、不联网、不上报 (Local-First Offline Edition)
- * 9. M1.5 治理与系统设置套件（Settings、Wrapped）抗毁性与容灾测试 (Governance & Settings Chaos)
  * 10. Raycast Script Commands 运行时与命令行沙箱安全抗毁性测试 (Script Commands Sandbox Chaos)
+ * 11. 核心体验与高频功能打磨端到端集成与破坏性容灾测试 (FrameSync + ClipboardHistoryService)
+ * 12. 核心效率流端到端集成与破坏性容灾测试 (Calculator, WindowManagementService, Pinyin, SnippetsService, ScriptCommandsService, Changelog)
  */
 
 import assert from 'node:assert/strict';
@@ -43,8 +43,6 @@ import { WindowManagementService, hasWindowBoundsChanged } from '../electron-cli
 import { SnippetsService, parseSnippetArguments, hasSnippetArguments } from '../electron-client/out/main/services/snippets-service.js';
 import { ScriptCommandsService, parseAnsiOutput, stripAnsiCodes, extractUrlsFromOutput, parseRefreshTimeMs } from '../electron-client/out/main/services/script-commands-service.js';
 import { findPinyinMatchInText, getHighlightPartsWithPinyin, getPinyinFull } from '../frontend/src/utils/pinyinSearch.js';
-import { getFileQuickLook, calculateFileSha256 } from '../packages/declarative-ui/dist/examples/everything-file-search/search-service.js';
-import { detectClipboardContentType, parseColorDetails } from '../packages/declarative-ui/dist/examples/clipboard-history/clipboard-storage.js';
 // 主搜索框内联计算与内置计算器插件共用同一份引擎；引擎在官方插件源码 plugins/calculator 里，公开客户端仓库没有 plugins/
 const { evaluateCalculatorQuery } = (await importIfPresent(
   '../plugins/calculator/dist/calculator-engine.js',
@@ -70,33 +68,7 @@ const {
   showToast,
   LocalStorage,
   Clipboard,
-  renderDeclarativeRoot,
-  ClipboardHistoryCommand,
-  filterClipboardItems,
-  SAMPLE_CLIPBOARD_ITEMS,
-  SnippetsCommand,
-  SnippetArgumentFormView,
-  filterSnippets,
-  expandSnippetTemplate,
-  SAMPLE_SNIPPETS,
-  WindowManagementCommand,
-  WINDOW_ACTIONS,
-  filterWindowActions,
-  saveWindowState,
-  getSavedWindowState,
-  recordExternalForegroundWindow,
-  getLastExternalForegroundWindow,
-  SettingsCommand,
-  SettingsFormView,
-  filterSettingsSections,
-  sanitizePreferences,
-  RaycastCoreCommand,
-  RaycastWrappedCommand,
-  calculateWrappedStats,
-  sanitizeWrappedStats,
-  TrialNudgesCommand,
-  WindowsShortcutsCommand,
-  getWindowsShortcuts
+  renderDeclarativeRoot
 } = declarativeUi;
 
 
@@ -692,98 +664,6 @@ describe('【链路 6】去中心化 E2EE 存储篡改与冲突容灾测试', ()
   });
 });
 
-describe('【链路 7】Raycast 闭源内置 3 大核心能力端到端集成与破坏性容灾测试', () => {
-  it('异常测试 7.1: 剪贴板超限并发淘汰、单条删除与置顶持久化韧性测试', async () => {
-    // 模拟 100 条高频剪贴板记录快速灌入
-    const mockItems = [];
-    for (let i = 0; i < 100; ++i) {
-      mockItems.push({
-        id: `clip-flood-${i}`,
-        type: i % 4 === 0 ? 'code' : i % 4 === 1 ? 'image' : i % 4 === 2 ? 'files' : 'text',
-        content: `Flood clipboard entry content ${i}`,
-        preview: `Flood ${i}`,
-        copiedAt: Date.now() - (100 - i) * 1000,
-        pinned: i === 0 || i === 50 // 2 items pinned
-      });
-    }
-
-    // 过滤与排序
-    const filtered = filterClipboardItems(mockItems, { type: 'all' });
-    assert.equal(filtered.length, 100);
-    // 置顶项必须排在最前面
-    assert.equal(filtered[0].pinned, true);
-    assert.equal(filtered[1].pinned, true);
-
-    // 模拟清空未置顶条目
-    const retained = filtered.filter(item => item.pinned);
-    assert.equal(retained.length, 2, '清空非置顶记录后必须精确保留置顶条目');
-
-    // 挂载声明式应用
-    const root = renderDeclarativeRoot(ClipboardHistoryCommand);
-    const desc = root.getLatest();
-    assert.equal(desc.type, 'List');
-    assert.equal(desc.props.searchBarAccessory.type, 'List.Dropdown');
-    root.unmount();
-  });
-
-  it('异常测试 7.2: Snippets 动态模板占位符解析、畸形占位符防御与高频击键匹配', async () => {
-    // 1. 占位符完整性测试
-    const clipboardText = 'High Priority Secret Token 999';
-    const tmpl = 'Bearer {clipboard} at {date} {time} focus [{cursor}]';
-    const expansion = expandSnippetTemplate(tmpl, clipboardText);
-
-    assert.ok(expansion.expanded.includes(`Bearer ${clipboardText}`));
-    assert.ok(expansion.expanded.endsWith('focus []'));
-    assert.equal(expansion.cursorOffset, 1, '光标应精准停在括号内部');
-
-    // 2. 破坏性与畸形占位符对抗测试
-    const malformed1 = '{unclosed_brace_and_symbols';
-    assert.equal(expandSnippetTemplate(malformed1).expanded, malformed1);
-
-    const malformed2 = '{{{nested}}}';
-    assert.doesNotThrow(() => {
-      expandSnippetTemplate(malformed2);
-    });
-
-    // 3. 高频过滤测试
-    const filtered = filterSnippets(SAMPLE_SNIPPETS, { query: ':shrug' });
-    assert.equal(filtered.length, 1);
-    assert.equal(filtered[0].keyword, ':shrug');
-
-    const root = renderDeclarativeRoot(SnippetsCommand);
-    const desc = root.getLatest();
-    assert.equal(desc.type, 'List');
-    root.unmount();
-  });
-
-  it('异常测试 7.3: Window Management 15 种布局几何算法覆盖、多显示器越界保护与非法动作拦截防御测试', async () => {
-    // 验证所有 15 种动作在目录中均正确定义
-    assert.ok(WINDOW_ACTIONS.length >= 15);
-    const actions = WINDOW_ACTIONS.map(a => a.id);
-    assert.ok(actions.includes('left-half'));
-    assert.ok(actions.includes('right-half'));
-    assert.ok(actions.includes('top-half'));
-    assert.ok(actions.includes('bottom-half'));
-    assert.ok(actions.includes('maximize'));
-    assert.ok(actions.includes('first-third'));
-    assert.ok(actions.includes('next-display'));
-
-    // 模糊搜索测试
-    const filteredHalf = filterWindowActions(WINDOW_ACTIONS, { query: '半屏' });
-    assert.ok(filteredHalf.length >= 4);
-
-    // 非法与空搜索防御性测试
-    const nonExistent = filterWindowActions(WINDOW_ACTIONS, { query: 'NON_EXISTENT_WINDOW_ACTION' });
-    assert.equal(nonExistent.length, 0);
-
-    const root = renderDeclarativeRoot(WindowManagementCommand);
-    const desc = root.getLatest();
-    assert.equal(desc.type, 'List');
-    assert.ok(desc.children.length >= 4);
-    root.unmount();
-  });
-});
-
 describe('【链路 8】开源版本地优先：不登录、不联网、不上报', () => {
   it('全链路闭环 8.1: 开源版账号始终未登录、拿不到凭据、保存登录结果被拒绝，统计与更新来源全部为空且零网络请求', async () => {
     const originalFetch = globalThis.fetch;
@@ -828,101 +708,6 @@ describe('【链路 8】开源版本地优先：不登录、不联网、不上�
     } finally {
       globalThis.fetch = originalFetch;
     }
-  });
-});
-
-// =========================================================================
-// 链路 9：M1.5 治理与系统设置套件抗毁性与容灾测试 (Governance & Settings Chaos)
-// =========================================================================
-describe('【链路 9】M1.5 治理与系统设置套件抗毁性与容灾测试', () => {
-  it('异常测试 9.1: SettingsPreferences 即时存盘、数据极值防御与损坏配置自愈回退', async () => {
-    // 1. 极值与恶意数据防御：负数条数、超大条数、非法主题、非法热键
-    const maliciousInput = {
-      general: {
-        theme: 'hacked_neon_theme', // 未知非法主题
-        globalHotkey: '   ', // 空白无效热键
-        windowMode: 'invalid_mode'
-      },
-      launcher: {
-        sortAlgorithm: 'invalid_algo', // 非法算法
-        maxHistoryItems: -999, // 负数极值
-        searchSensitivity: 9999 // 越界超大灵敏度
-      },
-      advanced: {
-        proxyMode: 'alien_proxy',
-        logLevel: 'super_verbose'
-      }
-    };
-
-    const sanitized = sanitizePreferences(maliciousInput);
-
-    // 严格断言防御生效并恢复到安全边界/默认值
-    assert.equal(sanitized.general.globalHotkey, 'Alt+Space', '空白热键安全回退至默认 Alt+Space');
-    assert.equal(sanitized.general.theme, 'auto', '非法主题安全回退至系统默认 auto');
-    assert.equal(sanitized.general.windowMode, 'compact', '非法窗口模式回退为 compact');
-    assert.equal(sanitized.launcher.maxHistoryItems, 50, '非法负数条数安全纠正为合法默认条数 50');
-    assert.equal(sanitized.launcher.sortAlgorithm, 'frecency', '非法排序算法回退为 frecency');
-    assert.equal(sanitized.launcher.searchSensitivity, 80, '越界灵敏度回退为默认 80');
-    assert.equal(sanitized.advanced.proxyMode, 'system', '非法代理模式回退为 system');
-    assert.equal(sanitized.advanced.logLevel, 'info', '非法日志级别回退为 info');
-
-    // 2. 本地存储损坏自愈与容灾回退
-    const corruptedSettingsJson = '{ "general": { "theme": "dark" }, "launcher": [broken_json...,,,';
-    function safeLoadPreferences(rawJson) {
-      try {
-        const parsed = JSON.parse(rawJson);
-        return sanitizePreferences(parsed);
-      } catch {
-        // 捕获 JSON 解析破损并自愈恢复默认配置
-        return sanitizePreferences({});
-      }
-    }
-
-    const healed = safeLoadPreferences(corruptedSettingsJson);
-    assert.equal(healed.general.theme, 'auto');
-    assert.equal(healed.launcher.maxHistoryItems, 50);
-
-    // 3. 设置面板搜索过滤韧性：中文、特殊正则字符、空字符输入
-    const allSections = filterSettingsSections('');
-    assert.ok(allSections.length >= 7, '默认返回全部系统设置分区');
-
-    const filteredProxy = filterSettingsSections('代理');
-    assert.ok(filteredProxy.length > 0);
-    assert.equal(filteredProxy[0].key, 'advanced');
-
-    const regexInjection = filterSettingsSections('.*+?[]()^$');
-    assert.equal(regexInjection.length, 0, '特殊正则字符安全逃逸，不抛出 RegExp 语法错误');
-  });
-
-  it('统计与隐私 9.3: Raycast Wrapped 年度极客战报本地容错与私密性保护', async () => {
-    // 1. 战报统计入参极值与 NaN 容错清洗
-    const corruptedStats = {
-      year: 1990,
-      totalLaunches: -500, // 负数唤起
-      timeSavedMinutes: NaN, // 脏数据 NaN
-      topExtensions: null, // 非法扩展列表
-      topShortcuts: null,
-      aiTokenCount: -10000,
-      geekMasteryTier: 'hacked_tier'
-    };
-
-    const sanitizedWrapped = sanitizeWrappedStats(corruptedStats, 2026);
-    assert.equal(sanitizedWrapped.year, 2026, '非法超早期年份安全回退为目标年份');
-    assert.equal(sanitizedWrapped.totalLaunches, 100, '负数唤醒次数回退为安全兜底 100');
-    assert.equal(sanitizedWrapped.timeSavedMinutes, 75, '根据 100 次唤醒自动计算时间推导');
-    assert.equal(sanitizedWrapped.aiTokenCount, 0, '负数 Token 回退为 0');
-    assert.equal(sanitizedWrapped.geekMasteryTier, 'Master', '非法段位安全回退为 Master');
-    assert.deepEqual(sanitizedWrapped.topExtensions, []);
-    assert.deepEqual(sanitizedWrapped.topShortcuts, []);
-
-    // 2. 模拟计算年度真实战报并断言有效性
-    const annualStats = await calculateWrappedStats(2026);
-    assert.equal(annualStats.year, 2026);
-    assert.ok(annualStats.totalLaunches > 0);
-    assert.equal(annualStats.geekMasteryTier, 'Grandmaster');
-    assert.ok(annualStats.topExtensions.length >= 3);
-    assert.ok(annualStats.timeSavedMinutes > 0);
-    assert.ok(annualStats.aiTokenCount > 0);
   });
 });
 
@@ -1094,8 +879,7 @@ echo "hi"
 // ============================================================================
 // 链路 11: Phase 1 核心体验与高频功能打磨端到端集成与破坏性容灾测试 (Core Experience Resilience)
 // 包含: E1 内存深度瘦身(WorkingSet Trim)与唤醒状态机
-//       E2 文件秒搜“空格即时预览(Space Quick Look)”与动作矩阵
-//       E3 剪贴板历史智能卡片高保真预览与敏感凭据拦截
+//       E3 剪贴板历史敏感凭据拦截与去重
 // ============================================================================
 describe('【链路 11】Phase 1 核心体验与高频功能打磨端到端集成与破坏性容灾测试', () => {
   it('E1 内存瘦身与唤醒 11.1: FrameSyncManager 内存深度挂起释放与 WorkingSet Trim 执行', async () => {
@@ -1212,118 +996,6 @@ describe('【链路 11】Phase 1 核心体验与高频功能打磨端到端集�
 
     assert.ok(['visible', 'suspend_pending', 'suspended'].includes(manager.state), '高频交替切换后状态机必须合法且无死锁');
     manager.dispose();
-  });
-
-  it('E2 文件秒搜 11.3: 空格即时预览(Space Quick Look)正常提取、空文件与超大文件防爆截断', async () => {
-    const tmpDir = path.resolve('tests/tmp-quicklook-test');
-    await fs.mkdir(tmpDir, { recursive: true });
-
-    const emptyFilePath = path.join(tmpDir, 'empty.txt');
-    await fs.writeFile(emptyFilePath, '', 'utf8');
-
-    const bigCodePath = path.join(tmpDir, 'big-code.ts');
-    const bigLines = Array.from({ length: 400 }, (_, i) => `export const variable_${i} = ${i};`).join('\n');
-    await fs.writeFile(bigCodePath, bigLines, 'utf8');
-
-    const mdPath = path.join(tmpDir, 'readme.md');
-    await fs.writeFile(mdPath, '# Hello Quick Look\n\nThis is a markdown preview test.', 'utf8');
-
-    try {
-      // 1. 空文件拦截 (0 字节)
-      const emptyResult = await getFileQuickLook({
-        name: 'empty.txt',
-        path: emptyFilePath,
-        isDir: false,
-        size: 0,
-        mtime: Date.now()
-      });
-      assert.equal(emptyResult.previewType, 'empty', '空文件必须返回 empty 类型');
-      assert.equal(emptyResult.size, 0);
-
-      // 2. 超大文件截取前 200 行防内存爆破
-      const bigResult = await getFileQuickLook({
-        name: 'big-code.ts',
-        path: bigCodePath,
-        isDir: false,
-        size: Buffer.byteLength(bigLines),
-        mtime: Date.now()
-      });
-      assert.equal(bigResult.previewType, 'code', 'TypeScript 文件必须识别为 code');
-      assert.equal(bigResult.codeLanguage, 'typescript');
-      assert.equal(bigResult.totalLines, 400);
-      assert.equal(bigResult.truncated, true, '超过200行的大文件必须标记截断 truncated=true');
-      const lines = bigResult.content.split('\n');
-      assert.equal(lines.length, 200, '必须严格截取前 200 行');
-
-      // 3. Markdown 文件即时预览
-      const mdResult = await getFileQuickLook({
-        name: 'readme.md',
-        path: mdPath,
-        isDir: false,
-        size: 50,
-        mtime: Date.now()
-      });
-      assert.equal(mdResult.previewType, 'markdown');
-      assert.match(mdResult.content, /Hello Quick Look/);
-
-      // 4. 不存在文件与异常捕获安全降级
-      const nonExistentResult = await getFileQuickLook({
-        name: 'ghost.ts',
-        path: path.join(tmpDir, 'ghost-non-existent.ts'),
-        isDir: false,
-        size: 100,
-        mtime: Date.now()
-      });
-      assert.equal(nonExistentResult.previewType, 'error', '不存在文件必须安全降级为 error');
-      assert.ok(nonExistentResult.error.length > 0);
-
-      // 5. 目录预览
-      const dirResult = await getFileQuickLook({
-        name: 'tmp-quicklook-test',
-        path: tmpDir,
-        isDir: true,
-        size: 0,
-        mtime: Date.now()
-      });
-      assert.equal(dirResult.previewType, 'directory');
-      assert.ok(dirResult.dirEntries.length >= 3, '目录必须正确读出包含的子文件');
-
-      // 6. SHA-256 哈希计算
-      const emptySha256 = await calculateFileSha256(emptyFilePath);
-      assert.equal(emptySha256, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', '空文件 SHA-256 必须准确');
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it('E3 剪贴板历史 11.4: 智能卡片识别矩阵(Color/JSON/Code/Link/Text)与调色盘换算', () => {
-    // 1. 颜色识别
-    assert.equal(detectClipboardContentType('#3B82F6'), 'color');
-    assert.equal(detectClipboardContentType('#fff'), 'color');
-    assert.equal(detectClipboardContentType('rgb(255, 0, 128)'), 'color');
-    assert.equal(detectClipboardContentType('hsl(210, 100%, 50%)'), 'color');
-
-    // 2. 链接识别
-    assert.equal(detectClipboardContentType('https://github.com/microsoft/terminal'), 'link');
-    assert.equal(detectClipboardContentType('http://localhost:3000/dashboard'), 'link');
-
-    // 3. JSON 识别
-    assert.equal(detectClipboardContentType('{"id": 1, "name": "ZTools"}'), 'json');
-    assert.equal(detectClipboardContentType('[1, 2, 3, 4]'), 'json');
-
-    // 4. 代码片段识别
-    assert.equal(detectClipboardContentType('function calculateSum(a, b) {\n  return a + b;\n}'), 'code');
-    assert.equal(detectClipboardContentType('export const config = { enabled: true };'), 'code');
-
-    // 5. 纯文本识别
-    assert.equal(detectClipboardContentType('这是一个普通的测试剪贴板文本'), 'text');
-
-    // 6. 颜色色彩空间换算测试
-    const colorInfo = parseColorDetails('#3B82F6');
-    assert.ok(colorInfo !== null);
-    assert.equal(colorInfo.hex, '#3B82F6');
-    assert.equal(colorInfo.rgb, 'rgb(59, 130, 246)');
-    assert.match(colorInfo.hsl, /hsl\(\d+, 100%, 50%\)/);
   });
 
   it('E3 剪贴板历史 11.5: 密码管理器黑名单拦截、Windows 保护标记与高熵脱敏防泄漏', async () => {
@@ -1484,12 +1156,7 @@ describe('【链路 12】Phase 2 & Phase 3 核心效率流端到端集成与破�
     assert.equal(restoreResult2.rect.x, 0);
     assert.equal(restoreResult2.rect.width, 960);
 
-    // 5. 验证前端 window-actions.ts 的状态快照与内部句柄拦截
-    recordExternalForegroundWindow('hwnd-chrome-777');
-    recordExternalForegroundWindow('ztools-main');
-    assert.equal(getLastExternalForegroundWindow(), 'hwnd-chrome-777');
-    saveWindowState('hwnd-chrome-777', { x: 50, y: 60, width: 1000, height: 700 });
-    assert.deepEqual(getSavedWindowState('hwnd-chrome-777'), { x: 50, y: 60, width: 1000, height: 700 });
+    // 5. 验证窗口几何变更检测工具
     assert.equal(hasWindowBoundsChanged({ x: 50, y: 60, width: 1000, height: 700 }, { x: 50, y: 60, width: 1000, height: 700 }), false);
     assert.equal(hasWindowBoundsChanged({ x: 50, y: 60, width: 1000, height: 700 }, { x: 0, y: 0, width: 960, height: 1040 }), true);
   });
@@ -1564,26 +1231,7 @@ describe('【链路 12】Phase 2 & Phase 3 核心效率流端到端集成与破�
       required: true
     });
 
-    // 2. 验证声明式表单视图 SnippetArgumentFormView 渲染树
-    const snippetItem = {
-      id: 'snip-deploy-1',
-      name: 'Deploy Command',
-      keyword: ';deploy',
-      snippet: template,
-      content: template,
-      category: 'code',
-      createdAt: Date.now()
-    };
-    const root = renderDeclarativeRoot(() => SnippetArgumentFormView({ snippet: snippetItem }));
-    const formDescriptor = root.getLatest();
-    assert.equal(formDescriptor.type, 'Form');
-    const childTypes = formDescriptor.children.map((c) => c?.type).filter(Boolean);
-    assert.ok(childTypes.includes('Form.TextField'), '应包含普通文本输入框');
-    assert.ok(childTypes.includes('Form.Dropdown'), '应包含下拉选择框');
-    assert.ok(childTypes.includes('Form.PasswordField'), '应包含密码输入框');
-    root.unmount();
-
-    // 3. 验证 SnippetsService 拦截需要填参的 Snippet 并在补全参数后关联回目标外部窗口
+    // 2. 验证 SnippetsService 拦截需要填参的 Snippet 并在补全参数后关联回目标外部窗口
     const snippetsService = new SnippetsService({ dbPath: ':memory:' });
     const created = snippetsService.createSnippet({
       name: 'Deploy Command',

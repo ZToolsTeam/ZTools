@@ -604,7 +604,7 @@ describe('MyPage Component', () => {
       expect(toastSpies.toastSuccess).not.toHaveBeenCalled()
     })
 
-    it('内置插件：右键菜单提供卸载并直接跳转设置页；裸按键盘 Delete 不再误触发弹窗', async () => {
+    it('内置插件：右键管理入口直接跳转设置页；裸按键盘 Delete 不再误触发弹窗', async () => {
       const bundled = { pluginId: 'calculator', name: '计算器' }
       await mountPage({ installedPlugins: [...basePlugins, bundled] })
       Modal.confirm.mockClear()
@@ -620,10 +620,9 @@ describe('MyPage Component', () => {
       wrapper.vm.showPluginMenu(bundled, { preventDefault() {}, clientX: 10, clientY: 10 })
       await flushPromises()
       expect(wrapper.find('.context-menu').exists()).toBe(true)
-      const dangerItem = wrapper.find('.context-menu .menu-item.danger')
-      expect(dangerItem.exists()).toBe(true)
-      expect(dangerItem.text()).toContain('卸载')
-      await dangerItem.trigger('click')
+      expect(wrapper.find('.context-menu .menu-item.danger').exists()).toBe(false)
+      const manageItem = wrapper.findAll('.context-menu .menu-item').find((item) => item.text().includes('管理内置插件'))
+      await manageItem.trigger('click')
       await flushPromises()
       expect(Modal.confirm).not.toHaveBeenCalled()
       expect(pluginsStore.uninstallPlugin).not.toHaveBeenCalled()

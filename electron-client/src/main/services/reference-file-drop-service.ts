@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
 import type { PathGrantRef } from '../../contracts/path-reference.js'
 import { PATH_REFERENCE_CONTRACT_VERSION } from '../../contracts/path-reference.js'
-import { errorCodes, toPublicError, ZToolsError } from '../../contracts/errors.js'
+import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import { toLocalizedPublicError } from '../ipc/error-localizer.js'
 import { IPC_EVENT_CHANNEL } from '../../contracts/ipc.js'
 import type { WindowRegistry } from '../windows/window-registry.js'
 import type { PathGrantService } from './path-grant-service.js'
@@ -12,7 +13,7 @@ const maximumFiles = 100, maximumFileBytes = 512 * 1024 * 1024, maximumTotalByte
 type DropRef = PathGrantRef & { fileUrl: string }
 type DropError = { index: number; code: string; message: string }
 type DropGrants = Pick<PathGrantService, 'create' | 'describe' | 'resourceUrl' | 'revoke'>
-const failed = () => new ZToolsError(errorCodes.fileError, '拖放文件授权或交付未完成')
+const failed = () => new ZToolsError(errorCodes.fileError, 'Dropped file authorization or delivery did not complete')
 
 /** Only isolated preload's trusted native File event uses this private channel. Not a public path-grant API. */
 export class ReferenceFileDropService {
@@ -72,11 +73,11 @@ export class ReferenceFileDropService {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       const v = value as Record<string, unknown>
       if (Object.keys(v).length !== 1 || !Number.isSafeInteger(v.overflowCount) || Number(v.overflowCount) <= maximumFiles || Number(v.overflowCount) > 1_000_000) {
-        throw new ZToolsError(errorCodes.invalidRequest, '拖放文件数量无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid dropped file count')
       }
-      return this.#publish(caller, [], [{ index: -1, code: errorCodes.fileTooLarge, message: '一次最多拖入100个文件' }], Number(v.overflowCount), validateIdentity)
+      return this.#publish(caller, [], [{ index: -1, code: errorCodes.fileTooLarge, message: 'At most 100 files can be dropped at once' }], Number(v.overflowCount), validateIdentity)
     }
-    if (!Array.isArray(value) || !value.length || value.length > maximumFiles) throw new ZToolsError(errorCodes.invalidRequest, '拖放文件数量须为1..100')
+    if (!Array.isArray(value) || !value.length || value.length > maximumFiles) throw new ZToolsError(errorCodes.invalidRequest, 'Dropped file count must be between 1 and 100')
     const references: DropRef[] = [], errors: DropError[] = [], acquired = new Set<string>(), seen = new Set<string>()
     let totalBytes = 0
     try {
@@ -87,7 +88,7 @@ export class ReferenceFileDropService {
           if (signal?.aborted) throw failed()
           const selected: unknown = value[index]
           if (typeof selected !== 'string' || !path.isAbsolute(selected) || selected.includes('\0') || Buffer.byteLength(selected) > 4096) {
-            throw new ZToolsError(errorCodes.invalidRequest, '拖放原生选择无效')
+            throw new ZToolsError(errorCodes.invalidRequest, 'Invalid native file drop selection')
           }
           if (seen.has(selected)) continue
           const grant = await this.grants.create(caller.webContentsId, selected, 'file', ['read'], signal)
@@ -96,7 +97,7 @@ export class ReferenceFileDropService {
           this.#caller(caller.webContentsId, caller); validateIdentity?.()
           if (signal?.aborted || grant.kind !== 'file' || !/^[A-Za-z0-9_-]{43}$/.test(current) || metadata.isDirectory) throw failed()
           if (!Number.isSafeInteger(metadata.size) || metadata.size < 0 || metadata.size > maximumFileBytes || metadata.size > maximumTotalBytes - totalBytes) {
-            throw new ZToolsError(errorCodes.fileTooLarge, '拖放文件超过大小上限')
+            throw new ZToolsError(errorCodes.fileTooLarge, 'Dropped file exceeds size limit')
           }
           const fileUrl = this.grants.resourceUrl(caller.webContentsId, current)
           references.push(Object.freeze({ grantId: current, displayName: grant.displayName, kind: 'file', operations: Object.freeze(['read'] as const), fileUrl }))
@@ -107,7 +108,7 @@ export class ReferenceFileDropService {
             try { await this.grants.revoke(caller.webContentsId, current); acquired.delete(current) }
             catch { this.#cleanupFailed = true; throw failed() }
           }
-          errors.push({ index, ...toPublicError(error instanceof ZToolsError ? error : failed()) })
+          errors.push({ index, ...toLocalizedPublicError(error instanceof ZToolsError ? error : failed()) })
         }
       }
       this.#caller(caller.webContentsId, caller)
@@ -133,11 +134,11 @@ export class ReferenceFileDropService {
 
   #caller(owner: number, expected?: CallerIdentity): CallerIdentity {
     if (this.#stopped) throw failed()
-    if (!Number.isSafeInteger(owner) || owner <= 0) throw new ZToolsError(errorCodes.permissionDenied, '拖放窗口身份无效')
+    if (!Number.isSafeInteger(owner) || owner <= 0) throw new ZToolsError(errorCodes.permissionDenied, 'Invalid drop target window identity')
     const caller = this.registry.get(owner)
     if (!caller || caller.type !== 'plugin' || caller.webContentsId !== owner || !caller.pluginId || !caller.pluginInstanceId ||
         (expected && (caller.pluginId !== expected.pluginId || caller.pluginInstanceId !== expected.pluginInstanceId))) {
-      throw new ZToolsError(errorCodes.permissionDenied, '拖放调用者不是当前注册插件实例')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Drop caller is not the currently registered plugin instance')
     }
     return { ...caller }
   }

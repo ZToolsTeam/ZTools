@@ -72,7 +72,7 @@ test('电池：macOS 笔记本、台式机与无法识别的 pmset 输出', () =
   assert.equal(parseMacBatteryStatusOutput("Now drawing from 'AC Power'\n -CP1500 (id=5)\t100%; AC attached; not charging\n").batteryState, 'absent')
   // 电池行没有电量：有电池、电量未知
   assert.equal(parseMacBatteryStatusOutput("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t(no estimate)\n").percent, 255)
-  assert.throws(() => parseMacBatteryStatusOutput('garbage'), /无法识别/)
+  assert.throws(() => parseMacBatteryStatusOutput('garbage'), /Unrecognized pmset output/)
 })
 
 test('电池：读取命令失败、超时、非零退出都写入 readError 而不是冒充“无电池”', async () => {
@@ -80,16 +80,16 @@ test('电池：读取命令失败、超时、非零退出都写入 readError 而
   const timeout = await readSystemBatteryStatus('win32', fail(Object.assign(new Error('killed'), { killed: true, signal: 'SIGTERM' })))
   assert.equal(timeout.batteryState, 'unknown')
   assert.equal(timeout.percent, 255)
-  assert.match(timeout.readError ?? '', /超时/)
+  assert.match(timeout.readError ?? '', /timed out/)
   const exit = await readSystemBatteryStatus('win32', fail(Object.assign(new Error('Command failed'), { code: 1, stderr: 'GetSystemPowerStatus failed\r\nat line 1' })))
-  assert.match(exit.readError ?? '', /退出码 1：GetSystemPowerStatus failed$/)
+  assert.match(exit.readError ?? '', /code 1: GetSystemPowerStatus failed$/)
   const missing = await readSystemBatteryStatus('darwin', fail(Object.assign(new Error('spawn'), { code: 'ENOENT' })))
   assert.match(missing.readError ?? '', /ENOENT/)
   const malformed = await readSystemBatteryStatus('win32', async () => '{')
   assert.equal(malformed.batteryState, 'unknown')
   assert.match(malformed.readError ?? '', /JSON/)
   const unsupported = await readSystemBatteryStatus('linux', async () => { throw new Error('不应执行') })
-  assert.match(unsupported.readError ?? '', /不支持/)
+  assert.match(unsupported.readError ?? '', /not supported/)
   assert.equal(describeBatteryCommandError('奇怪的错误'), '奇怪的错误')
 })
 

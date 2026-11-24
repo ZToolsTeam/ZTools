@@ -3,6 +3,7 @@
  * 与官方版 useUserStore 保持同样的字段与方法，公共页面可以无差别调用。
  */
 import { defineStore } from 'pinia'
+import { t } from '@/i18n'
 
 export const useUserStore = defineStore('user', {
   state: () => ({
@@ -12,7 +13,7 @@ export const useUserStore = defineStore('user', {
   }),
 
   getters: {
-    displayName: () => '本地用户',
+    displayName: () => t('common.localUser'),
     avatar: () => '',
     isGuest: () => true
   },

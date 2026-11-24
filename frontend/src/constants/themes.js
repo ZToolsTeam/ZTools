@@ -8,12 +8,12 @@ export const THEME_MODES = ['system', 'light', 'dark']
 export const DEFAULT_ACCENT = 'ember'
 
 export const ACCENT_OPTIONS = [
-  { value: 'ember', label: '余烬橙' },
-  { value: 'glacier', label: '冰川蓝' },
-  { value: 'jade', label: '松石翠' },
-  { value: 'iris', label: '星云紫' },
-  { value: 'crimson', label: '绯樱红' },
-  { value: 'mono', label: '钛金灰' }
+  { value: 'ember', labelKey: 'settings.appearance.accents.ember' },
+  { value: 'glacier', labelKey: 'settings.appearance.accents.glacier' },
+  { value: 'jade', labelKey: 'settings.appearance.accents.jade' },
+  { value: 'iris', labelKey: 'settings.appearance.accents.iris' },
+  { value: 'crimson', labelKey: 'settings.appearance.accents.crimson' },
+  { value: 'mono', labelKey: 'settings.appearance.accents.mono' }
 ]
 
 export const ACCENT_THEMES = ACCENT_OPTIONS.map((item) => item.value)

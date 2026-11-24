@@ -136,7 +136,18 @@
             "financial uppercase"
           ]
         }
-      }
+      },
+      "screenshots": [
+        {
+          "file": "screenshots/en-US/01.png",
+          "title": "Instant Expression Evaluation"
+        }
+      ]
     }
-  }
+  },
+  "screenshots": [
+    {
+      "path": "screenshots/02-action-panel.png"
+    }
+  ]
 }

@@ -134,30 +134,32 @@ describe('HeaderGeekModeTrigger 交互与全异常覆盖测试套件', () => {
     }).not.toThrow()
   })
 
-  it('[回归] 显示用户实际设置的唤醒键，而不是写死的默认 Alt+Space', async () => {
+  it('[回归] 按钮本身不再显示 Ctrl+U 快捷键，悬停说明仍展示用户实际设置的唤醒键与切回键', async () => {
     apiMock.getHotkey.mockResolvedValueOnce('Ctrl+Shift+Z')
     const wrapper = mount(HeaderGeekModeTrigger)
     await vi.waitFor(() => expect(currentGlobalWakeHotkey.value).toBe('Ctrl+Shift+Z'))
     await wrapper.vm.$nextTick()
-    // 按钮上显示的是「切到悬浮条」本身的快捷键，不是全局唤醒键
-    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys).map((c) => c.props('combo'))).toEqual([TOGGLE_MODE_SHORTCUT])
+    // 顶部按钮本身不再渲染快捷键徽标，但仍保留「悬浮条」入口文字
+    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys)).toHaveLength(0)
+    expect(wrapper.find('.launcher-trigger').text()).toContain('悬浮条')
     expect(TOGGLE_MODE_SHORTCUT).toBe('Ctrl+U')
-    // 全局唤醒键在悬停说明里，用用户实际设置的值
+    // 全局唤醒键与切回工作台快捷键仍在悬停说明里展示
     await wrapper.trigger('mouseenter')
     vi.advanceTimersByTime(150)
     await wrapper.vm.$nextTick()
     const guideKeys = wrapper.find('.guide-card').findAllComponents(ShortcutKeys).map((c) => c.props('combo'))
     expect(guideKeys).toContain('Ctrl+Shift+Z')
+    expect(guideKeys).toContain(TOGGLE_MODE_SHORTCUT)
     expect(guideKeys).not.toContain('Alt+Space')
     wrapper.unmount()
   })
 
-  it('全局唤醒关闭时按钮仍只显示切换快捷键，引导文案提示去设置里开启', async () => {
+  it('全局唤醒关闭时按钮不显示快捷键徽标，引导文案提示去设置里开启', async () => {
     const wrapper = mount(HeaderGeekModeTrigger)
     await vi.waitFor(() => expect(apiMock.getHotkey).toHaveBeenCalled())
     currentGlobalWakeHotkey.value = ''
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys).map((c) => c.props('combo'))).toEqual([TOGGLE_MODE_SHORTCUT])
+    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys)).toHaveLength(0)
     await wrapper.trigger('mouseenter')
     vi.advanceTimersByTime(150)
     await wrapper.vm.$nextTick()

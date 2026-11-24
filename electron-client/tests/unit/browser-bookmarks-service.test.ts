@@ -71,7 +71,7 @@ test('Firefox 只读查询包含未checkpoint的WAL；保留主库与WAL且正�
     assert.equal(result.bookmarks[0]!.title, '最新书签'); assert.equal(result.bookmarks[0]!.folderBreadcrumb, '根目录 / 学习')
     assert.deepEqual([digest(file), digest(`${file}-wal`)], before)
     db.exec('UPDATE moz_bookmarks SET parent=2 WHERE id=2')
-    assert.throws(() => readBookmarkSource(source(file, 'firefox')), /循环/)
+    assert.throws(() => readBookmarkSource(source(file, 'firefox')), /cycle/i)
   } finally { await service.stop(); db.close(); f.close() }
 })
 test('Firefox 拒绝递归 VIEW、虚表、非 rowid 主键和生成列，服务随后仍可读取', async () => {
@@ -92,7 +92,7 @@ test('Firefox 拒绝递归 VIEW、虚表、非 rowid 主键和生成列，服务
       const db = new DatabaseSync(file)
       db.exec(`CREATE TABLE moz_places(id INTEGER PRIMARY KEY,url TEXT); ${declaration}`); db.close()
       const before = digest(file)
-      await assert.rejects(service.scan({ operationId: `schema_${index}` }, caller, signal()), /表结构无效/)
+      await assert.rejects(service.scan({ operationId: `schema_${index}` }, caller, signal()), /Invalid Firefox .* table schema/)
       assert.equal(digest(file), before)
       fs.unlinkSync(file)
     }
@@ -100,7 +100,7 @@ test('Firefox 拒绝递归 VIEW、虚表、非 rowid 主键和生成列，服务
     try {
       assert.equal((await service.scan({ operationId: 'healthy' }, caller, signal())).bookmarks.length, 1)
       db.exec('DROP TABLE moz_places; CREATE TABLE moz_places(id INTEGER PRIMARY KEY DESC,url TEXT)')
-      await assert.rejects(service.scan({ operationId: 'bad_places' }, caller, signal()), /moz_places 表结构无效/)
+      await assert.rejects(service.scan({ operationId: 'bad_places' }, caller, signal()), /Invalid Firefox moz_places table schema/)
     } finally { db.close() }
   } finally { await service.stop(); f.close() }
 })
@@ -109,14 +109,14 @@ test('Firefox 在进入 JS 前拒绝巨型或错误类型字段，累计原始�
   try {
     for (const sql of ["UPDATE moz_bookmarks SET title=zeroblob(16777216) WHERE id=3", "UPDATE moz_bookmarks SET title=printf('%.*c',16385,'x') WHERE id=3", "UPDATE moz_places SET url=zeroblob(16777216)", "UPDATE moz_bookmarks SET parent=x'00' WHERE id=3", "UPDATE moz_bookmarks SET dateAdded=x'00' WHERE id=3"]) {
       db.exec(sql)
-      assert.throws(() => readBookmarkSource(source(file, 'firefox')), /字段类型无效或长度超限/)
+      assert.throws(() => readBookmarkSource(source(file, 'firefox')), /Invalid Firefox bookmark field type or length limit exceeded/)
       db.exec("UPDATE moz_bookmarks SET title='最新书签',parent=2,dateAdded=1730000000000000 WHERE id=3; UPDATE moz_places SET url='https://example.org/wal'")
     }
     db.exec('BEGIN')
     const insert = db.prepare('INSERT INTO moz_bookmarks VALUES(?,2,1,?,1,NULL)')
     for (let i = 4; i < 1304; i++) insert.run(i, '甲'.repeat(2000))
     db.exec('COMMIT')
-    assert.throws(() => readBookmarkSource(source(file, 'firefox')), /原始结果超过 7 MiB/)
+    assert.throws(() => readBookmarkSource(source(file, 'firefox')), /exceeds 7 MiB/)
   } finally { db.close(); f.close() }
 })
 test('Windows路径、Firefox profiles.ini自定义配置和同文件去重', () => {
@@ -146,10 +146,10 @@ test('损坏、无权限与超大来源显式告警；不存在/合法空库才�
     assert.match(result.warnings[0]!, /16 MiB/)
     if (process.getuid && process.getuid() !== 0) {
       fs.chmodSync(valid, 0)
-      try { assert.throws(() => scanBrowserBookmarks(f.env), /未能读取任何.*权限/) }
+      try { assert.throws(() => scanBrowserBookmarks(f.env), /Permission denied/i) }
       finally { fs.chmodSync(valid, 0o600) }
     }
-    assert.throws(() => scanBrowserBookmarks({ ...f.env, platform: 'unsupported' }), /不支持/)
+    assert.throws(() => scanBrowserBookmarks({ ...f.env, platform: 'unsupported' }), /not supported/i)
   } finally { f.close() }
 })
 test('解析拒绝过深或损坏树；过滤非网页链接，未知日期不冒充今天', () => {
@@ -179,15 +179,15 @@ test('取消隔离、重复调用、超时和服务退出后释放worker，拒�
   try {
     const task = service.scan({ operationId: 'cancel' }, caller, controller.signal)
     assert.equal(service.cancel({ operationId: 'cancel' }, { ...caller, webContentsId: 999 }).cancelRequested, false)
-    await assert.rejects(service.scan({ operationId: 'again' }, caller, signal()), /正在读取/)
+    await assert.rejects(service.scan({ operationId: 'again' }, caller, signal()), /already in progress/i)
     assert.equal(service.cancel({ operationId: 'cancel' }, caller).cancelRequested, true)
-    await assert.rejects(task, /取消/)
+    await assert.rejects(task, /cancelled/i)
     assert.equal((await service.scan({ operationId: 'retry' }, caller, signal())).sourcesRead, 0)
-    const stopped = service.scan({ operationId: 'stop' }, caller, signal()), rejected = assert.rejects(stopped, /取消/)
+    const stopped = service.scan({ operationId: 'stop' }, caller, signal()), rejected = assert.rejects(stopped, /cancelled/i)
     await service.stop(); await rejected
-    await assert.rejects(service.scan({ operationId: 'late' }, caller, signal()), /停止/)
+    await assert.rejects(service.scan({ operationId: 'late' }, caller, signal()), /stopped/i)
     const timeout = new BrowserBookmarksService(f.env, 1)
-    await assert.rejects(timeout.scan({ operationId: 'timeout' }, caller, signal()), /超时/); await timeout.stop()
+    await assert.rejects(timeout.scan({ operationId: 'timeout' }, caller, signal()), /timed out/i); await timeout.stop()
     controller.abort(); await assert.rejects(service.scan({ operationId: 'abort' }, caller, controller.signal))
   } finally { await service.stop(); f.close() }
 })
@@ -196,7 +196,7 @@ test('读取大量真实条目过程中取消，等待 worker 退出后可重新
   for (const item of data.roots.bookmark_bar.children) item.name = '测试书签'.repeat(200)
   const file = put(chrome(f.env), JSON.stringify(data))
   const started = Date.now(), task = service.scan({ operationId: 'running' }, caller, signal())
-  const rejected = assert.rejects(task, /取消/)
+  const rejected = assert.rejects(task, /cancelled/i)
   const timer = setTimeout(() => service.cancel({ operationId: 'running' }, caller), 150)
   try {
     await rejected
@@ -208,10 +208,10 @@ test('读取大量真实条目过程中取消，等待 worker 退出后可重新
 
 test('Safari 书签无权读取时提示完全磁盘访问，其他浏览器保持通用权限提示', () => {
   const denied = Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
-  assert.match(errorMessage(denied, 'safari'), /完全磁盘访问/)
-  assert.doesNotMatch(errorMessage(denied, 'chrome'), /完全磁盘访问/)
-  assert.match(errorMessage(denied), /文件访问权限/)
-  assert.equal(errorMessage(Object.assign(new Error('x'), { code: 'EBUSY' }), 'safari'), '浏览器正在使用书签，请稍后刷新')
+  assert.match(errorMessage(denied, 'safari'), /Full Disk Access/)
+  assert.doesNotMatch(errorMessage(denied, 'chrome'), /Full Disk Access/)
+  assert.match(errorMessage(denied), /file access permissions/)
+  assert.equal(errorMessage(Object.assign(new Error('x'), { code: 'EBUSY' }), 'safari'), 'Browser is currently using the bookmark database, please refresh later')
 })
 
 test('一个来源都读不到时，插件收到真实原因（无权限），而不是“宿主内部错误”', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async () => {

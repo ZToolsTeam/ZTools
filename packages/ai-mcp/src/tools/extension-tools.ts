@@ -9,6 +9,7 @@ import {
 import { McpHost } from '../mcp/host.js';
 import { McpServer } from '../mcp/server.js';
 import { InMemoryTransport } from '../mcp/transport/in-memory.js';
+import { AiMcpError, tAiMcp } from '../i18n.js';
 
 export interface ToolEntryPointOptions {
   /** 插件工具文件路径（绝对路径或相对路径） */
@@ -130,7 +131,7 @@ export function serializeToolOutput(rawResult: unknown): McpToolResult {
   if (typeof rawResult === 'bigint') {
     return {
       isError: true,
-      content: [{ type: 'text', text: 'Tool output serialization failed: BigInt cannot be serialized to JSON' }]
+      content: [{ type: 'text', text: tAiMcp('extTools.serializeBigInt') }]
     };
   }
 
@@ -157,18 +158,18 @@ export function serializeToolOutput(rawResult: unknown): McpToolResult {
       if (msg.includes('circular') || msg.includes('cyclic')) {
         return {
           isError: true,
-          content: [{ type: 'text', text: 'Tool output serialization failed: Circular reference detected in tool output' }]
+          content: [{ type: 'text', text: tAiMcp('extTools.serializeCircular') }]
         };
       }
       if (msg.includes('BigInt')) {
         return {
           isError: true,
-          content: [{ type: 'text', text: 'Tool output serialization failed: BigInt cannot be serialized to JSON' }]
+          content: [{ type: 'text', text: tAiMcp('extTools.serializeBigInt') }]
         };
       }
       return {
         isError: true,
-        content: [{ type: 'text', text: `Tool output serialization failed: ${msg}` }]
+        content: [{ type: 'text', text: tAiMcp('extTools.serializeFailed', { reason: msg }) }]
       };
     }
   }
@@ -202,7 +203,9 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
             isError: true,
             content: [{
               type: 'text',
-              text: `Tool arguments must be a JSON object, got ${parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed}`
+              text: tAiMcp('extTools.argsMustBeJsonObject', {
+                actualType: parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed
+              })
             }]
           };
         }
@@ -211,7 +214,7 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
         const errMsg = err instanceof Error ? err.message : String(err);
         return {
           isError: true,
-          content: [{ type: 'text', text: `Invalid JSON input arguments: ${errMsg}` }]
+          content: [{ type: 'text', text: tAiMcp('extTools.invalidJsonArgs', { reason: errMsg }) }]
         };
       }
     }
@@ -219,14 +222,14 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
     if (Array.isArray(rawArgs)) {
       return {
         isError: true,
-        content: [{ type: 'text', text: 'Tool arguments must be an object, not an array' }]
+        content: [{ type: 'text', text: tAiMcp('extTools.argsNotArray') }]
       };
     }
     parsedArgs = rawArgs as Record<string, unknown>;
   } else {
     return {
       isError: true,
-      content: [{ type: 'text', text: `Tool arguments must be an object or JSON string, got ${typeof rawArgs}` }]
+      content: [{ type: 'text', text: tAiMcp('extTools.argsMustBeObjectOrJson', { actualType: typeof rawArgs }) }]
     };
   }
 
@@ -238,7 +241,7 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
   if (!fs.existsSync(resolvedPath)) {
     return {
       isError: true,
-      content: [{ type: 'text', text: `Tool file not found: "${resolvedPath}"` }]
+      content: [{ type: 'text', text: tAiMcp('extTools.toolFileNotFound', { path: resolvedPath }) }]
     };
   }
 
@@ -253,7 +256,7 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
     const errMsg = err instanceof Error ? err.message : String(err);
     return {
       isError: true,
-      content: [{ type: 'text', text: `Failed to load tool module "${resolvedPath}": ${errMsg}` }]
+      content: [{ type: 'text', text: tAiMcp('extTools.loadModuleFailed', { path: resolvedPath, reason: errMsg }) }]
     };
   }
 
@@ -278,7 +281,7 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
       isError: true,
       content: [{
         type: 'text',
-        text: `Tool export "${exportName}" in "${resolvedPath}" is not a function (got ${actualType})`
+        text: tAiMcp('extTools.exportNotFunction', { exportName, path: resolvedPath, actualType })
       }]
     };
   }
@@ -289,7 +292,7 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      reject(new Error(`Tool execution timed out after ${timeoutMs}ms`));
+      reject(new AiMcpError('extTools.executionTimedOut', { timeoutMs }));
     }, timeoutMs);
   });
 
@@ -304,7 +307,7 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
     const errMsg = err instanceof Error ? err.message : String(err);
     return {
       isError: true,
-      content: [{ type: 'text', text: `Tool execution failed: ${errMsg}` }]
+      content: [{ type: 'text', text: tAiMcp('extTools.executionFailed', { reason: errMsg }) }]
     };
   }
 }
@@ -338,7 +341,7 @@ export class ExtensionToolManager {
    */
   public async attachHost(host: McpHost): Promise<void> {
     if (this.host) {
-      throw new Error(`ExtensionToolManager is already attached to host`);
+      throw new AiMcpError('extTools.managerAlreadyAttached');
     }
 
     const [clientTransport, serverTransport] = InMemoryTransport.createPair();
@@ -359,12 +362,12 @@ export class ExtensionToolManager {
    */
   public async registerExtension(manifest: ExtensionManifestForTools): Promise<RegisteredExtensionTool[]> {
     if (!manifest || !manifest.id || typeof manifest.id !== 'string') {
-      throw new Error('Invalid extension manifest: id is required');
+      throw new AiMcpError('extTools.manifestIdRequired');
     }
 
     const pluginId = manifest.id.trim();
     if (!pluginId) {
-      throw new Error('Extension id cannot be empty');
+      throw new AiMcpError('extTools.emptyExtensionId');
     }
 
     const toolsToRegister: RegisteredExtensionTool[] = [];
@@ -460,7 +463,7 @@ export class ExtensionToolManager {
         if (!record.enabled) {
           return {
             isError: true,
-            content: [{ type: 'text', text: `Extension "${record.id}" is currently disabled` }]
+            content: [{ type: 'text', text: tAiMcp('extTools.extensionDisabled', { id: record.id }) }]
           };
         }
 
@@ -468,7 +471,13 @@ export class ExtensionToolManager {
         if (record.revoked) {
           return {
             isError: true,
-            content: [{ type: 'text', text: `Extension "${record.id}" has been revoked: ${record.revokedReason || 'security policy'}` }]
+            content: [{
+              type: 'text',
+              text: tAiMcp('extTools.extensionRevoked', {
+                id: record.id,
+                reason: record.revokedReason || tAiMcp('extTools.defaultRevokedReason')
+              })
+            }]
           };
         }
 
@@ -486,20 +495,20 @@ export class ExtensionToolManager {
               if (!confirmed) {
                 return {
                   isError: true,
-                  content: [{ type: 'text', text: `Tool execution cancelled by user: User denied confirmation for "${tool.name}"` }]
+                  content: [{ type: 'text', text: tAiMcp('extTools.confirmationDenied', { toolName: tool.name }) }]
                 };
               }
             } catch (confirmErr: unknown) {
               const errMsg = confirmErr instanceof Error ? confirmErr.message : String(confirmErr);
               return {
                 isError: true,
-                content: [{ type: 'text', text: `Tool execution cancelled: Confirmation error (${errMsg})` }]
+                content: [{ type: 'text', text: tAiMcp('extTools.confirmationError', { reason: errMsg }) }]
               };
             }
           } else if (!this.allowUnconfirmedIfNoHandler) {
             return {
               isError: true,
-              content: [{ type: 'text', text: `Tool "${tool.name}" requires confirmation, but no confirmation handler is available` }]
+              content: [{ type: 'text', text: tAiMcp('extTools.confirmationHandlerMissing', { toolName: tool.name }) }]
             };
           }
         }
@@ -569,7 +578,10 @@ export class ExtensionToolManager {
     if (!record) return false;
 
     if (record.revoked) {
-      throw new Error(`Cannot enable revoked extension "${pluginId}": ${record.revokedReason || 'revoked by policy'}`);
+      throw new AiMcpError('extTools.cannotEnableRevoked', {
+        id: pluginId,
+        reason: record.revokedReason || tAiMcp('extTools.defaultRevokedPolicy')
+      });
     }
 
     record.enabled = true;
@@ -587,7 +599,7 @@ export class ExtensionToolManager {
 
     record.revoked = true;
     record.enabled = false;
-    record.revokedReason = reason || 'Revoked by security policy';
+    record.revokedReason = reason || tAiMcp('extTools.defaultRevokedSecurityPolicy');
     this.unmountExtensionTools(record);
     await this.syncHostTools();
     return true;

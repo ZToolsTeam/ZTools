@@ -4,8 +4,8 @@ import { grantId } from '../../contracts/path-reference.js'
 import type { PathGrantService } from './path-grant-service.js'
 import { imageHeader, type ReferenceImageFactory } from './reference-image-service.js'
 export interface ReferencePdfRenderer { render(html: string, signal: AbortSignal): Promise<Buffer>; stop(): void }
-const invalid = () => new ZToolsError(errorCodes.invalidRequest, '图片转PDF参数无效')
-const cancelled = () => new ZToolsError(errorCodes.callerDestroyed, '图片转PDF已取消')
+const invalid = () => new ZToolsError(errorCodes.invalidRequest, 'Invalid image-to-PDF parameters')
+const cancelled = () => new ZToolsError(errorCodes.callerDestroyed, 'Image-to-PDF conversion cancelled')
 /** idle -> read -> render -> commit -> release; cancel/stop always releases its renderer before returning. */
 export class ReferencePdfService {
   readonly #pending = new Map<number, AbortController>()
@@ -21,7 +21,7 @@ export class ReferencePdfService {
         (params.replace !== undefined && typeof params.replace !== 'boolean')) throw invalid()
     const inputs = params.fileGrantIds.map(grantId), output = grantId(params.saveGrantId)
     if (this.#stopped || signal.aborted) throw cancelled()
-    if (this.#pending.has(caller.webContentsId) || this.#pending.size >= 2) throw new ZToolsError(errorCodes.fileTooLarge, '图片转PDF正在处理中')
+    if (this.#pending.has(caller.webContentsId) || this.#pending.size >= 2) throw new ZToolsError(errorCodes.fileTooLarge, 'Image-to-PDF conversion is already in progress')
     const controller = new AbortController(), combined = AbortSignal.any([signal, controller.signal])
     const active = () => { if (this.#stopped || combined.aborted) throw cancelled() }
     this.#pending.set(caller.webContentsId, controller)
@@ -31,25 +31,25 @@ export class ReferencePdfService {
         active()
         const bytes = await this.grants.read(caller.webContentsId, input, '', 16 * 1024 * 1024, combined); active()
         total += bytes.length
-        if (total > 32 * 1024 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, 'PDF源图片合计超过32MiB')
+        if (total > 32 * 1024 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, 'Total PDF source images exceed 32 MiB')
         const header = imageHeader(bytes); pixels += header.width * header.height
-        if (pixels > 32 * 1024 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, 'PDF源图片合计超过32Mi像素')
+        if (pixels > 32 * 1024 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, 'Total PDF source image pixels exceed 32 megapixels')
         const decoded = this.images.createFromBuffer(bytes)
-        if (decoded.isEmpty() || decoded.getSize().width !== header.width || decoded.getSize().height !== header.height) throw new ZToolsError(errorCodes.fileError, 'PDF源图片无法解码')
+        if (decoded.isEmpty() || decoded.getSize().width !== header.width || decoded.getSize().height !== header.height) throw new ZToolsError(errorCodes.fileError, 'Unable to decode PDF source image')
         rules.push(`@page p${index}{size:${header.width}px ${header.height}px;margin:0}`)
         pages.push(`<section style="page:p${index};width:${header.width}px;height:${header.height}px"><img width="${header.width}" height="${header.height}" src="data:image/${header.format === 'png' ? 'png' : 'jpeg'};base64,${bytes.toString('base64')}"></section>`)
       }
       active()
       const html = '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0}section{break-after:page;overflow:hidden}section:last-child{break-after:auto}img{display:block}' + rules.join('') + '</style></head><body>' + pages.join('') + '</body></html>'
       const bytes = await this.renderer.render(html, combined); active()
-      if (!Buffer.isBuffer(bytes) || bytes.length > 16 * 1024 * 1024 || bytes.length < 8 || bytes.toString('ascii', 0, 5) !== '%PDF-') throw new ZToolsError(errorCodes.fileError, 'PDF生成结果无效或超过16MiB')
+      if (!Buffer.isBuffer(bytes) || bytes.length > 16 * 1024 * 1024 || bytes.length < 8 || bytes.toString('ascii', 0, 5) !== '%PDF-') throw new ZToolsError(errorCodes.fileError, 'Generated PDF result is invalid or exceeds 16 MiB')
       const receipt = await this.grants.save(caller.webContentsId, output, bytes, params.replace === true, combined)
-      if (receipt.status !== 'committed' || combined.aborted || this.#stopped) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'PDF保存结果未确认')
+      if (receipt.status !== 'committed' || combined.aborted || this.#stopped) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'PDF save outcome could not be confirmed')
       return { success: true as const, status: 'committed' as const, size: receipt.bytesWritten, pageCount: inputs.length }
     } catch (error) {
       if (error instanceof ZToolsError) throw error
       if (combined.aborted || this.#stopped) throw cancelled()
-      throw new ZToolsError(errorCodes.fileError, '图片转PDF失败')
+      throw new ZToolsError(errorCodes.fileError, 'Image-to-PDF conversion failed')
     } finally { this.#pending.delete(caller.webContentsId) }
   }
 }

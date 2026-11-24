@@ -2,12 +2,14 @@
  * v-switch-keyboard 指令
  * 限制 a-switch 组件的键盘响应行为：
  * - 允许单独按下 Enter 或 Space 切换
- * - 阻止所有包含修饰键的组合键
+ * - Tab / Shift+Tab 保留原生焦点导航
  * - 阻止其他无关按键
  */
 export const vSwitchKeyboard = {
   mounted(el) {
     const handler = (event) => {
+      if (event.key === 'Tab' && !event.altKey && !event.ctrlKey && !event.metaKey) return
+
       // 检查是否有修饰键
       const hasModifier =
         event.altKey || event.ctrlKey || event.shiftKey || event.metaKey

@@ -194,7 +194,7 @@ test('2. ArchiveManagerPlugin: tree inspection, selective extraction, smart unwr
           archivePath,
           targetDir: protectedDir
         }),
-      /系统核心受保护路径/
+      /Protected system path/
     )
 
     if (process.platform !== 'win32') {
@@ -206,7 +206,7 @@ test('2. ArchiveManagerPlugin: tree inspection, selective extraction, smart unwr
             archivePath,
             targetDir: 'C:\\Windows\\System32'
           }),
-        /绝对路径/
+        /absolute path/i
       )
       await assert.rejects(fs.stat(cwdJunk), { code: 'ENOENT' })
     }

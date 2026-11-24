@@ -27,7 +27,7 @@ UI Layer (Vue, frontend/)  ── window.ztools ──>  Preload Script (preload
 | IPC Contracts | [`electron-client/src/contracts/`](../../electron-client/src/contracts/) | Request schema, method allowlist, caller capability table, error codes, payload & timeout limits |
 | UI Layer | [`frontend/src/`](../../frontend/src/) | Workspace dashboard, floating launcher bar, settings, and declarative view renderer |
 | Host API | [`frontend/public/js/cef-ipc/`](../../frontend/public/js/cef-ipc/) | Builds `window.ztools`, forwarding calls to the preload bridge |
-| Declarative UI | [`packages/declarative-ui/`](../../packages/declarative-ui/) | Plugin components, runtime reconciler, hooks, and examples |
+| Declarative UI | [`packages/declarative-ui/`](../../packages/declarative-ui/) | Plugin components, runtime reconciler, hooks, and host APIs |
 | Plugin Spec | [`packages/ztools-plugins-spec/`](../../packages/ztools-plugins-spec/), [`packages/api/`](../../packages/api/) | `plugin.json` JSON Schema, validator, and TypeScript definitions |
 | AI & MCP | [`packages/ai-mcp/`](../../packages/ai-mcp/) | LLM router (including local model discovery) and MCP host implementation |
 | Crypto & Sync | [`packages/sync-crypto/`](../../packages/sync-crypto/) | End-to-end encryption (Argon2id key derivation, AES-256-GCM) and WebDAV / GitHub Gist sync adapters |

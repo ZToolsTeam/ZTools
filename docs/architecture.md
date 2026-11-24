@@ -27,7 +27,7 @@
 | IPC 契约 | [`electron-client/src/contracts/`](../electron-client/src/contracts/) | 请求格式、方法白名单、调用方能力表、错误码、大小与超时上限 |
 | 界面层 | [`frontend/src/`](../frontend/src/) | 工作台、悬浮搜索条、设置页，以及声明式视图渲染器 |
 | 宿主 API | [`frontend/public/js/cef-ipc/`](../frontend/public/js/cef-ipc/) | 生成 `window.ztools`，把调用转给预加载桥 |
-| 声明式 UI | [`packages/declarative-ui/`](../packages/declarative-ui/) | 插件使用的组件、运行时（协调器与 Hooks）和示例 |
+| 声明式 UI | [`packages/declarative-ui/`](../packages/declarative-ui/) | 插件使用的组件、运行时（协调器与 Hooks）与宿主 API |
 | 插件规范 | [`packages/ztools-plugins-spec/`](../packages/ztools-plugins-spec/)、[`packages/api/`](../packages/api/) | `plugin.json` Schema、校验器、TypeScript 类型 |
 | 模型与 MCP | [`packages/ai-mcp/`](../packages/ai-mcp/) | 大模型调用路由（含本机模型探测）与 MCP 协议实现 |
 | 加密与同步 | [`packages/sync-crypto/`](../packages/sync-crypto/) | 端到端加密（Argon2id 派生密钥、AES-256-GCM）与 WebDAV、GitHub Gist 同步适配器 |

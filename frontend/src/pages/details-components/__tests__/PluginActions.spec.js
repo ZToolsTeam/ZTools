@@ -32,6 +32,15 @@ describe('插件详情操作菜单', () => {
     expect(wrapper.find('.rc-menu-separator').exists()).toBe(false)
   })
 
+  it('随包内置插件提供普通管理入口，普通插件的卸载动作仍保持独立', async () => {
+    const wrapper = mount(PluginActions, { props: { isInstalled: true, isBundled: true }, global: { stubs } })
+    const item = wrapper.findAll('.rc-menu-item').find((entry) => entry.text().includes('管理内置插件'))
+    expect(item.classes()).not.toContain('is-danger')
+    expect(menuTexts(wrapper)).not.toContain('卸载')
+    await item.trigger('click')
+    expect(wrapper.emitted('uninstall')).toHaveLength(1)
+  })
+
   it('非 Windows：没有“生成桌面快捷方式”（宿主在这些平台必然报不支持）', () => {
     const wrapper = mount(PluginActions, {
       props: { isInstalled: true, canCreateShortcut: false },

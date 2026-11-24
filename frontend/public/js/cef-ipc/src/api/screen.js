@@ -1,3 +1,4 @@
+import { resolveSdkErrorText } from '../core/environment.js'
 import { ensureRuntimeCapability } from './runtime-capability.js'
 
 /**
@@ -40,12 +41,12 @@ class ScreenAPI {
     const result = await refs._call(method, params, { ...options, ...(method === 'screen_capture_region' ? { timeout: 120000 } : {}) })
     if (method === 'screen_capture_region' && result.cancelled !== undefined) {
       if (result.reference) await refs.revoke(refs._returnedReference(result.reference, ['file']))
-      if (result.cancelled !== true || Object.keys(result).some(key => !['success', 'cancelled'].includes(key))) throw refs._error('SCREEN_ERROR', '区域截图取消响应无效')
+      if (result.cancelled !== true || Object.keys(result).some(key => !['success', 'cancelled'].includes(key))) throw refs._error('SCREEN_ERROR', resolveSdkErrorText('invalidRegionCaptureCancelResponse'))
       return undefined
     }
     const reference = refs._returnedReference(result.reference, ['file'])
     try {
-      if (result.fileUrl !== 'ztools://file/' + reference.grantId + '/' + encodeURIComponent(reference.displayName) || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024 || !Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 || result.width * result.height > 32 * 1024 * 1024) throw refs._error('SCREEN_ERROR', '截图引用响应无效')
+      if (result.fileUrl !== 'ztools://file/' + reference.grantId + '/' + encodeURIComponent(reference.displayName) || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024 || !Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 || result.width * result.height > 32 * 1024 * 1024) throw refs._error('SCREEN_ERROR', resolveSdkErrorText('invalidScreenshotRefResponse'))
       return Object.freeze({ reference: Object.freeze({ ...reference, operations: Object.freeze([...reference.operations]) }), fileUrl: result.fileUrl, size: result.size, width: result.width, height: result.height })
     } catch (error) { await refs.revoke(reference); throw error }
   }
@@ -61,7 +62,7 @@ class ScreenAPI {
       if (typeof callback === 'function') callback(imageBase64)
       return imageBase64
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('当前截图合约不支持引用取消选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('screenshotCancelOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
     await ensureRuntimeCapability(this.sys, 'screen.capture')
     const params = rect ? { rect } : {}
     const r = await this.transport.call('screen_capture', params)

@@ -1,3 +1,5 @@
+import { resolveSdkText } from './environment.js'
+
 function shouldRedactParams(method) {
   return method === 'db_put_secure' || method === 'db_get_secure' || method === 'network_http_request' ||
     method.startsWith('credential_v1_')
@@ -37,7 +39,10 @@ class Transport {
       ) {
         this._debug = true
       }
-    } catch (e) {}
+    } catch (storageError) {
+      // 受限上下文无法访问 localStorage 时沿用默认调试开关
+      void storageError
+    }
   }
 
   _log(...args) {
@@ -55,7 +60,7 @@ class Transport {
     if (!requestId) return error
     const target = error && (typeof error === 'object' || typeof error === 'function')
       ? error
-      : new Error(String(error || '请求失败'))
+      : new Error(String(error || resolveSdkText('请求失败', 'Request failed')))
     try {
       if (target.requestId === requestId) return target
       Object.defineProperty(target, 'requestId', {
@@ -68,7 +73,12 @@ class Transport {
     } catch {
       const wrapped = new Error(target instanceof Error ? target.message : String(target))
       if (typeof target.code === 'string') wrapped.code = target.code
-      try { Object.defineProperty(wrapped, 'cause', { value: error, enumerable: false }) } catch (causeError) {}
+      try {
+        Object.defineProperty(wrapped, 'cause', { value: error, enumerable: false })
+      } catch (causeError) {
+        // 无法挂载不可枚举 cause 时忽略并保留包装错误
+        void causeError
+      }
       Object.defineProperty(wrapped, 'requestId', {
         value: requestId,
         enumerable: false,
@@ -86,7 +96,7 @@ class Transport {
     if (/^Call timeout[:：]/i.test(message)) {
       console.error('[ztools-transport]', message, context)
 
-      const publicError = new Error('超时失败')
+      const publicError = new Error(resolveSdkText('超时失败', 'Request timed out'))
       publicError.code = 'CALL_TIMEOUT'
       publicError.detail = message
       publicError.cause = error
@@ -124,18 +134,18 @@ class Transport {
 
       if (signal !== undefined && (!signal || typeof signal.aborted !== 'boolean' ||
           typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) {
-        const error = new Error('IPC signal 无效')
+        const error = new Error(resolveSdkText('IPC signal 无效', 'Invalid IPC AbortSignal'))
         error.code = 'INVALID_REQUEST'
         reject(this._withRequestId(error, messageId))
         return
       }
       if (signal?.aborted) {
-        const error = Object.assign(new Error('调用已取消'), { name: 'AbortError', code: 'CALLER_DESTROYED' })
+        const error = Object.assign(new Error(resolveSdkText('调用已取消', 'Call aborted')), { name: 'AbortError', code: 'CALLER_DESTROYED' })
         reject(this._withRequestId(error, messageId))
         return
       }
       if (signal && typeof cancel !== 'function') {
-        const error = new Error('宿主没有此方法的受控取消入口')
+        const error = new Error(resolveSdkText('宿主没有此方法的受控取消入口', 'Host does not expose controlled cancellation for this method'))
         error.code = 'NOT_SUPPORTED'
         reject(this._withRequestId(error, messageId))
         return
@@ -174,7 +184,7 @@ class Transport {
           timeoutId = null
         }
         const cancellationUnconfirmed = () => Object.assign(
-          new Error('取消请求未确认底层网络请求已结束'),
+          new Error(resolveSdkText('取消请求未确认底层网络请求已结束', 'Cancellation was not confirmed to have terminated the underlying network request')),
           { code: 'CANCELLATION_UNCONFIRMED' }
         )
         if (method === 'network_http_request') {
@@ -195,15 +205,16 @@ class Transport {
           } else if (error?.code) {
             settleReject(error)
           } else {
-            settleReject(Object.assign(new Error('取消请求未获 Main 确认，原请求结果尚未确认'), {
-              code: 'CANCELLATION_UNCONFIRMED', cause: error
-            }))
+            settleReject(Object.assign(
+              new Error(resolveSdkText('取消请求未获 Main 确认，原请求结果尚未确认', 'Cancellation was not confirmed by Main; original request outcome is unconfirmed')),
+              { code: 'CANCELLATION_UNCONFIRMED', cause: error }
+            ))
           }
         })
       }
       const onTimeout = () => {
         if (typeof cancel === 'function') {
-          const timeoutError = Object.assign(new Error('屏幕权限申请已超时'), { code: 'REQUEST_TIMEOUT' })
+          const timeoutError = Object.assign(new Error(resolveSdkText('屏幕权限申请已超时', 'Screen permission request timed out')), { code: 'REQUEST_TIMEOUT' })
           requestCancel('timeout', timeoutError)
           return
         }
@@ -213,7 +224,7 @@ class Transport {
       }
       if (timeout !== Infinity && timeout > 0) timeoutId = setTimeout(onTimeout, timeout)
       abortListener = () => {
-        const error = Object.assign(new Error('调用已取消'), { name: 'AbortError', code: 'CALLER_DESTROYED' })
+        const error = Object.assign(new Error(resolveSdkText('调用已取消', 'Call aborted')), { name: 'AbortError', code: 'CALLER_DESTROYED' })
         requestCancel('cancel', error)
       }
       signal?.addEventListener('abort', abortListener, { once: true })
@@ -334,7 +345,12 @@ class Transport {
     if (typeof methodCall !== 'function') {
       if (timeoutId) clearTimeout(timeoutId)
       this.pendingCalls.delete(messageId)
-      const error = new Error(`Electron preload 未开放方法: ${method}`)
+      const error = new Error(
+        resolveSdkText(
+          `Electron preload 未开放方法: ${method}`,
+          `Electron preload does not expose method: ${method}`
+        )
+      )
       error.code = 'METHOD_NOT_FOUND'
       reject(this._toPublicError(error, { method, messageId }))
       return
@@ -356,10 +372,15 @@ class Transport {
         if (timeoutId) clearTimeout(timeoutId)
         this.pendingCalls.delete(messageId)
         if (!response || response.messageId !== messageId) {
-          throw new Error('Electron response messageId mismatch')
+          throw new Error(
+            resolveSdkText(
+              'Electron 响应 messageId 不匹配 (messageId mismatch)',
+              'Electron response messageId mismatch'
+            )
+          )
         }
         if (response.success === false) {
-          const error = new Error(response.error?.message || 'Request failed')
+          const error = new Error(response.error?.message || resolveSdkText('请求失败', 'Request failed'))
           error.code = response.error?.code || 'REQUEST_FAILED'
           throw error
         }
@@ -415,7 +436,7 @@ class Transport {
         this.pendingCalls.delete(messageId)
 
         if (responseData.success === false) {
-          foundCall.reject(new Error(responseData.error || 'Request failed'))
+          foundCall.reject(new Error(responseData.error || resolveSdkText('请求失败', 'Request failed')))
         } else {
           foundCall.resolve(responseData)
         }
@@ -467,7 +488,7 @@ class Transport {
   clearPendingCalls() {
     for (const [callId, call] of this.pendingCalls.entries()) {
       if (call.timeoutId) clearTimeout(call.timeoutId)
-      call.reject(new Error('Transport cleared'))
+      call.reject(new Error(resolveSdkText('传输通道已清理', 'Transport cleared')))
     }
     this.pendingCalls.clear()
   }

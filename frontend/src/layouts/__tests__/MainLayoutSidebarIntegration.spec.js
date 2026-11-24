@@ -353,6 +353,7 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     await searchRouter.push({ name: 'list', query: { q: 'a' } })
     await flushPromises()
     const before = listMounts
+    expect(input.element.value).toBe('a')
     await input.setValue('')
     await wait(320)
     await flushPromises()
@@ -361,6 +362,14 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     await searchRouter.push({ name: 'list', params: { category: '工具' } })
     await flushPromises()
     expect(listMounts).toBe(before + 1)
+
+    await searchRouter.push({ name: 'list', query: { q: '无匹配' } })
+    expect(input.element.value).toBe('无匹配')
+    await input.setValue('还在输入')
+    await searchRouter.replace({ name: 'list', params: { category: '' } })
+    await wait(320)
+    expect(input.element.value).toBe('')
+    expect(searchRouter.currentRoute.value.query).toEqual({})
     wrapper.unmount()
   })
 

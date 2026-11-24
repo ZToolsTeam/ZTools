@@ -22,9 +22,11 @@
     "moreActions": "更多操作",
     "clear": "清空",
     "saving": "保存中…",
+    "loading": "加载中…",
     "noDescription": "暂无描述",
     "official": "官方插件",
-    "newContent": "有新内容"
+    "newContent": "有新内容",
+    "localUser": "本地用户"
   },
   "nav": {
     "home": "主页",
@@ -236,7 +238,7 @@
     "submitTooltip": "插件投稿即向开源插件大仓提交 PR，官方审核后上架",
     "viewAll": "全部",
     "emptySearchTitle": "没有找到与「{keyword}」相关的插件",
-    "emptySearchDesc": "换个关键词试试；也可以自己写一个：基于声明式 UI，几分钟就能做出来，投稿后经官方审核发布。",
+    "emptySearchDesc": "试试其他关键词，或浏览全部插件。",
     "emptyTitle": "暂无插件",
     "emptyDesc": "稍后再来看看",
     "pluginRepo": "插件仓库",
@@ -288,7 +290,8 @@
       "installingToast": "正在安装插件，请稍候...",
       "installComplete": "插件安装完成",
       "installPendingVerify": "安装结果待确认，请刷新插件列表查看"
-    }
+    },
+    "clearSearchAndBrowse": "清除搜索，浏览全部插件"
   },
   "details": {
     "loadFailed": "加载失败",
@@ -308,7 +311,7 @@
     "updateSuccess": "插件更新成功",
     "installSuccess": "插件安装成功",
     "builtinCannotUninstall": "内置插件随客户端提供，不能卸载",
-    "manageBundledInSettings": "请在设置中卸载或还原内置插件",
+    "manageBundledInSettings": "可在设置中显示或隐藏内置插件",
     "uninstallConfirmTitle": "确定要卸载该插件吗？",
     "uninstallConfirmContent": "卸载后插件文件将被删除。",
     "installBeforeShortcut": "请先安装该插件后再创建快捷方式",
@@ -342,7 +345,8 @@
       "zoomAria": "查看大图：{title}",
       "prev": "上一张",
       "next": "下一张"
-    }
+    },
+    "usageExample": "使用示例"
   },
   "myPage": {
     "welcomeTitle": "欢迎使用 ZTools",
@@ -366,8 +370,8 @@
     "saveOrderFailed": "保存排序失败: {reason}",
     "maxPinnedWarning": "最多只能固定 {count} 个插件",
     "orderSaved": "排序已保存",
-    "manageBundledTitle": "前往设置管理内置插件",
-    "manageBundledContent": "内置插件随客户端提供，可在设置中卸载隐藏，并支持随时还原。是否前往设置？",
+    "manageBundledTitle": "管理内置插件",
+    "manageBundledContent": "可以在设置中选择哪些内置插件出现在主页和搜索中。打开设置？",
     "goToSettings": "前往设置",
     "confirmUninstallTitle": "确认卸载",
     "confirmUninstallContent": "确定要卸载此插件吗？",
@@ -429,6 +433,8 @@
     "errorNotFoundTitle": "未找到指定的声明式应用",
     "errorNotFoundDesc": "插件「{id}」没有注册或加载失败。",
     "handoffRestoreFailed": "未能恢复弹出前的内容",
+    "handoffOversized": "内容过大，独立窗口将重新开始",
+    "handoffPartialLoss": "部分内容无法带到独立窗口",
     "unsupportedPluginDesc": "「{name}」在当前系统上暂不可用",
     "dynamicLoadFailed": "动态加载声明式插件失败",
     "popoutFailed": "无法打开独立窗口：{reason}"
@@ -465,6 +471,7 @@
     },
     "hotkeyConflict": {
       "globalWake": "全局唤醒快捷键",
+      "globalLauncher": "显示悬浮条快捷键",
       "mouseWake": "鼠标快捷唤醒",
       "systemHotkey": "系统快捷键",
       "unknownTrigger": "未知触发器",
@@ -519,6 +526,8 @@
     "revoke": "撤销",
     "loadGrantsFailed": "获取已授权插件失败，请稍后重试。",
     "loadPermissionFailed": "获取系统权限失败，请重试。",
+    "readStatusFailed": "无法读取当前权限状态，请稍后重试。",
+    "watchStatusFailed": "无法监听权限变更，请手动重新检查。",
     "revokeUnconfirmed": "主程序未确认撤销操作",
     "revokeFailed": "撤销失败：{detail}，请重试。",
     "status": {
@@ -545,6 +554,7 @@
     "pluginNotInstalledReinstall": "{error}，请重新下载该插件"
   },
   "app": {
+    "windowTitle": "ZTools - 免费纯净的高效办公工具箱",
     "unknownPlugin": "未知插件",
     "webUpdateDone": "Web 资源更新完成",
     "webUpdateFailed": "Web 更新失败",
@@ -651,6 +661,16 @@
           "default": "快捷键服务返回失败"
         }
       },
+      "launcherHotkey": {
+        "label": "显示悬浮条快捷键",
+        "desc": "独立全局组合键，随时切换极客悬浮条显示或隐藏（不影响全局唤醒快捷键）",
+        "loadFailed": "读取显示悬浮条快捷键失败",
+        "conflict": "显示悬浮条快捷键与「{names}」冲突，请更换其他组合键",
+        "saveFailed": "显示悬浮条快捷键保存失败",
+        "syncFailed": "显示悬浮条快捷键同步失败：{reason}",
+        "saved": "显示悬浮条快捷键已保存",
+        "disabled": "已关闭显示悬浮条快捷键"
+      },
       "mouseWake": {
         "label": "鼠标快捷唤醒",
         "desc": "使用鼠标中键、侧键或右键长按快速呼出与隐藏窗口",
@@ -688,7 +708,8 @@
         "dashboard": "工作台",
         "savedLauncher": "已设置为极客悬浮条模式",
         "savedDashboard": "已设置为应用工作台模式",
-        "saveFailed": "保存偏好失败: {reason}"
+        "saveFailed": "保存偏好失败: {reason}",
+        "invalid": "无效的唤醒偏好设置: {preference}"
       },
       "pluginLaunch": {
         "label": "启动快捷键",
@@ -713,14 +734,12 @@
     },
     "bundled": {
       "title": "内置插件",
-      "desc": "随客户端提供的基础工具，卸载后将从已安装列表与搜索结果中隐藏，本地数据保留且可随时还原",
-      "uninstalledTag": "已卸载",
-      "restore": "还原",
-      "uninstall": "卸载",
-      "restoredToast": "已还原「{name}」",
-      "uninstalledToast": "已卸载「{name}」，可随时在此还原",
-      "restoreFailed": "还原失败: {reason}",
-      "uninstallFailed": "卸载失败: {reason}"
+      "desc": "选择要在主页和搜索中显示的工具。",
+      "visibilityLabel": "在主页和搜索中显示「{name}」",
+      "shownToast": "已显示「{name}」",
+      "hiddenToast": "已隐藏「{name}」",
+      "showFailed": "显示失败：{reason}",
+      "hideFailed": "隐藏失败：{reason}"
     }
   },
   "declarative": {
@@ -768,7 +787,9 @@
       "unsupportedFormatMsg": "当前工具仅支持 {extensions} 格式",
       "fileInputFailedTitle": "文件输入未生效",
       "fileInputFailedDefault": "无法读取所选文件或文件夹",
-      "partialAccepted": "已接收 {accepted} 项，忽略 {rejected} 项不兼容内容"
+      "acceptedCount": "{count} 项",
+      "rejectedCount": "{count} 项不兼容内容",
+      "partialAccepted": "已接收 {accepted}，忽略 {rejected}"
     },
     "toast": {
       "copied": "已复制到剪贴板",
@@ -828,6 +849,15 @@
       "inProgress": "屏幕取色正在进行，请先完成或按 Esc 取消",
       "unsupported": "当前客户端不支持交互式屏幕取色",
       "invalidColor": "屏幕取色未返回有效颜色"
+    },
+    "markdown": {
+      "alertNote": "注意",
+      "alertTip": "提示",
+      "alertImportant": "重要",
+      "alertWarning": "警告",
+      "alertCaution": "小心",
+      "taskDone": "已完成",
+      "taskTodo": "未完成"
     }
   },
   "eventMonitor": {
@@ -910,6 +940,7 @@
       "conflictOther": "该快捷键与 {plugin} 的其他快捷键冲突",
       "unavailable": "全局快捷键功能不可用",
       "conflictGlobalWake": "该快捷键与全局唤醒快捷键冲突",
+      "conflictGlobalLauncher": "该快捷键与显示悬浮条快捷键冲突",
       "conflictPlugins": "该快捷键与插件「{names}」冲突",
       "registerOccupied": "快捷键注册失败，可能被其他程序占用",
       "setSuccess": "已设置「{plugin} - {feature}」快捷键",
@@ -935,7 +966,8 @@
       "unregisterFailed": "注销快捷键失败",
       "unregisterFailedWithDetail": "注销快捷键失败: {detail}",
       "clearSuccess": "快捷键已清除",
-      "clearFailed": "清除快捷键失败"
+      "clearFailed": "清除快捷键失败",
+      "pluginOnly": "仅支持为插件注册启动快捷键"
     }
   },
   "pluginCatalog": {
@@ -1016,7 +1048,7 @@
     "platformUnsupported": "当前系统已不再支持",
     "cannotLaunchWithReason": "无法启动：{reason}",
     "cannotLaunchRevoked": "无法启动：该插件已被官方下架禁用（原因：{reason}）",
-    "bundledHiddenError": "该内置插件已卸载，还原后即可使用",
+    "bundledHiddenError": "该内置插件已隐藏，可在设置中恢复显示",
     "cannotLaunchNotPublic": "无法启动：该插件暂未开放",
     "cannotLaunchUnsupportedPlatform": "无法启动：该插件在当前系统上暂不可用",
     "cannotInstallRevoked": "无法安装：该插件已被官方下架禁用（原因：{reason}）",
@@ -1026,9 +1058,8 @@
     "installFailed": "安装失败",
     "bundledOnlyAction": "仅随客户端内置的插件支持此操作",
     "operationInProgress": "操作处理中",
-    "saveHideBundledFailed": "保存内置插件卸载状态失败",
     "bundledOnlyRestore": "仅随客户端内置的插件支持还原",
-    "saveRestoreBundledFailed": "保存内置插件还原状态失败"
+    "saveBundledVisibilityFailed": "无法保存内置插件显示设置"
   },
   "nativeApi": {
     "notInitialized": "ZTools API 未初始化",
@@ -1043,5 +1074,335 @@
     "payloadTooLarge": "internal plugin payload 超过 64KB 限制",
     "invalidPluginId": "pluginId 必须是非空字符串",
     "desktopOnlyPrompt": "内置功能 [{name}] 仅在完整桌面客户端中可用"
+  },
+  "versionCompat": {
+    "appTooLow": "该插件需要 App >= {min}，当前 {current}，请先升级客户端",
+    "webTooLow": "该插件需要 Web >= {min}，当前 {current}，请检查更新"
+  },
+  "pluginInstall": {
+    "eventsUnavailable": "客户端安装通知不可用，请重新启动客户端后重试",
+    "failed": "安装失败",
+    "statusMismatch": "安装状态响应与当前任务不一致",
+    "resultNotFound": "客户端未找到这次安装的最终结果",
+    "statusUnknown": "暂时无法确认安装结果，请刷新插件列表查看",
+    "executionFailed": "安装执行失败"
+  },
+  "pluginUpdate": {
+    "bundledWithClient": "内置插件随客户端更新",
+    "startFailed": "插件更新启动失败",
+    "notInCatalog": "插件市场未收录该插件"
+  },
+  "pluginApi": {
+    "notInCatalog": "插件市场未收录该插件",
+    "notInCatalogOrMissingDownload": "插件市场未收录该插件或缺少下载信息",
+    "platformUnsupported": "该插件不支持当前平台"
+  },
+  "themeStore": {
+    "unsupportedMode": "不支持的主题模式",
+    "themeNotSaved": "主题设置未保存",
+    "unsupportedAccent": "不支持的主题色",
+    "accentNotSaved": "主题色设置未保存"
+  },
+  "categoriesStore": {
+    "loadFailed": "加载分类失败"
+  },
+  "diagnostics": {
+    "title": "API 诊断中心",
+    "subtitle": "查看宿主接口，或运行本机只读检查",
+    "modeNative": "宿主环境",
+    "modeBrowser": "浏览器环境",
+    "tabs": {
+      "ariaLabel": "诊断分类",
+      "system": "系统基础",
+      "power": "电源管理",
+      "filesystem": "文件系统",
+      "database": "数据库",
+      "window": "窗口控制",
+      "clipboardShell": "剪贴板 / Shell",
+      "eventsTrigger": "事件 / 触发器",
+      "advanced": "高级功能"
+    },
+    "platformHints": {
+      "windowsReadFailed": "无法确认宿主平台；为避免误读或修改文件、系统注册表，Windows 专用手动诊断已关闭。",
+      "windowsOnMacos": "此组操作使用 Windows 路径、注册表或 ZToolsService；macOS 不适用。文件访问诊断需待授权文件契约完成后提供。",
+      "windowsUnknown": "无法确认宿主平台；Windows 专用手动诊断已关闭。",
+      "inputMacos": "macOS 输入注入尚未接入；按键模拟已关闭。",
+      "inputWindowsElectron": "当前 Electron 宿主尚未接入按键注入 provider；按键模拟已关闭。",
+      "inputUnavailable": "当前宿主未启用按键注入 provider；按键模拟已关闭。",
+      "sysInfoUnavailable": "系统信息接口不可用",
+      "hostPlatformApiUnavailable": "宿主平台信息接口不可用",
+      "windowsOnlyNotExecuted": "{name}未执行：{reason}"
+    },
+    "batch": {
+      "title": "只读体检",
+      "running": "正在体检中...",
+      "start": "开始只读体检",
+      "progress": "进度",
+      "passCount": "成功: {count}",
+      "failCount": "失败: {count}",
+      "applicableCount": "适用项: {count}",
+      "skipCount": "已跳过: {count}",
+      "invalidResponse": "宿主返回的数据无效",
+      "nonNativeError": "非原生环境，无法执行体检",
+      "started": "开始检查本机状态",
+      "runtimeUnknown": "宿主未知",
+      "platformDetected": "检测平台：{platform}（{runtime}）",
+      "platformReadFailed": "无法读取宿主平台；Windows 专用测试已跳过，不计入成功或失败。",
+      "platformUnsupported": "宿主平台“{platform}”没有对应的专用测试；Windows 专用测试已跳过，不计入成功或失败。",
+      "macosSkipNotice": "Windows 专用测试在 macOS 上不适用，将跳过且不计入失败。",
+      "skipReasonPlatformReadFailed": "无法确认宿主平台，已跳过",
+      "skipReasonPlatformMismatch": "当前平台为 {platform}，不适用",
+      "testingItem": "正在测试: {name}...",
+      "summaryNoApplicable": "体检完成：无适用项，已跳过 {skipped} 项。",
+      "summaryResult": "体检完成：适用项成功率 {score}%，成功 {passed}，失败 {failed}，已跳过 {skipped}。",
+      "httpReadFailed": "读取失败（HTTP {status}）"
+    },
+    "batchTests": {
+      "sysGetInfo": "系统信息 (sys.getInfo)",
+      "sysResource": "资源监控 (CPU/Mem)",
+      "sysPathDesktop": "系统路径-桌面 (sys.getPath)",
+      "sysPathDocuments": "系统路径-文档 (sys.getPath)",
+      "sysPathTemp": "系统路径-临时 (sys.getPath)",
+      "fsCwd": "当前目录 (fs.getCurrentDirectory)",
+      "winBounds": "获取窗口边界 (win.getBounds)",
+      "screenDisplays": "获取显示器 (screen.getAllDisplays)",
+      "screenCursor": "鼠标位置 (screen.getCursorScreenPoint)",
+      "processList": "进程列表 (process.list)",
+      "pluginList": "获取本地插件 (plugin.getList)",
+      "dllList": "获取DLL插件 (dllplugin.list)",
+      "protocolRead": "协议读取 (protocol.readText)",
+      "results": {
+        "readSuccess": "读取成功 ({bytes} bytes)",
+        "captureSuccess": "截图成功 ({bytes} bytes)",
+        "marketListSuccess": "获取成功: {count}个插件, 共{total}个",
+        "protocolReadSuccess": "协议读取成功 ({bytes} bytes)"
+      }
+    },
+    "logs": {
+      "title": "实时日志",
+      "clear": "清空",
+      "empty": "暂无日志",
+      "ready": "诊断中心已就绪。请选择左侧功能或运行一键体检。",
+      "nonNativeWarn": "警告：当前不在宿主环境中，API 均不可用",
+      "globalHotkeyTriggered": "[Global] 热键触发: {id} ({keys})"
+    },
+    "system": {
+      "infoCardTitle": "系统信息 (sys)",
+      "getInfoBtn": "获取系统信息",
+      "sendNotifyBtn": "发送通知",
+      "cpuMemBtn": "CPU / 内存",
+      "pathCardTitle": "系统路径 (sys.getPath)",
+      "getPathBtn": "获取路径",
+      "getInfoSuccess": "获取系统信息成功",
+      "getPathSuccess": "获取路径 ({type}): {path}",
+      "testNotifyTitle": "测试通知",
+      "testNotifyBody": "这是一条来自诊断中心的测试通知",
+      "notifySent": "通知已发送",
+      "cpuMemLog": "CPU: {cpu}%, 内存: {mem}%"
+    },
+    "power": {
+      "warningAlert": "部分操作会立即执行，请谨慎测试",
+      "safeCardTitle": "安全操作",
+      "lockBtn": "锁定屏幕",
+      "sleepBtn": "系统睡眠",
+      "dangerCardTitle": "危险操作（需确认）",
+      "hibernateBtn": "休眠",
+      "logoutBtn": "注销",
+      "restartBtn": "重启",
+      "shutdownBtn": "关机",
+      "dangerConfirmTitle": "危险操作确认",
+      "dangerConfirmContent": "确定要执行 {action} 吗？这可能导致数据丢失！",
+      "commandSent": "{action} 命令已发送"
+    },
+    "fs": {
+      "cardTitle": "文件操作 (fs)",
+      "pathAddon": "路径",
+      "readBtn": "读取",
+      "checkExistsBtn": "检查存在",
+      "deleteBtn": "删除",
+      "writeCardTitle": "写入文件",
+      "writeBtn": "写入到上方路径",
+      "dirCardTitle": "目录操作",
+      "listDirBtn": "列出当前目录",
+      "mkDirBtn": "创建测试目录",
+      "emptyContent": "(空)",
+      "opRead": "文件读取",
+      "opWrite": "文件写入",
+      "opCheckExists": "文件存在性检查",
+      "opDelete": "文件删除",
+      "opListDir": "目录枚举",
+      "opMkDir": "创建测试目录",
+      "readSuccess": "读取文件成功 ({bytes} bytes)",
+      "writeSuccess": "写入文件成功: {path}",
+      "existsResult": "文件存在性: {exists}",
+      "deleteConfirmTitle": "确认删除",
+      "deleteConfirmContent": "确定要删除文件 {path} 吗？",
+      "deleteSuccess": "删除文件成功: {path}",
+      "listDirSuccess": "列出目录: {dir} ({count}项)",
+      "mkDirSuccess": "创建目录成功: {dir}"
+    },
+    "db": {
+      "cardTitle": "存储测试 (db)",
+      "keyAddon": "键",
+      "valueAddon": "值",
+      "setBtn": "写入",
+      "getBtn": "读取",
+      "deleteBtn": "删除",
+      "allBtn": "全部文档",
+      "secureSetBtn": "加密写入",
+      "secureGetBtn": "加密读取",
+      "opSuccess": "数据库操作 {op} 成功"
+    },
+    "win": {
+      "cardTitle": "窗口操作 (win)",
+      "minBtn": "最小化",
+      "maxBtn": "最大化",
+      "restoreBtn": "还原",
+      "topBtn": "置顶",
+      "untopBtn": "取消置顶",
+      "devtoolsBtn": "开发者工具",
+      "getBoundsBtn": "获取边界",
+      "widthAddon": "宽",
+      "heightAddon": "高",
+      "setSizeBtn": "设置尺寸",
+      "opacityLabel": "透明度",
+      "applyBtn": "应用",
+      "dialogCardTitle": "对话框 (dialog)",
+      "openFileBtn": "打开文件",
+      "openMultiBtn": "多选文件",
+      "saveFileBtn": "保存文件",
+      "selectFolderBtn": "选择文件夹",
+      "boundsLog": "窗口边界: {bounds}",
+      "actionLog": "执行窗口操作: {action}",
+      "dialogOpenTitle": "选择文件",
+      "dialogAllFiles": "所有文件",
+      "dialogOpenMultiTitle": "选择多个文件",
+      "dialogSaveTitle": "保存文件",
+      "dialogFolderTitle": "选择文件夹",
+      "dialogResultLog": "对话框结果: {result}"
+    },
+    "clipboard": {
+      "cardTitle": "剪贴板 (clipboard)",
+      "placeholder": "要写入剪贴板的文本",
+      "writeTextBtn": "写入文本",
+      "readTextBtn": "读取文本",
+      "readImageBtn": "读取图片",
+      "readFilesBtn": "读取文件",
+      "clearBtn": "清空",
+      "apiUnavailable": "Clipboard API 不可用",
+      "textLog": "剪贴板文本: {text}",
+      "imageLog": "剪贴板图片: {status}",
+      "hasImage": "有图片数据",
+      "noImage": "无图片",
+      "filesLog": "剪贴板文件: {files}",
+      "opSuccess": "剪贴板操作 {op} 成功"
+    },
+    "shell": {
+      "cardTitle": "Shell 操作 (shell)",
+      "urlAddon": "URL",
+      "openExternalBtn": "打开外部链接",
+      "cmdAddon": "命令",
+      "execBtn": "执行命令",
+      "beepBtn": "提示音",
+      "apiUnavailable": "Shell API 不可用",
+      "externalOpened": "已打开外部链接: {url}",
+      "execResult": "执行命令结果: {result}"
+    },
+    "events": {
+      "cardTitle": "事件系统 (events)",
+      "nameAddon": "事件名",
+      "dataPlaceholder": "事件数据 (JSON)",
+      "emitBtn": "发送事件",
+      "onBtn": "开始监听",
+      "offBtn": "停止监听",
+      "fileDropBtn": "启动文件拖放监听（10 秒）",
+      "apiUnavailable": "Events API 不可用",
+      "emitted": "事件已发送: {name}",
+      "received": "收到事件 {name}: {data}",
+      "listening": "已开始监听事件: {name}",
+      "stopped": "已停止监听事件: {name}",
+      "fileDropped": "文件拖放: {files}",
+      "fileDropStarted": "已开启文件拖放监听 (10秒后自动关闭)",
+      "fileDropClosed": "文件拖放监听已关闭"
+    },
+    "trigger": {
+      "cardTitle": "触发器系统 (trigger)",
+      "hotkeyAddon": "热键",
+      "hotkeyPlaceholder": "例如: Ctrl+Alt+T",
+      "registerBtn": "注册热键",
+      "listBtn": "列出触发器",
+      "clearBtn": "清空所有",
+      "alreadyRegistered": "热键 {hotkey} 已注册 (ID: {id})，无需重复注册",
+      "registered": "热键注册成功: {result}",
+      "listLog": "触发器列表 ({count} 个): {list}",
+      "cleared": "已清空所有触发器"
+    },
+    "protocol": {
+      "cardTitle": "协议读取 (ztools://)",
+      "pathAddon": "路径",
+      "urlBtn": "生成 URL",
+      "readTextBtn": "读取文本",
+      "readBlobBtn": "读取 Blob",
+      "opName": "本地文件协议测试",
+      "urlLog": "生成的协议 URL: {url}",
+      "readTextLog": "协议读取文本成功: {preview}...",
+      "readBlobLog": "协议读取Blob成功: {size} bytes, type: {type}"
+    },
+    "privileged": {
+      "cardTitle": "特权服务 (privileged)",
+      "systemAlert": "通过 ZToolsService（System 权限）执行",
+      "regPathAddon": "注册表路径",
+      "regNameAddon": "名称",
+      "regValAddon": "值",
+      "regWrite64Btn": "写入 64 位",
+      "regWrite32Btn": "写入 32 位",
+      "regDelete64Btn": "删除 64 位",
+      "regDelete32Btn": "删除 32 位",
+      "fileAddon": "文件",
+      "fileWriteBtn": "提权写入",
+      "restartExplorerBtn": "重启 Explorer",
+      "opName": "特权服务测试",
+      "restartConfirmTitle": "警告",
+      "restartConfirmContent": "确定要重启资源管理器吗？这会导致任务栏闪烁。",
+      "restartSent": "已发送重启资源管理器指令",
+      "actionResult": "特权操作 {action} 结果: {result}"
+    },
+    "screen": {
+      "cardTitle": "屏幕与模拟 (screen)",
+      "captureBtn": "截图",
+      "displaysBtn": "显示器列表",
+      "cursorBtn": "鼠标位置",
+      "keyPlaceholder": "按键",
+      "simulateKeyBtn": "模拟按键",
+      "captureLog": "截图成功 (Base64 length: {length})",
+      "displaysLog": "显示器列表: {displays}",
+      "cursorLog": "鼠标位置: {pos}",
+      "simulateKeyLog": "模拟按键: {key}"
+    },
+    "network": {
+      "cardTitle": "网络与进程 (network / process)",
+      "urlAddon": "URL",
+      "sendHttpBtn": "发送 HTTP 请求",
+      "getProcessesBtn": "获取进程列表",
+      "httpSuccess": "HTTP请求成功: {status}",
+      "processListLog": "获取进程列表: {count}个"
+    },
+    "dll": {
+      "cardTitle": "DLL 插件调用 (dllplugin)",
+      "pluginAddon": "插件名",
+      "funcAddon": "函数名",
+      "paramsPlaceholder": "参数 (JSON)",
+      "callBtn": "调用 DLL 函数",
+      "listBtn": "获取 DLL 列表",
+      "callSuccess": "DLL插件调用成功",
+      "listLog": "DLL插件列表: {list}"
+    }
+  },
+  "bundledPlugins": {
+    "errors": {
+      "notBundled": "不是内置插件: {pluginId}",
+      "invalidResourcePath": "非法的插件资源路径: {path}",
+      "loadResourceFailed": "无法加载内置插件资源 [{pluginId}/{path}]: HTTP {status}"
+    }
   }
 }

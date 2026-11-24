@@ -136,7 +136,7 @@ test('历史恢复写入图片原始字节和完整文件列表，缺失文件�
     assert.deepEqual(grants, [])
     assert.deepEqual((await service.readFiles(caller, signal)).files, [])
     assert.deepEqual(grants, [])
-    await assert.rejects(service.restoreHistoryEntry({ type: 'files', files: [path.join(directory, 'missing')] }, caller, signal, true), /不存在或无法访问/)
+    await assert.rejects(service.restoreHistoryEntry({ type: 'files', files: [path.join(directory, 'missing')] }, caller, signal, true), /does not exist or is inaccessible/i)
     assert.deepEqual(fileClipboard.paths, await Promise.all([fs.realpath(first), fs.realpath(second)]))
   } finally { await service.stop(); events.stop(); await fs.rm(directory, { recursive: true, force: true }) }
 })
@@ -360,7 +360,7 @@ test('clipboard failures keep stable codes without exposing native error details
       () => service.readText(),
       (error) => error instanceof ZToolsError &&
         error.code === errorCodes.clipboardError &&
-        error.message === '剪贴板操作失败' &&
+        error.message === 'Clipboard operation failed' &&
         !error.message.includes('secret.txt')
     )
   } finally {
@@ -383,7 +383,7 @@ test('clipboard domain errors from platform adapters cannot leak their message',
       service.copyFiles({ filePaths: [] }, caller, new AbortController().signal),
       (error) => error instanceof ZToolsError &&
         error.code === errorCodes.clipboardError &&
-        error.message === '剪贴板操作失败' &&
+        error.message === 'Clipboard operation failed' &&
         !error.message.includes('private.txt')
     )
   } finally {
@@ -937,7 +937,7 @@ test('macOS paste without Accessibility permission fails with PERMISSION_DENIED,
     await assert.rejects(service.hideAndPasteText({ text: '#123456' }, caller, new AbortController().signal), (error: unknown) => {
       assert.ok(error instanceof ZToolsError)
       assert.equal(error.code, errorCodes.permissionDenied)
-      assert.match(error.message, /已复制.*辅助功能/)
+      assert.match(error.message, /Copied.*Accessibility/i)
       assert.equal(error.details?.hostCode, 'ACCESSIBILITY_PERMISSION_DENIED')
       return true
     })
@@ -1092,7 +1092,7 @@ test('粘贴在途时所有宿主写入口拒绝抢占，原文本只粘贴一�
       () => service.hideAndType('覆盖', caller, signal)
     ]
     for (const operation of operations) {
-      await assert.rejects(Promise.resolve().then(operation), { code: errorCodes.clipboardError, message: '剪贴板操作正在进行，请完成后重试' })
+      await assert.rejects(Promise.resolve().then(operation), { code: errorCodes.clipboardError, message: 'A clipboard operation is already in progress; please retry after it finishes' })
       assert.equal(clipboard.text, '第一份文本')
     }
     release(); await first
@@ -1126,7 +1126,7 @@ test('等待目标应用激活时外部复制变化就停止粘贴，保留新�
   const { service, clipboard, events, log } = createMacPasteHarness({ delayMs: 30 })
   try {
     const request = service.hideAndPasteText({ text: '原文本' }, caller, new AbortController().signal)
-    const rejected = assert.rejects(request, { code: errorCodes.clipboardError, message: '剪贴板已变化，已停止自动粘贴，请重新选择内容' })
+    const rejected = assert.rejects(request, { code: errorCodes.clipboardError, message: 'Clipboard changed; auto-paste stopped, please reselect the content' })
     await until(() => log.includes('app.hide')); clipboard.writeText('用户后来复制的内容')
     await rejected
     assert.equal(clipboard.text, '用户后来复制的内容'); assert.ok(!log.includes('paste'))

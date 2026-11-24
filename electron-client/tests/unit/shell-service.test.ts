@@ -76,7 +76,7 @@ test('shell failures use stable messages instead of platform-provided path detai
       context.service.openPath({ fullPath: file }, caller),
       (error) => error instanceof ZToolsError &&
         error.code === errorCodes.shellError &&
-        error.message === '打开失败' &&
+        error.message === 'Failed to open path' &&
         !error.message.includes('/Users/alice')
     )
   } finally {

@@ -73,7 +73,7 @@ test('macOS 图片识别走本机 Vision，按语言映射且不回退 tesseract
 test('macOS 识别失败如实返回：空文字、Vision 报错、取消、超过 16 MB、组件缺失', async () => {
   await withImage(Buffer.from('png'), image => onPlatform('darwin', async () => {
     const empty = handlerWith({ macOcr: fakeMacOcr({ recognizeLocal: async () => ({ text: ' \n ' }) }).ports }).handler
-    assert.deepEqual(await empty.handleOcr('recognizeImage', { path: image }), { ok: false, success: false, empty: true, error: '没有识别到文字' })
+    assert.deepEqual(await empty.handleOcr('recognizeImage', { path: image }), { ok: false, success: false, empty: true, errorCode: 'OCR_NO_TEXT', error: '没有识别到文字' })
 
     const broken = handlerWith({ macOcr: fakeMacOcr({ recognizeLocal: async () => { throw new ZToolsError(errorCodes.invalidRequest, '当前Vision版本不支持所选语言') } }).ports }).handler
     const failure = await broken.handleOcr('recognizeImage', { path: image, lang: 'ko-KR' }) as OcrResult
@@ -98,7 +98,7 @@ test('识别剪贴板图片：没有图片明确报错；有图片时写临时�
   await onPlatform('darwin', async () => {
     const { ports, calls } = fakeMacOcr()
     const none = handlerWith({ macOcr: ports, readClipboardImage: () => undefined }).handler
-    assert.deepEqual(await none.handleOcr('recognizeClipboard', {}), { ok: false, success: false, error: '剪贴板里没有图片' })
+    assert.deepEqual(await none.handleOcr('recognizeClipboard', {}), { ok: false, success: false, errorCode: 'CLIPBOARD_NO_IMAGE', error: '剪贴板里没有图片' })
     assert.equal(calls.recognize.length, 0)
 
     const before = new Set((await fs.readdir(os.tmpdir())).filter(name => name.startsWith('ztools_ocr_clip_')))
@@ -125,7 +125,7 @@ test('框选识字：取消不当失败、无屏幕录制权限先拒绝、成�
 
     const cancel = fakeMacOcr({ selectScreenRegion: async () => undefined })
     assert.deepEqual(await handlerWith({ macOcr: cancel.ports, captureScreenRegionToPng: capture, screenCapturePermission: () => 'granted' })
-      .handler.handleOcr('captureRegionAndRecognize', {}), { ok: false, success: false, canceled: true, error: '已取消框选' })
+      .handler.handleOcr('captureRegionAndRecognize', {}), { ok: false, success: false, canceled: true, errorCode: 'CANCELLED', error: '已取消框选' })
     assert.equal(captured.length, 0)
 
     const ok = fakeMacOcr()
@@ -306,7 +306,7 @@ test('Windows 先用本机 PP-OCRv5：成功不调用系统识别，空结果直
     assert.equal(info.engine, 'PP-OCRv5')
 
     const empty = handlerWith({ localOcr: localOcr(async () => ['  ']), runPowerShell: systemOcr })
-    assert.deepEqual(await empty.handler.handleOcr('recognizeImage', { path: image, lang: 'en-US' }), { ok: false, success: false, empty: true, error: '没有识别到文字' })
+    assert.deepEqual(await empty.handler.handleOcr('recognizeImage', { path: image, lang: 'en-US' }), { ok: false, success: false, empty: true, errorCode: 'OCR_NO_TEXT', error: '没有识别到文字' })
     assert.equal(scripts.length, 0, '本机识别的空结果不是故障，不再调用系统识别')
 
     const broken = handlerWith({ localOcr: localOcr(async () => { throw new Error('文字识别进程意外退出') }), runPowerShell: systemOcr })
@@ -340,11 +340,11 @@ test('Windows 本机识别中取消：直接返回已取消，不改用系统识
       },
       runPowerShell: async script => { scripts.push(script); return '{}' }
     })
-    assert.deepEqual(await handler.handleOcr('recognizeImage', { path: image }, undefined, controller.signal), { ok: false, success: false, error: 'OCR 识别已取消' })
+    assert.deepEqual(await handler.handleOcr('recognizeImage', { path: image }, undefined, controller.signal), { ok: false, success: false, errorCode: 'CANCELLED', error: 'OCR 识别已取消' })
     assert.deepEqual([scripts, commands], [[], []])
     const late = handlerWith({ localOcr: { recognizeImage: async () => { controller.abort(); return ['迟到的文字'] }, stop: () => undefined } })
     const lateController = controller
-    assert.deepEqual(await late.handler.handleOcr('recognizeImage', { path: image }, undefined, lateController.signal), { ok: false, success: false, error: 'OCR 识别已取消' })
+    assert.deepEqual(await late.handler.handleOcr('recognizeImage', { path: image }, undefined, lateController.signal), { ok: false, success: false, errorCode: 'CANCELLED', error: 'OCR 识别已取消' })
   }))
 })
 
@@ -368,7 +368,7 @@ test('Windows 有效空结果直接提示没有文字，不调用回退引擎', 
     for (const output of [{ text: '', lines: [] }, { text: ' \n ', lines: [' ', '\n'] }, { text: '', lines: '' }]) {
       const { handler, commands } = handlerWith({ runPowerShell: async () => JSON.stringify(output) })
       assert.deepEqual(await handler.handleOcr('recognizeImage', { path: image }), {
-        ok: false, success: false, empty: true, error: '没有识别到文字'
+        ok: false, success: false, empty: true, errorCode: 'OCR_NO_TEXT', error: '没有识别到文字'
       })
       assert.deepEqual(commands, [], '空图片不需要安装或调用 tesseract')
     }
@@ -411,7 +411,7 @@ test('Windows 取消识别后忽略迟到的空结果和文字，不调用回退
         return JSON.stringify({ text, lines: [text] })
       } })
       assert.deepEqual(await handler.handleOcr('recognizeImage', { path: image }, undefined, controller.signal), {
-        ok: false, success: false, error: 'OCR 识别已取消'
+        ok: false, success: false, errorCode: 'CANCELLED', error: 'OCR 识别已取消'
       })
       assert.deepEqual(commands, [])
     }

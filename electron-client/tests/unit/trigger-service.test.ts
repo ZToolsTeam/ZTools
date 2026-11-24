@@ -1501,3 +1501,109 @@ test('[防误触] 退出双击修饰键录制后的 600ms 冷却期内，延迟�
 
   await service.stop()
 })
+
+test('独立悬浮条快捷键 global_launcher_hotkey：冷启动与老用户升级播种、冲突避让、独立触发零重叠与双向互斥', async () => {
+  // 1. 全新冷启动同时播种 global_wake_hotkey 与 global_launcher_hotkey，且动作完全独立不重叠
+  const freshStore = new MemoryStore()
+  const freshShortcuts = new FakeShortcuts()
+  let wakeCount = 0
+  let launcherCount = 0
+  const freshService = new TriggerService({
+    dataRoot: 'unused',
+    store: freshStore,
+    shortcuts: freshShortcuts,
+    events: { publishHost: () => ({ success: true, delivered: 1 }) },
+    toggleMainWindow: () => { wakeCount += 1 },
+    toggleLauncher: () => { launcherCount += 1 },
+    openPlugin: async () => undefined,
+    initialWakeHotkey: 'Alt+Space',
+    initialLauncherHotkey: 'Alt+Shift+Space',
+    platform: 'win32'
+  })
+  await freshService.waitUntilReady()
+  assert.deepEqual(freshService.getGlobalWakeHotkey(), { exists: true, enabled: true, key: 'Alt+Space' })
+  assert.deepEqual(freshService.getGlobalLauncherHotkey(), { exists: true, enabled: true, key: 'Alt+Shift+Space' })
+  assert.equal(freshShortcuts.callbacks.has('alt+space'), true)
+  assert.equal(freshShortcuts.callbacks.has('alt+shift+space'), true)
+
+  freshShortcuts.fire('Alt+Shift+Space')
+  assert.equal(launcherCount, 1)
+  assert.equal(wakeCount, 0)
+
+  freshShortcuts.fire('Alt+Space')
+  assert.equal(wakeCount, 1)
+  assert.equal(launcherCount, 1)
+
+  // 双向冲突拦截：尝试把 global_wake_hotkey 改成 Alt+Shift+Space 时明确报告被「显示悬浮条」占用
+  await assert.rejects(
+    freshService.register(flatTrigger({
+      id: 'global_wake_hotkey',
+      config: { key: 'Alt+Shift+Space' }
+    }) as never, mainCaller),
+    (error) => error instanceof ZToolsError &&
+      error.code === errorCodes.triggerConflict &&
+      /已被「显示悬浮条」占用/.test(error.message)
+  )
+
+  // 插件调用方禁止注册内置 toggle_launcher 动作
+  const pluginCaller: CallerIdentity = { type: 'plugin', webContentsId: 22, pluginId: 'demo.plugin' }
+  await assert.rejects(
+    freshService.register(flatTrigger({
+      id: 'plugin_illegal_launcher',
+      pluginId: 'demo.plugin',
+      config: { key: 'Ctrl+Alt+L' },
+      actionMode: 'builtin',
+      actionTarget: 'toggle_launcher'
+    }) as never, pluginCaller),
+    (error) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied
+  )
+  await freshService.stop()
+
+  // 2. 老用户升级（已有 triggers.json 且其中某插件已占用 Alt+Shift+Space）：默认播种必须自动避让，绝不破坏用户原有绑定
+  const upgradedStore = new MemoryStore({
+    triggers: [
+      {
+        id: 'plugin_existing',
+        pluginId: 'demo.plugin',
+        type: 'hotkey',
+        enabled: true,
+        config: { key: 'Alt+Shift+Space' },
+        action: { mode: 'window', target: 'demo.plugin', params: {} },
+        priority: 0,
+        createTime: '2026-08-24 12:00:00'
+      }
+    ]
+  })
+  const upgradedShortcuts = new FakeShortcuts()
+  const upgradedService = new TriggerService({
+    dataRoot: 'unused',
+    store: upgradedStore,
+    shortcuts: upgradedShortcuts,
+    events: { publishHost: () => ({ success: true, delivered: 1 }) },
+    toggleMainWindow: () => undefined,
+    toggleLauncher: () => undefined,
+    openPlugin: async () => undefined,
+    initialLauncherHotkey: 'Alt+Shift+Space',
+    platform: 'win32'
+  })
+  await upgradedService.waitUntilReady()
+  assert.deepEqual(upgradedService.getGlobalLauncherHotkey(), { exists: false, enabled: false, key: '' })
+  assert.equal(upgradedShortcuts.callbacks.has('alt+shift+space'), true)
+  await upgradedService.stop()
+
+  // 3. 用户主动关闭（initialLauncherHotkey 为空串）时不得重新播种
+  const disabledService = new TriggerService({
+    dataRoot: 'unused',
+    store: new MemoryStore({ triggers: [] }),
+    shortcuts: new FakeShortcuts(),
+    events: { publishHost: () => ({ success: true, delivered: 1 }) },
+    toggleMainWindow: () => undefined,
+    toggleLauncher: () => undefined,
+    openPlugin: async () => undefined,
+    initialLauncherHotkey: '',
+    platform: 'win32'
+  })
+  await disabledService.waitUntilReady()
+  assert.deepEqual(disabledService.getGlobalLauncherHotkey(), { exists: false, enabled: false, key: '' })
+  await disabledService.stop()
+})

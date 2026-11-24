@@ -10,20 +10,20 @@ export interface NetworkBandwidth {
 export type SpeedtestRequest = { action: 'cancel'; operationId: string } | { action: 'bandwidth'; operationId: string } | { action: 'diagnose'; operationId: string; target?: string }
 
 export function parseProbeTarget(raw: unknown): ProbeTarget {
-  if (typeof raw !== 'string' || !raw.trim() || raw.length > 300 || /[\s\\]/.test(raw.trim())) throw new Error('请输入域名、IP 或主机:端口')
+  if (typeof raw !== 'string' || !raw.trim() || raw.length > 300 || /[\s\\]/.test(raw.trim())) throw new Error('Provide a domain, IP, or host:port')
   const value = raw.trim(), url = new URL(value.includes('://') ? value : `https://${net.isIP(value) === 6 ? `[${value}]` : value}`)
   const host = url.hostname.replace(/^\[|\]$/g, '')
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/' ||
-      !host || host.length > 253 || (!net.isIP(host) && !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(host))) throw new Error('只接受域名或 IP，可指定端口；不要包含账号、路径或参数')
+      !host || host.length > 253 || (!net.isIP(host) && !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(host))) throw new Error('Only a domain or IP with an optional port is allowed; omit credentials, path, and query')
   const port = Number(url.port || (url.protocol === 'http:' ? 80 : 443))
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('端口必须为 1～65535')
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be between 1 and 65535')
   return { host, port, name: `${net.isIP(host) === 6 ? `[${host}]` : host}:${port}`, group: 'custom' }
 }
 export function validateSpeedtestRequest(value: unknown): asserts value is SpeedtestRequest {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('测速请求无效')
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid speedtest request')
   const r = value as Record<string, unknown>
-  if (typeof r.action !== 'string' || !['cancel', 'diagnose', 'bandwidth'].includes(r.action) || typeof r.operationId !== 'string' || !/^[\w-]{1,100}$/.test(r.operationId)) throw new Error('测速操作或编号无效')
+  if (typeof r.action !== 'string' || !['cancel', 'diagnose', 'bandwidth'].includes(r.action) || typeof r.operationId !== 'string' || !/^[\w-]{1,100}$/.test(r.operationId)) throw new Error('Invalid speedtest action or operation ID')
   const keys = r.action === 'diagnose' ? ['action', 'operationId', 'target'] : ['action', 'operationId']
-  if (Object.keys(r).some(k => !keys.includes(k))) throw new Error('测速请求含多余字段')
+  if (Object.keys(r).some(k => !keys.includes(k))) throw new Error('Speedtest request contains unexpected fields')
   if (r.action === 'diagnose' && r.target !== undefined) parseProbeTarget(r.target)
 }

@@ -6,8 +6,8 @@ import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import { grantId } from '../../contracts/path-reference.js'
 import type { PathGrantService } from './path-grant-service.js'
 const limit = 16 * 1024 * 1024
-const cancelled = () => new ZToolsError(errorCodes.callerDestroyed, 'ZIP操作已取消')
-const failed = () => new ZToolsError(errorCodes.fileError, 'ZIP文件损坏或条目无效')
+const cancelled = () => new ZToolsError(errorCodes.callerDestroyed, 'ZIP operation cancelled')
+const failed = () => new ZToolsError(errorCodes.fileError, 'ZIP archive is corrupted or contains invalid entries')
 
 async function wait<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -42,10 +42,10 @@ export class ReferenceZipService {
     return result.contents
   }
   async #run(value: unknown, caller: CallerIdentity, signal: AbortSignal, verify: boolean, collect = false) {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).some(key => key !== 'fileGrantId')) throw new ZToolsError(errorCodes.invalidRequest, 'ZIP参数无效')
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).some(key => key !== 'fileGrantId')) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid ZIP parameters')
     const id = grantId((value as { fileGrantId: unknown }).fileGrantId)
     if (this.#stopped || signal.aborted) throw cancelled()
-    if (this.#pending.has(caller.webContentsId) || this.#pending.size >= 2) throw new ZToolsError(errorCodes.fileTooLarge, 'ZIP操作正在处理中')
+    if (this.#pending.has(caller.webContentsId) || this.#pending.size >= 2) throw new ZToolsError(errorCodes.fileTooLarge, 'ZIP operation is already in progress')
     const controller = new AbortController(), combined = AbortSignal.any([signal, controller.signal])
     const active = () => { if (this.#stopped || combined.aborted) throw cancelled() }
     this.#pending.set(caller.webContentsId, controller)
@@ -60,7 +60,7 @@ export class ReferenceZipService {
 async function decodeZipArchive(bytes: Buffer, signal: AbortSignal, verify: boolean, collect: boolean) {
   const active = () => { if (signal.aborted) throw cancelled() }
   active()
-  if (bytes.length > limit) throw new ZToolsError(errorCodes.fileTooLarge, 'ZIP 文件超过 16 MiB')
+  if (bytes.length > limit) throw new ZToolsError(errorCodes.fileTooLarge, 'ZIP archive exceeds 16 MiB')
   let zip: yauzl.ZipFile | undefined
   try {
     try {
@@ -80,9 +80,9 @@ async function decodeZipArchive(bytes: Buffer, signal: AbortSignal, verify: bool
           const name = entry.fileName, segments = name.replace(/\/$/, '').split('/')
           if (!name || name.includes('\\') || name.includes('\0') || /^[A-Za-z]:/.test(name) || segments.some(part => !part || part === '.' || part === '..') || names.has(name)) throw failed()
           nameBytes += Buffer.byteLength(name, 'utf8'); expanded += entry.uncompressedSize
-          if (files.length >= 1024 || nameBytes > 512 * 1024 || entry.uncompressedSize > limit || expanded > 64 * 1024 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, 'ZIP条目数量或展开大小超过上限')
+          if (files.length >= 1024 || nameBytes > 512 * 1024 || entry.uncompressedSize > limit || expanded > 64 * 1024 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, 'ZIP entry count or expanded size exceeds limit')
           names.add(name)
-          if (entry.isEncrypted() || !entry.canDecodeFileData() || ((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw new ZToolsError(errorCodes.notSupported, 'ZIP加密、特殊条目或压缩算法尚不支持')
+          if (entry.isEncrypted() || !entry.canDecodeFileData() || ((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw new ZToolsError(errorCodes.notSupported, 'Encrypted ZIP entries, special entries, or compression method are not supported')
           const directory = name.endsWith('/')
           if (verify && !directory) {
             const input = await archive.openReadStreamPromise(entry)

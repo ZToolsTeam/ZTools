@@ -1,5 +1,5 @@
 import { createTranslator } from "@ztools/declarative-ui";
-export const t = createTranslator({
+const rawT = createTranslator({
     "zh-CN": {
         levelL: "低（7%）",
         levelM: "中（15%）",
@@ -68,7 +68,7 @@ export const t = createTranslator({
         levelQ: "Quartile (25%)",
         levelH: "High (30%)",
         qrAlt: "QR Code",
-        previewMeta: "{type} · {bytes} bytes · Version {version} ({size}×{size}) · ECC {level}",
+        previewMeta: "{type} · {bytes} [[bytes:byte|bytes]] · Version {version} ({size}×{size}) · ECC {level}",
         wifiFormTitle: "Wi-Fi QR Code",
         wifiSubmit: "Generate & Save",
         wifiSsidTitle: "Wi-Fi Name (SSID)",
@@ -124,4 +124,14 @@ export const t = createTranslator({
         ecTooltip: "Error Correction Level",
         ecOption: "ECC {level}"
     }
-}, { defaultLocale: "zh-CN" });
+}, { defaultLocale: "en-US" });
+export const t = (key, params) => {
+    const out = rawT(key, params);
+    if (!out.includes('[['))
+        return out;
+    return out.replace(/\[\[([A-Za-z0-9_.-]+):([^|\]]+)\|([^\]]+)\]\]/g, (_m, k, one, other) => {
+        const v = params?.[k];
+        const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/,/g, ''));
+        return n === 1 ? one : other;
+    });
+};

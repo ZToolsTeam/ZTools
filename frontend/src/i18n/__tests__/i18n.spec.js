@@ -92,9 +92,11 @@ describe('i18n 底座与 Open-Core 词条隔离', () => {
       expect(messages['zh-CN'].commercial).toBeTruthy()
       expect(messages['en-US'].commercial).toBeTruthy()
       setI18nLocale('en-US')
-      expect(t('commercial.nav.feedback')).toBe('Feedback')
+      expect(t('commercial.auth.loginTitle')).toBe('Sign in to ZTools')
+      expect(t('commercial.headerUser.login')).toBe('Sign In')
       setI18nLocale('zh-CN')
-      expect(t('commercial.nav.feedback')).toBe('反馈建议')
+      expect(t('commercial.auth.loginTitle')).toBe('登录 ZTools')
+      expect(t('commercial.headerUser.login')).toBe('登录')
     }
 
     const i18nSource = readFileSync(path.resolve(__dirname, '../index.js'), 'utf-8')
@@ -143,15 +145,19 @@ describe('i18n 底座与 Open-Core 词条隔离', () => {
     ).toBe('en-US')
   })
 
-  it('setI18nLocale 同步更新 vue-i18n locale、翻译输出与 document.documentElement.lang', () => {
+  it('setI18nLocale 同步更新 vue-i18n locale、翻译输出、document.documentElement.lang 与 document.title', () => {
     setI18nLocale('en-US')
     expect(i18n.global.locale.value).toBe('en-US')
     expect(document.documentElement.lang).toBe('en-US')
+    expect(document.title).toBe(t('app.windowTitle'))
+    expect(document.title).toBe('ZTools - Free, Clean Productivity Hub')
     expect(t('settings.title')).toBe('Settings')
 
     setI18nLocale('zh-CN')
     expect(i18n.global.locale.value).toBe('zh-CN')
     expect(document.documentElement.lang).toBe('zh-CN')
+    expect(document.title).toBe(t('app.windowTitle'))
+    expect(document.title).toBe('ZTools - 免费纯净的高效办公工具箱')
     expect(t('settings.title')).toBe('设置')
   })
 

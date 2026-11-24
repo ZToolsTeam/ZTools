@@ -208,6 +208,11 @@
   --color-orange-rgb: var(--rc-accent-rgb);
 }
 
+/* 英文界面优先使用拉丁无衬线字体，避免中文字体抢占英文字符排版 */
+:root:lang(en) {
+  --rc-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei UI", sans-serif;
+}
+
 /* ===== 暗色「墨黑」（默认余烬橙） ===== */
 .dark,
 [data-theme='dark'] {

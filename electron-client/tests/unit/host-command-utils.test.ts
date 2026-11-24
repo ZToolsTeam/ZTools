@@ -8,6 +8,9 @@ import {
   createOemCodePageProbe,
   decodeCommandOutput,
   escapePsSingleQuoted,
+  isAccessDeniedCommandResult,
+  isAccessDeniedError,
+  isAccessDeniedText,
   parseOemCodePage,
   POWERSHELL_UTF8_OUTPUT_PREFIX,
   PowerShellError,
@@ -41,8 +44,10 @@ test('命令输出解码：按系统 OEM 代码页回退，与界面语言无关
   assert.notEqual(decodeCommandOutput(cp866, undefined, 'en-US'), 'Сеть')
   // ANSI 1251（西里尔）“Сеть”
   assert.equal(decodeCommandOutput(Buffer.from([0xd1, 0xe5, 0xf2, 0xfc]), 1251, 'zh-CN'), 'Сеть')
-  // 437/850 TextDecoder 不支持，按 Windows-1252：ASCII 不受影响，不抛错
-  assert.equal(decodeCommandOutput(Buffer.from([0x4f, 0x4b, 0x82]), 437, 'zh-CN'), 'OK\u201a')
+  // 437/850 TextDecoder 不支持，按 Windows-1252（区别于界面语言 zh-CN 的 gb18030）：ASCII 不受影响，不抛错
+  const cp437Sample = Buffer.from([0x4f, 0x4b, 0x82])
+  assert.equal(decodeCommandOutput(cp437Sample, 437, 'zh-CN'), new TextDecoder('windows-1252').decode(cp437Sample))
+  assert.equal(decodeCommandOutput(Buffer.from([0x4f, 0x4b, 0xe9]), 437, 'zh-CN'), 'OKé')
   // 未收录的代码页（如 720 阿拉伯 DOS）退回按界面语言
   assert.equal(decodeCommandOutput(GBK_PROFILES, 720, 'zh-CN'), '所有用户配置文件')
 })
@@ -180,4 +185,46 @@ test('PowerShellError 区分超时、取消与普通失败；非 Windows 上 run
   assert.match(new PowerShellError(130, '').message, /取消/)
   assert.match(new PowerShellError(1, '找不到命令').message, /退出码 1.*找不到命令/)
   if (process.platform !== 'win32') assert.equal(await runPowerShell('Write-Output 1'), '')
+})
+
+test('结构化权限拒绝判定优先依赖 error.code / exitCode / HRESULT 与英文关键字，同时兼容中文 Windows 原生 CLI 固定输出', () => {
+  // 退出码与 Win32/HRESULT 数值码
+  assert.equal(isAccessDeniedCommandResult({ exitCode: 5, stdout: '', stderr: '' }), true)
+  assert.equal(isAccessDeniedCommandResult({ exitCode: 740, stdout: '', stderr: '' }), true)
+  assert.equal(isAccessDeniedCommandResult({ exitCode: 0x80070005, stdout: '', stderr: '' }), true)
+  assert.equal(isAccessDeniedCommandResult({ exitCode: -2147024891, stdout: '', stderr: '' }), true)
+  assert.equal(isAccessDeniedCommandResult({ code: 'EACCES', exitCode: 1 }), true)
+  assert.equal(isAccessDeniedCommandResult({ code: 'EPERM', exitCode: 1 }), true)
+
+  // 英文通用关键字、文本内错误码及简体/繁体中文 Windows CLI 输出（reg/netsh/schtasks 退出码为 1）
+  for (const text of [
+    'ERROR: Access is denied.',
+    'Permission denied',
+    'Operation not permitted',
+    'The requested operation requires elevation.',
+    '[SC] ChangeServiceConfig FAILED 5:',
+    'HRESULT 0x80070005',
+    'ERROR_ACCESS_DENIED',
+    '错误: 拒绝访问。',
+    '请求的操作需要提升(作为管理员运行)。',
+    '錯誤: 存取被拒。',
+    '要求的操作需要提高權限。'
+  ]) {
+    assert.equal(isAccessDeniedText(text), true, `expected denied for: ${text}`)
+    assert.equal(isAccessDeniedCommandResult({ exitCode: 1, stderr: text }), true)
+  }
+
+  // Error 对象按 code / hresult / message 判断
+  assert.equal(isAccessDeniedError(Object.assign(new Error('fail'), { code: 'EACCES' })), true)
+  assert.equal(isAccessDeniedError(Object.assign(new Error('fail'), { code: 'EPERM' })), true)
+  assert.equal(isAccessDeniedError({ hresult: 0x80070005 }), true)
+  assert.equal(isAccessDeniedError(new Error('Access is denied')), true)
+
+  // 负向边界：不误判正常结果、普通英文错误或非权限相关的中文错误
+  assert.equal(isAccessDeniedCommandResult({ exitCode: 0, stdout: 'OK', stderr: '' }), false)
+  assert.equal(isAccessDeniedCommandResult({ exitCode: 1, stdout: '', stderr: 'Invalid parameter' }), false)
+  assert.equal(isAccessDeniedCommandResult({ exitCode: 1, stdout: '', stderr: '错误: 系统找不到指定的注册表项或值。' }), false)
+  assert.equal(isAccessDeniedError(null), false)
+  assert.equal(isAccessDeniedError(undefined), false)
+  assert.equal(isAccessDeniedError({ code: 'ENOENT', message: 'not found' }), false)
 })

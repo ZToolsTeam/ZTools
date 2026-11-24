@@ -19,14 +19,57 @@ function hostCompatStrings() {
     const locale = getLocale();
     return HOST_COMPAT_MESSAGES[locale] ?? HOST_COMPAT_MESSAGES['en-US'];
 }
+/** 动态获取旧版客户端升级提示（请始终调用本函数以支持语言热切换，禁止在模块顶层缓存为静态常量） */
 export function getHostUpgradeHint() {
     return hostCompatStrings().upgradeHint;
 }
-export const HOST_UPGRADE_HINT = getHostUpgradeHint();
-/** 宿主是否因为不认识这个接口而失败（旧客户端） */
+/** 提取结构化错误码（优先 code / errorCode / details.hostCode） */
+function extractCompatErrorCodes(error) {
+    if (!error || typeof error !== 'object')
+        return { code: '', hostCode: '' };
+    const rec = error;
+    const directCode = typeof rec.errorCode === 'string' && rec.errorCode.trim()
+        ? rec.errorCode.trim()
+        : typeof rec.code === 'string' && rec.code.trim()
+            ? rec.code.trim()
+            : '';
+    const nestedErr = rec.error && typeof rec.error === 'object' ? rec.error : null;
+    const code = directCode ||
+        (nestedErr && typeof nestedErr.errorCode === 'string' && nestedErr.errorCode.trim()
+            ? nestedErr.errorCode.trim()
+            : nestedErr && typeof nestedErr.code === 'string' && nestedErr.code.trim()
+                ? nestedErr.code.trim()
+                : '');
+    const details = (rec.errorDetails && typeof rec.errorDetails === 'object' ? rec.errorDetails : null) ||
+        (rec.details && typeof rec.details === 'object' ? rec.details : null) ||
+        (nestedErr?.details && typeof nestedErr.details === 'object' ? nestedErr.details : null);
+    const hostCode = details && typeof details.hostCode === 'string' && details.hostCode.trim() ? details.hostCode.trim() : '';
+    return { code, hostCode };
+}
+/** 宿主是否因为不认识这个接口而失败（旧客户端）：优先按结构化错误码判定，无码时兼容老宿主中文文案 */
 export function isHostMethodMissing(error) {
-    const text = error instanceof Error ? error.message : String(error ?? '');
-    return /METHOD_NOT_FOUND|METHOD_NOT_AVAILABLE|未知方法|is not a function/.test(text);
+    const { code, hostCode } = extractCompatErrorCodes(error);
+    if (code === 'METHOD_NOT_FOUND' ||
+        code === 'METHOD_NOT_AVAILABLE' ||
+        hostCode === 'METHOD_NOT_FOUND' ||
+        hostCode === 'METHOD_NOT_AVAILABLE') {
+        return true;
+    }
+    const text = error instanceof Error
+        ? error.message
+        : error && typeof error === 'object' && typeof error.error === 'string'
+            ? String(error.error)
+            : error && typeof error === 'object' && typeof error.message === 'string'
+                ? String(error.message)
+                : String(error ?? '');
+    if (/METHOD_NOT_FOUND|METHOD_NOT_AVAILABLE|is not a function/.test(text)) {
+        return true;
+    }
+    if (!code && !hostCode) {
+        // i18n-allow: legacy host fallback
+        return /未知方法/.test(text);
+    }
+    return false;
 }
 /** 生成「某功能需要新版客户端」的报错 */
 export function hostUpgradeError(feature) {

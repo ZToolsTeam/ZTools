@@ -3,6 +3,7 @@ import { usePluginsStore } from './plugins'
 import { useUIStore } from './ui'
 import { useThemeStore } from './theme'
 import { useLocaleStore } from './locale'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 import { t } from '@/i18n'
 
 export const useEventsStore = defineStore('events', {
@@ -177,7 +178,7 @@ export const useEventsStore = defineStore('events', {
       try {
         const payload = envelope?.payload || {}
         const pluginId = payload.pluginId
-        const error = payload.error || t('events.pluginNotInstalled')
+        const error = resolveErrorMessage(payload, 'events.pluginNotInstalled')
 
         if (!pluginId) {
           console.warn('[EventsStore] plugin_not_installed 事件缺少 pluginId')

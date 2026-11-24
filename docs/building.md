@@ -107,20 +107,9 @@ macOS 27 的局域网设备 MAC 地址读取还需要 **Network Topology Observa
 - 没有账号登录、端内反馈、插件评论与评分、云同步和检查更新，新版本请到 Releases 下载；
 - 不连接官方后台，也不上报任何使用统计；
 - 侧栏的「反馈建议」在浏览器里打开 [GitHub Issues](https://github.com/ZToolsTeam/ZTools/issues)；
-- 插件市场照常从 CDN 读取插件目录，浏览、安装和更新插件不受影响；
-- 在线翻译需要在构建时配置（见下表），没有配置时翻译命令只查内置词典，其余内容提示「未配置翻译服务」。
+- 插件市场照常从 CDN 读取插件目录，浏览、安装和更新插件不受影响。
 
 与版本有关的能力都通过一层版本接口接入，开源版的实现在 `frontend/src/edition-oss/` 和 `electron-client/src/main/edition-oss/`，见 [架构概览](architecture.md#版本接口)。
-
-构建时可以配置的环境变量：
-
-| 变量 | 作用 |
-| --- | --- |
-| `VITE_TRANSLATION_ENDPOINT` | 翻译命令使用的在线翻译服务地址（`http://` 或 `https://`），构建客户端或界面层时以环境变量传入，也可写在 `frontend/.env.local`；不配置或地址无效时只用内置词典 |
-
-```bash
-VITE_TRANSLATION_ENDPOINT=https://translate.example.com/api npm --prefix electron-client run build
-```
 
 ## Windows 安装包
 

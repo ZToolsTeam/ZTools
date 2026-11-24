@@ -146,7 +146,7 @@ export class RuntimeCapabilityPromptService implements RuntimeCapabilityPromptPo
     if (!pending || pending.webContents !== event.sender || pending.settled || typeof value !== 'boolean' ||
         this.#byNonce.get(pending.nonce) !== pending || !frame || frame !== event.sender.mainFrame ||
         frame.url !== RUNTIME_CAPABILITY_PROMPT_URL) {
-      throw new ZToolsError(errorCodes.permissionDenied, '屏幕采集授权响应无效')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Invalid screen capture authorization response')
     }
     this.#complete(pending, value)
     return { success: true }

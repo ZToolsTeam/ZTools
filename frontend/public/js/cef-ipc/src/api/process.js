@@ -1,3 +1,4 @@
+import { resolveSdkErrorText } from '../core/environment.js'
 /**
  * Process API - 进程管理
  * 进程列表、启动、终止、监控
@@ -53,7 +54,7 @@ class ProcessAPI {
    */
   async listPorts() {
     const response = await this.transport.call('process_list_ports', {}, { timeout: 15000 })
-    const failed = () => Object.assign(new Error('端口列表响应无效'), { code: 'PROCESS_ERROR' })
+    const failed = () => Object.assign(new Error(resolveSdkErrorText('invalidPortListResponse')), { code: 'PROCESS_ERROR' })
     if (!response || response.success !== true || !Array.isArray(response.data) || response.data.length > 20000 || !['darwin-netstat', 'darwin-lsof', 'windows-netstat'].includes(response.source) || !['all-sockets', 'visible-processes'].includes(response.visibility) || typeof response.queriedAt !== 'string' || !Number.isFinite(Date.parse(response.queriedAt))) throw failed()
     const rows = response.data.map(row => {
       if (!row || !['TCP', 'UDP'].includes(row.protocol) || typeof row.localAddress !== 'string' || row.localAddress.length > 128 || !Number.isSafeInteger(row.localPort) || row.localPort < 1 || row.localPort > 65535 || typeof row.remoteAddress !== 'string' || row.remoteAddress.length > 128 || !(row.remotePort === null || Number.isSafeInteger(row.remotePort) && row.remotePort >= 1 && row.remotePort <= 65535) || typeof row.state !== 'string' || !/^[A-Z0-9_]{1,32}$/.test(row.state) || !Number.isSafeInteger(row.pid) || row.pid < 0 || row.pid > 0xffffffff || typeof row.processName !== 'string' || row.processName.length > 512 || typeof row.fieldAvailability?.processName !== 'boolean' || row.fieldAvailability.processPath !== false || row.fieldAvailability.startTime !== false) throw failed()
@@ -64,7 +65,7 @@ class ProcessAPI {
   async list() {
     const response = await this.transport.call('process_list', {})
     if (!response || response.success !== true || !Array.isArray(response.data) || response.data.length > 10000) {
-      throw Object.assign(new Error('进程列表响应无效'), { code: 'PROCESS_ERROR' })
+      throw Object.assign(new Error(resolveSdkErrorText('invalidProcessListResponse')), { code: 'PROCESS_ERROR' })
     }
     return response.data
   }
@@ -174,7 +175,7 @@ class ProcessAPI {
    * @returns {Promise<void>} 当前明确拒绝NOT_SUPPORTED，不启动任务。
    */
   async runFFmpeg(args, onProgress) {
-    const error = new Error('FFmpeg任务的进度、完成与取消能力尚未接入')
+    const error = new Error(resolveSdkErrorText('ffmpegTaskControlNotWired'))
     error.code = 'NOT_SUPPORTED'
     throw error
   }

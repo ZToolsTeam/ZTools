@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import UpdateNotification from '../UpdateNotification.vue'
 import UpdateAPI from '../../../public/js/cef-ipc/src/api/update'
 import ShellAPI from '../../../public/js/cef-ipc/src/api/shell'
+import { getCurrentLocale, setI18nLocale } from '@/i18n'
 
 const macInfo = {
   version: '1.1.8.3', changelog: '更新说明 <script>test</script>',
@@ -13,14 +14,17 @@ const macInfo = {
 let wrapper
 const body = () => new DOMWrapper(document.body)
 let transport
+const originalLocale = getCurrentLocale()
 
 beforeEach(() => {
   setActivePinia(createPinia())
+  setI18nLocale('zh-CN')
   transport = { call: vi.fn().mockResolvedValue({ success: true }) }
   window.ztools = { update: new UpdateAPI(transport), shell: new ShellAPI(transport) }
   window.__ztoolsToast = vi.fn()
 })
 afterEach(() => {
+  setI18nLocale(originalLocale)
   wrapper?.unmount()
   wrapper = null
   document.body.replaceChildren()
@@ -198,5 +202,39 @@ describe('更新通知的真实 SDK 链路', () => {
     await flushPromises()
     expect(transport.call.mock.calls.map(([method]) => method)).toEqual(['update_cancel'])
     expect(window.__ztoolsToast).not.toHaveBeenCalled()
+  })
+
+  it('优先按当前响应式 locale 渲染 changelogI18n，并在热切换语言后实时更新', async () => {
+    setI18nLocale('en-US')
+    await show({
+      ...macInfo,
+      changelog: '## 默认说明\n- 默认内容',
+      changelogI18n: {
+        'zh-CN': '## 本次更新\n- **修复** 窗口焦点问题',
+        'en-US': '## What is New\n- **Fixed** window focus handling'
+      }
+    })
+    expect(body().get('.update-changelog h2').text()).toBe('What is New')
+    expect(body().get('.update-changelog strong').text()).toBe('Fixed')
+    expect(body().get('.update-changelog').text()).not.toContain('本次更新')
+
+    // 打开期间热切换到简体中文，日志内容实时刷新
+    setI18nLocale('zh-CN')
+    await flushPromises()
+    expect(body().get('.update-changelog h2').text()).toBe('本次更新')
+    expect(body().get('.update-changelog strong').text()).toBe('修复')
+  })
+
+  it('changelogI18n 缺失当前语种或为空时安全回退默认 changelog', async () => {
+    setI18nLocale('en-US')
+    await show({
+      ...macInfo,
+      changelog: '## Release Notes\n- Fallback changelog item',
+      changelogI18n: {
+        'zh-CN': '## 中文说明\n- 仅有中文'
+      }
+    })
+    expect(body().get('.update-changelog h2').text()).toBe('Release Notes')
+    expect(body().get('.update-changelog').text()).toContain('Fallback changelog item')
   })
 })

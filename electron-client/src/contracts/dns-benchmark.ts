@@ -19,17 +19,17 @@ export function validNetworkService(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 256 && value === value.trim() && !/^[-*]/.test(value) && !/[\u0000-\u001f\u007f]/.test(value)
 }
 export function validateDnsRequest(value: unknown): asserts value is DnsRequest {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('DNS 请求无效')
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid DNS request')
   const p = value as Record<string, unknown>
-  if (typeof p.action !== 'string' || typeof p.operationId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(p.operationId)) throw new Error('DNS 操作编号无效')
+  if (typeof p.action !== 'string' || typeof p.operationId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(p.operationId)) throw new Error('Invalid DNS operation ID')
   const fields: Record<string, string[]> = {
     list: [], flush: [], cancel: [], benchmark: ['servers'], apply: ['service', 'expectedServers', 'servers'],
     reset: ['service', 'expectedServers'], restore: ['service', 'expectedServers', 'backupId']
   }
   const extras = Object.hasOwn(fields, p.action) ? fields[p.action] : undefined
-  if (!extras || Object.keys(p).some(key => !['action', 'operationId', ...extras].includes(key))) throw new Error('DNS 操作参数无效')
-  if (p.action === 'benchmark' && (!validDnsServers(p.servers, 40) || !p.servers.length)) throw new Error('请选择 1～40 个有效 DNS 地址')
-  if (['apply', 'reset', 'restore'].includes(p.action) && (!validNetworkService(p.service) || !validDnsServers(p.expectedServers))) throw new Error('网络服务或原 DNS 配置无效，请重新读取')
-  if (p.action === 'apply' && (!validDnsServers(p.servers) || !p.servers.length)) throw new Error('请选择有效 DNS 地址')
-  if (p.action === 'restore' && (typeof p.backupId !== 'string' || !/^[0-9a-f-]{36}$/.test(p.backupId))) throw new Error('DNS 恢复记录无效')
+  if (!extras || Object.keys(p).some(key => !['action', 'operationId', ...extras].includes(key))) throw new Error('Invalid DNS operation parameters')
+  if (p.action === 'benchmark' && (!validDnsServers(p.servers, 40) || !p.servers.length)) throw new Error('Select 1 to 40 valid DNS server addresses')
+  if (['apply', 'reset', 'restore'].includes(p.action) && (!validNetworkService(p.service) || !validDnsServers(p.expectedServers))) throw new Error('Invalid network service or original DNS configuration; reload and retry')
+  if (p.action === 'apply' && (!validDnsServers(p.servers) || !p.servers.length)) throw new Error('Select valid DNS server addresses')
+  if (p.action === 'restore' && (typeof p.backupId !== 'string' || !/^[0-9a-f-]{36}$/.test(p.backupId))) throw new Error('Invalid DNS restore record')
 }

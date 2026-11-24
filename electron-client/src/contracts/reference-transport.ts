@@ -30,7 +30,7 @@ export function parseReferenceCancellation(value: unknown): {
       (source.reason !== 'cancel' && source.reason !== 'timeout')) throw invalid()
   return { messageId: source.messageId, method: source.method as ReferenceMethod, reason: source.reason }
 }
-function invalid(): ZToolsError { return new ZToolsError(errorCodes.invalidRequest, '文件取消请求无效') }
+function invalid(): ZToolsError { return new ZToolsError(errorCodes.invalidRequest, 'Invalid file cancel request') }
 
 /** Contract 2 text uses bounded direct IPC or native FileRef, never legacy temporary paths. */
 export function parseReferenceRequest(value: unknown): ZToolsRequest {
@@ -45,4 +45,4 @@ export function parseReferenceRequest(value: unknown): ZToolsRequest {
   } catch { throw invalidRequest() }
   return { ...envelope, params: source.params }
 }
-function invalidRequest(): ZToolsError { return new ZToolsError(errorCodes.invalidRequest, '文件引用请求无效或超出传输上限') }
+function invalidRequest(): ZToolsError { return new ZToolsError(errorCodes.invalidRequest, 'Invalid file reference request or transfer limit exceeded') }

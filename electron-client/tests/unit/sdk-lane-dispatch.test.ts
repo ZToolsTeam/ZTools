@@ -141,7 +141,7 @@ test('selected lane 2 call uses the reference endpoint, while a missing endpoint
   })
   assert.deepEqual(await dispatchTrustedSdkLaneCall({ decision, event: f.event, value: request, legacy }), {
     messageId: request.messageId, success: false,
-    error: { code: 'NOT_SUPPORTED', message: '文件引用运行时尚未接线' }
+    error: { code: 'NOT_SUPPORTED', message: 'File reference runtime is not wired' }
   })
   assert.equal(referenceCalls, 1)
   assert.equal(legacyCalls, 0)
@@ -170,7 +170,7 @@ test('stale generation is rejected before the selected endpoint can observe the 
   })
   assert.deepEqual(result, {
     messageId: 'stale', success: false,
-    error: { code: 'PERMISSION_DENIED', message: '调用者身份或页面已失效' }
+    error: { code: 'PERMISSION_DENIED', message: 'Caller identity or page is no longer valid' }
   })
   assert.equal(referenceCalls, 0)
   assert.equal(legacyCalls, 0)

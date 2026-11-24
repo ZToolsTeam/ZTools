@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { performance } from 'node:perf_hooks'
 import { macNetworkHelperPath, readLanNeighbors } from './lan-neighbor-reader.js'
+import { LAN_LOCAL_RESPONSE } from './lan-network-provider.zh-data.js'
 import { LAN_PORTS, ipv4Text, normalizeLanMac, subnetBounds, type LanHost, type LanInterface } from '../../contracts/lan-network.js'
 
 const exec = promisify(execFile)
@@ -32,7 +33,7 @@ export async function probeLanPing(ip: string, source: string, signal: AbortSign
   try {
     const { stdout } = await exec('/sbin/ping', ['-n', '-c', '1', '-W', '350', '-t', '1', '-S', source, ip], { signal, timeout: 1800, maxBuffer: 8192, env: { ...process.env, LC_ALL: 'C' } })
     const match = stdout.match(/time[=<]([\d.]+)\s*ms/)
-    if (!match || !Number.isFinite(Number(match[1]))) throw new Error('系统 ping 回执无有效延迟')
+    if (!match || !Number.isFinite(Number(match[1]))) throw new Error('System ping reply did not contain a valid latency')
     return Number(match[1])
   } catch (error) {
     signal.throwIfAborted()
@@ -51,7 +52,7 @@ export function probeLanTcp(ip: string, port: number, source: string, signal: Ab
       if (error) reject(error)
       else resolve({ open, responded, ms: Math.max(0, performance.now() - start) })
     }
-    const cancel = () => finish(false, false, new Error('局域网扫描已取消'))
+    const cancel = () => finish(false, false, new Error('LAN scan cancelled'))
     signal.addEventListener('abort', cancel, { once: true })
     socket.once('connect', () => finish(true, true))
     socket.once('error', (error: NodeJS.ErrnoException) => {
@@ -78,10 +79,10 @@ export function sendLanWake(mac: string, source: string, broadcast: string, sign
       if (done) return
       done = true; clearTimeout(timer); signal.removeEventListener('abort', cancel)
       try { socket.close() } catch (closeError) { error ??= closeError as Error }
-      if (error) reject(error); else if (bytes !== 102) reject(new Error('系统未确认完整发送唤醒包')); else resolve(bytes)
+      if (error) reject(error); else if (bytes !== 102) reject(new Error('System did not confirm full transmission of Wake-on-LAN packet')); else resolve(bytes)
     }
-    const cancel = () => finish(new Error('唤醒包发送已取消，设备状态未知'))
-    const timer = setTimeout(() => finish(new Error('唤醒包发送超时，设备状态未知')), 2000)
+    const cancel = () => finish(new Error('Wake-on-LAN packet transmission cancelled; device state is unknown'))
+    const timer = setTimeout(() => finish(new Error('Wake-on-LAN packet transmission timed out; device state is unknown')), 2000)
     signal.addEventListener('abort', cancel, { once: true }); socket.once('error', finish)
     try { socket.bind(0, source, () => {
       if (done) return
@@ -136,24 +137,24 @@ export async function scanLan(iface: LanInterface, addresses: string[], signal: 
   combined.throwIfAborted()
   const others = [...devices.values()].filter(host => host.ip !== iface.ip)
   if (addresses.some(ip => ip !== iface.ip)) {
-    if (!others.length) warnings.push('除本机外未收到任何 ping 回复，也没有设备的 TCP 端口响应：可能网段内没有其他在线设备、被防火墙拦截或系统 ping 失败')
-    else if (!others.some(host => host.response === 'ICMP')) warnings.push('未收到任何 ping 回复：可能被防火墙拦截或系统 ping 失败，结果只包含 TCP 端口有响应的设备')
+    if (!others.length) warnings.push('No ping replies or TCP port responses were received from other hosts: there may be no other online devices on the subnet, traffic may be blocked by a firewall, or system ping failed')
+    else if (!others.some(host => host.response === 'ICMP')) warnings.push('No ping replies were received: traffic may be blocked by a firewall or system ping failed; results only include devices with responding TCP ports')
   }
   if (addresses.includes(iface.ip)) {
-    if (!devices.has(iface.ip)) devices.set(iface.ip, { ip: iface.ip, mac: null, openPorts: [], response: '本机', latencyMs: null })
-    else devices.get(iface.ip)!.response = '本机'
+    if (!devices.has(iface.ip)) devices.set(iface.ip, { ip: iface.ip, mac: null, openPorts: [], response: LAN_LOCAL_RESPONSE, latencyMs: null })
+    else devices.get(iface.ip)!.response = LAN_LOCAL_RESPONSE
   }
   // 始终读取邻居表：macOS 邻居表含本机条目，本机行也带上 MAC；空表只在有其他响应设备时提示（Windows 空 ARP 表在 readWindowsNeighbors 中按空表处理）
   try {
     const arp = await neighbors(iface, combined)
     for (const host of devices.values()) host.mac = arp.get(host.ip) ?? null
-    if (!arp.size && others.length) warnings.push('系统未提供邻居 MAC 地址；仍可查看响应设备和端口，远程唤醒请手动输入设备 MAC')
-  } catch (error) { combined.throwIfAborted(); warnings.push(`MAC 地址读取失败：${error instanceof Error ? error.message : String(error)}`) }
+    if (!arp.size && others.length) warnings.push('System did not provide neighbor MAC addresses; responding devices and ports are still listed, and you can enter the MAC address manually for Wake-on-LAN')
+  } catch (error) { combined.throwIfAborted(); warnings.push(`Failed to read MAC addresses: ${error instanceof Error ? error.message : String(error)}`) }
   return { devices: [...devices.values()].sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true })).map(h => ({ ...h, openPorts: h.openPorts.sort((a, b) => a - b) })), warnings }
 }
 /** 广播地址来自真实掩码计算的 iface.broadcast；/31、/32 点对点网段没有广播地址，直接拒绝 */
 export function wakeLan(mac: string, iface: LanInterface, signal: AbortSignal) {
-  if (!iface.broadcast) throw new Error('所选点对点网段不支持广播唤醒')
+  if (!iface.broadcast) throw new Error('Broadcast Wake-on-LAN is not supported on the selected point-to-point subnet')
   return sendLanWake(mac, iface.ip, iface.broadcast, signal)
 }
 export class MacLanNetworkProvider implements LanNetworkProvider {
@@ -191,9 +192,9 @@ const ipToken = (ip: string) => new RegExp(`(^|[^\\d.])${ip.replace(/\./g, '\\.'
  * 延迟单位随语言变化（俄语“мс”按 latin1 读取后是乱码），解析不到时只记在线、latencyMs 为 null，不让整次扫描失败。
  */
 export function parseWindowsPing(stdout: string, exitCode: number | null, target: string): LanPingReply | null {
-  if (!net.isIPv4(target)) throw new Error('ping 目标地址无效')
+  if (!net.isIPv4(target)) throw new Error('Invalid ping target address')
   if (exitCode === 1) return null
-  if (exitCode !== 0) throw new Error(`系统 ping 异常退出（退出码 ${exitCode ?? '未知'}）`)
+  if (exitCode !== 0) throw new Error(`System ping exited abnormally (exit code ${exitCode ?? 'unknown'})`)
   const token = ipToken(target), line = stdout.split(/\r?\n/).find(v => /(^|[^A-Za-z])TTL=\d+/i.test(v) && token.test(v))
   if (!line) return null
   const match = line.match(/[=<]\s*(\d+(?:\.\d+)?)\s*ms/i), ms = match ? Number(match[1]) : NaN
@@ -218,11 +219,11 @@ export function parseWindowsArp(stdout: string, localIp: string): Map<string, st
     if (header) { section = header[1]!; continue }
     const row = line.match(/^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+([\da-f]{2}(?:-[\da-f]{2}){5})(?:\s|$)/i)
     if (!row) continue
-    if (section === null) throw new Error('系统 ARP 回执格式无法识别')
+    if (section === null) throw new Error('Unrecognized system ARP output format')
     const ip = row[1]!, hex = row[2]!.replace(/-/g, '').toUpperCase()
     if (section !== localIp || !net.isIPv4(ip) || /^0+$/.test(hex) || (parseInt(hex.slice(0, 2), 16) & 1)) continue
     const mac = normalizeLanMac(hex)
-    if (entries.has(ip) && entries.get(ip) !== mac) throw new Error('系统 ARP 表中同一地址对应多个 MAC，结果不可靠')
+    if (entries.has(ip) && entries.get(ip) !== mac) throw new Error('System ARP table contains conflicting MAC addresses for the same IP; result is unreliable')
     entries.set(ip, mac)
   }
   return entries
@@ -230,11 +231,11 @@ export function parseWindowsArp(stdout: string, localIp: string): Map<string, st
 export async function readWindowsNeighbors(localIp: string, signal: AbortSignal, run: WindowsToolRunner = runWindowsTool) {
   signal.throwIfAborted()
   const result = await run(windowsSystemTool('ARP.EXE'), ['-a', '-N', localIp], { signal, timeout: 3000, maxBuffer: 1024 * 1024 })
-  if (result.timedOut) throw new Error('系统 ARP 表读取超时')
+  if (result.timedOut) throw new Error('Timed out reading system ARP table')
   if (result.exitCode !== 0) {
     // ARP 表为空时 arp.exe 输出“未找到 ARP 项”（随语言变化）并以非零退出；只要输出里没有任何可解析的数据行就按空表处理，有数据行的非零退出仍是失败
     if (!arpDataRow.test(result.stdout)) return new Map<string, string>()
-    throw new Error(`系统 ARP 表读取失败（退出码 ${result.exitCode ?? '未知'}）`)
+    throw new Error(`Failed to read system ARP table (exit code ${result.exitCode ?? 'unknown'})`)
   }
   return parseWindowsArp(result.stdout, localIp)
 }
@@ -252,7 +253,7 @@ export class WindowsLanNetworkProvider implements LanNetworkProvider {
   }
   wake(mac: string, iface: LanInterface, signal: AbortSignal) { return wakeLan(mac, iface, signal) }
 }
-const unsupported = (): never => { throw new Error('此局域网接口目前仅支持 macOS 和 Windows') }
+const unsupported = (): never => { throw new Error('LAN network API is currently only supported on macOS and Windows') }
 export function createLanNetworkProvider(platform: string = process.platform): LanNetworkProvider {
   if (platform === 'darwin') return new MacLanNetworkProvider()
   if (platform === 'win32') return new WindowsLanNetworkProvider()

@@ -15,6 +15,7 @@ import { RUNTIME_CAPABILITY_REQUEST_CANCEL_CHANNEL } from '../../src/contracts/r
 import { NETWORK_REQUEST_CANCEL_CHANNEL } from '../../src/contracts/network-request-cancel.js'
 import { parseRequest } from '../../src/contracts/ipc.js'
 import { ReferenceRequestTracker } from '../../src/main/services/reference-request-tracker.js'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 
 interface TransportPort {
   call(method: string, params?: unknown, options?: { signal?: AbortSignal; timeout?: number }): Promise<unknown>
@@ -60,7 +61,7 @@ function fixture(cleanupMs = 100) {
     clearPendingCalls() {}
     destroy() { this.clearPendingCalls() }
   }
-  const source = fs.readFileSync('../frontend/public/js/cef-ipc/src/core/reference-transport.js', 'utf8').replace(/^export default .+$/m, '')
+  const source = loadCefIpcSources(['core/reference-transport'])
   const Constructor = vm.runInNewContext(source + '\nReferenceTransport', { Transport: Base, window, setTimeout, clearTimeout }) as
     new (config: { referenceCleanupMs: number }) => TransportPort
   return { port: new Constructor({ referenceCleanupMs: cleanupMs }), invocations, cancellations, resolve, window }
@@ -99,14 +100,13 @@ function sdk2NetworkFixture(cleanupMs = 100) {
     clearPendingCalls() {}
     destroy() { this.clearPendingCalls() }
   }
-  const transportSource = fs.readFileSync('../frontend/public/js/cef-ipc/src/core/reference-transport.js', 'utf8').replace(/^export default .+$/m, '')
+  const transportSource = loadCefIpcSources(['core/reference-transport'])
   const TransportConstructor = vm.runInNewContext(transportSource + '\nReferenceTransport', {
     Transport: Base, window, setTimeout, clearTimeout
   }) as new (config: { referenceCleanupMs: number }) => TransportPort
-  const networkSource = fs.readFileSync('../frontend/public/js/cef-ipc/src/api/network.js', 'utf8').replace(/^export default .+$/m, '')
-  const referenceNetworkSource = fs.readFileSync('../frontend/public/js/cef-ipc/src/api/network-reference.js', 'utf8').replace(/^export default .+$/m, '')
+  const networkSource = loadCefIpcSources(['api/network', 'api/network-reference'])
   class ReferenceFileSystemFixture { constructor(_transport: unknown) {} }
-  const NetworkConstructor = vm.runInNewContext(`${networkSource}\n${referenceNetworkSource}\nReferenceNetworkAPI`, {
+  const NetworkConstructor = vm.runInNewContext(`${networkSource}\nReferenceNetworkAPI`, {
     ReferenceFileSystemAPI: ReferenceFileSystemFixture
   }) as new (transport: TransportPort) => { request(options: Record<string, unknown>): Promise<unknown> }
   const port = new TransportConstructor({ referenceCleanupMs: cleanupMs })

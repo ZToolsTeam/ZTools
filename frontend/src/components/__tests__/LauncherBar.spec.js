@@ -508,6 +508,25 @@ describe('LauncherBar 搜索结果语义与等待状态', () => {
     wrapper.unmount(); searching.value = false; delete window.__ztoolsLauncher
   })
 
+  it('无结果时只有市场搜索响应回车，空动作面板不会打开', async () => {
+    searchQuery.value = 'nomatch'
+    window.__ztoolsLauncher = { expandToDashboard: vi.fn().mockResolvedValue({ success: true }) }
+    const { wrapper } = await mountLauncher()
+    try {
+      const footer = wrapper.get('.launcher-foot')
+      expect(footer.text()).not.toContain('打开')
+      expect(footer.text()).not.toContain('动作')
+      expect(wrapper.get('.launcher-primary-btn').text()).toContain('在插件市场搜索')
+      const input = wrapper.get('#launcherQuery')
+      await input.trigger('keydown', { key: 'k', ctrlKey: true })
+      expect(wrapper.vm.actionPanelVisible).toBe(false)
+      await input.trigger('keydown', { key: 'Enter' })
+      expect(window.__ztoolsLauncher.expandToDashboard).toHaveBeenCalledWith('/list?q=nomatch')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('应用显示本地名称和真实图标，动作不再称为打开文件夹', async () => {
     setActivePinia(createPinia())
     items.value = [{ key: 'file:/System/Applications/Notes.app', type: 'file', name: '备忘录',
@@ -1136,6 +1155,11 @@ describe('LauncherBar 首屏固定磁贴、全类型固定、1~2排滚动与 Ctr
       expect(wrapper.find('#launcherQuery').attributes('placeholder')).not.toContain('快捷方式')
       expect(wrapper.find('.launcher-foot').text()).toContain('定位')
 
+      // 「工作台」按钮不再显示 Ctrl+U 快捷键徽标，但按 Ctrl+U 仍能唤醒完整工作台
+      const workbenchBtn = wrapper.find('.launcher-workbench-btn')
+      expect(workbenchBtn.text()).toBe('工作台')
+      expect(workbenchBtn.findAll('kbd')).toHaveLength(0)
+
       // 按 Ctrl+U 唤醒完整工作台
       await wrapper.trigger('keydown', { key: 'u', ctrlKey: true })
       await flushPromises()
@@ -1279,6 +1303,44 @@ describe('LauncherBar 首屏固定磁贴、全类型固定、1~2排滚动与 Ctr
     } finally {
       vi.unstubAllGlobals()
       delete window.__ztoolsElectron
+      wrapper.unmount()
+    }
+  })
+
+  it('英文态下结果均为同类插件时隐藏冗余 Plugin 类型标签，混入来源标签或异类时保留', async () => {
+    const { getCurrentLocale, setI18nLocale } = await import('@/i18n')
+    const prevLocale = getCurrentLocale()
+    setI18nLocale('en-US')
+    setActivePinia(createPinia())
+    items.value = [
+      { key: 'calc', pluginId: 'calculator', name: 'Calculator', badge: 'Plugin', actionLabel: 'Launch' },
+      { key: 'json', pluginId: 'json-format', name: 'JSON Format', badge: 'Plugin', actionLabel: 'Launch' }
+    ]
+    const { wrapper } = await mountLauncher()
+    try {
+      expect(wrapper.vm.$.setupState.isUniformResultType).toBe(true)
+      expect(wrapper.vm.$.setupState.displayItems.every((item) => item.badge === '')).toBe(true)
+
+      // 混入不同类型（如 App）时恢复显示
+      items.value = [
+        { key: 'calc', pluginId: 'calculator', name: 'Calculator', badge: 'Plugin', actionLabel: 'Launch' },
+        { key: 'app-1', type: 'file', name: 'Notes', badge: 'App', actionLabel: 'Open' }
+      ]
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.isUniformResultType).toBe(false)
+      expect(wrapper.vm.$.setupState.displayItems[0].badge).toBe('Plugin')
+      expect(wrapper.vm.$.setupState.displayItems[1].badge).toBe('App')
+
+      // 混入子命令来源标签（badgeKind='source'）时不误判为同类类型标签
+      items.value = [
+        { key: 'f1', type: 'plugin-feature', name: 'Format', badge: 'Plugin', badgeKind: 'source' },
+        { key: 'f2', type: 'plugin-feature', name: 'Minify', badge: 'Plugin', badgeKind: 'source' }
+      ]
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.isUniformResultType).toBe(false)
+      expect(wrapper.vm.$.setupState.displayItems.every((item) => item.badge === 'Plugin' && item.badgeQuiet === true)).toBe(true)
+    } finally {
+      setI18nLocale(prevLocale)
       wrapper.unmount()
     }
   })

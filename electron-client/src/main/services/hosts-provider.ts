@@ -20,11 +20,11 @@ export async function readHostsFile(file: string, signal: AbortSignal): Promise<
   const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
     const before = await handle.stat()
-    if (!before.isFile() || before.nlink !== 1 || before.size > HOSTS_MAX_BYTES) throw new Error('Hosts 不是普通单链接文件或超过 1 MiB')
+    if (!before.isFile() || before.nlink !== 1 || before.size > HOSTS_MAX_BYTES) throw new Error('Hosts file is not a regular single-link file or exceeds 1 MiB')
     const bytes = await handle.readFile(), after = await handle.stat(), named = await fs.lstat(file)
-    if (bytes.length > HOSTS_MAX_BYTES || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || before.size !== after.size || named.dev !== after.dev || named.ino !== after.ino) throw new Error('Hosts 读取期间变化，请重试')
+    if (bytes.length > HOSTS_MAX_BYTES || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || before.size !== after.size || named.dev !== after.dev || named.ino !== after.ino) throw new Error('Hosts file changed while reading; retry')
     const content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
-    if (content.includes('\0')) throw new Error('Hosts 包含二进制内容，停止读取')
+    if (content.includes('\0')) throw new Error('Hosts file contains binary data; aborted read')
     signal.throwIfAborted()
     return { content, identity: `${after.dev}:${after.ino}`, revision: hostsRevision(content), path: file }
   } finally { await handle.close() }
@@ -37,9 +37,9 @@ export class MacHostsProvider implements HostsProvider {
   flush(signal: AbortSignal) { return this.dns.flush(signal) }
   async write(before: HostsSnapshot, content: string, signal: AbortSignal) {
     signal.throwIfAborted()
-    if (process.platform !== 'darwin') throw new Error('此 Hosts 写入组件仅用于 macOS')
+    if (process.platform !== 'darwin') throw new Error('This hosts writer helper is only supported on macOS')
     const helper = await fs.lstat(this.helper)
-    if (!path.isAbsolute(this.helper) || !helper.isFile() || helper.isSymbolicLink()) throw new Error('Hosts 安全写入组件不可用，请更新客户端')
+    if (!path.isAbsolute(this.helper) || !helper.isFile() || helper.isSymbolicLink()) throw new Error('Hosts secure writer helper is unavailable; update the client')
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-hosts-request-'))
     const file = path.join(directory, 'request.json'), cancel = path.join(directory, 'cancel')
     let cancelError: unknown
@@ -62,14 +62,14 @@ export class MacHostsProvider implements HostsProvider {
       const appleScript = `do shell script ${JSON.stringify(command)} with administrator privileges`
       let output: string
       try { output = await this.run('/usr/bin/osascript', ['-e', appleScript], AbortSignal.timeout(100000), 100000) }
-      catch (error) { throw new Error(`系统授权或写入未确认，请重新读取 Hosts；${error instanceof Error ? error.message : String(error)}`) }
+      catch (error) { throw new Error(`System authorization or write was not confirmed; reload hosts: ${error instanceof Error ? error.message : String(error)}`) }
       let reply: unknown
-      try { reply = JSON.parse(output) } catch { throw new Error('Hosts 写入结果无法解析，请重新读取系统文件') }
-      if (!hostsRecord(reply) || reply.version !== 1 || typeof reply.success !== 'boolean' || typeof reply.recoveryPath !== 'string' || typeof reply.code !== 'string') throw new Error('Hosts 写入结果不完整，请重新读取')
-      if (!reply.success) throw new Error(`Hosts 未确认写入：${reply.code}${reply.recoveryPath ? `；原文件恢复目录 ${reply.recoveryPath}` : ''}${cancelError ? '；取消标记写入失败' : ''}`)
-      if (!['APPLIED', 'UNCHANGED'].includes(reply.code)) throw new Error('Hosts 写入状态未知，请重新读取')
+      try { reply = JSON.parse(output) } catch { throw new Error('Failed to parse hosts write result; reload the system file') }
+      if (!hostsRecord(reply) || reply.version !== 1 || typeof reply.success !== 'boolean' || typeof reply.recoveryPath !== 'string' || typeof reply.code !== 'string') throw new Error('Incomplete hosts write result; reload and verify')
+      if (!reply.success) throw new Error(`Hosts write not confirmed: ${reply.code}${reply.recoveryPath ? `; recovery directory ${reply.recoveryPath}` : ''}${cancelError ? '; failed to write cancel marker' : ''}`)
+      if (!['APPLIED', 'UNCHANGED'].includes(reply.code)) throw new Error('Unknown hosts write status; reload and verify')
       const current = await this.read(AbortSignal.timeout(10000))
-      if (current.content !== content) throw new Error(`Hosts 写入后校验不一致；恢复目录 ${reply.recoveryPath}`)
+      if (current.content !== content) throw new Error(`Hosts verification mismatch after write; recovery directory ${reply.recoveryPath}`)
       return { recoveryPath: reply.recoveryPath }
     } finally {
       signal.removeEventListener('abort', abort)

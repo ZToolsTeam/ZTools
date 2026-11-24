@@ -1,4 +1,5 @@
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import { t } from '../i18n/index.js'
 import type { ScreenRectangle } from '../services/screen-service.js'
 import type { RegionSelectionBackend } from './macos/region-selection.js'
 
@@ -16,7 +17,11 @@ export function createRegionSelector(dependencies: {
   return {
     async selectScreenRegion(signal) {
       const bounds = dependencies.getDisplayBounds()
-      if (bounds.length === 0) throw new ZToolsError(errorCodes.screenError, '没有可用的显示器')
+      if (bounds.length === 0) {
+        throw new ZToolsError(errorCodes.screenError, t('regionCapture.error.noDisplay'), {
+          i18nKey: 'regionCapture.error.noDisplay'
+        })
+      }
       return dependencies.regionSelection.select(bounds.map(rect => ({ ...rect })), signal ?? new AbortController().signal)
     },
     stop: () => dependencies.regionSelection.stop()
@@ -57,11 +62,17 @@ function contains(outer: ScreenRectangle, inner: ScreenRectangle): boolean {
  */
 export async function captureRegionPng(dependencies: RegionCaptureDependencies, rect: ScreenRectangle): Promise<Buffer> {
   if (![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) || rect.width < 1 || rect.height < 1) {
-    throw new ZToolsError(errorCodes.invalidRequest, '截图区域无效')
+    throw new ZToolsError(errorCodes.invalidRequest, t('regionCapture.error.invalidRegion'), {
+      i18nKey: 'regionCapture.error.invalidRegion'
+    })
   }
   const displays = dependencies.getAllDisplays()
   const display = displays.find(item => contains(item.bounds, rect))
-  if (!display) throw new ZToolsError(errorCodes.screenError, '所选区域不在单个显示器内，请重新框选')
+  if (!display) {
+    throw new ZToolsError(errorCodes.screenError, t('regionCapture.error.crossDisplay'), {
+      i18nKey: 'regionCapture.error.crossDisplay'
+    })
+  }
   const thumbnailSize = {
     width: Math.max(...displays.map(item => Math.ceil(item.bounds.width * item.scaleFactor))),
     height: Math.max(...displays.map(item => Math.ceil(item.bounds.height * item.scaleFactor)))
@@ -69,7 +80,11 @@ export async function captureRegionPng(dependencies: RegionCaptureDependencies, 
   const sources = await dependencies.getSources(thumbnailSize)
   const matches = sources.filter(source => source.display_id === String(display.id))
   const source = matches.length === 1 ? matches[0] : sources.length === 1 && displays.length === 1 ? sources[0] : undefined
-  if (!source || source.thumbnail.isEmpty()) throw new ZToolsError(errorCodes.screenError, '找不到所选显示器的截图源')
+  if (!source || source.thumbnail.isEmpty()) {
+    throw new ZToolsError(errorCodes.screenError, t('regionCapture.error.sourceNotFound'), {
+      i18nKey: 'regionCapture.error.sourceNotFound'
+    })
+  }
   // 缩略图按显示器比例缩放到不超过 thumbnailSize，实际像素按缩略图尺寸换算
   const size = source.thumbnail.getSize()
   const scaleX = size.width / display.bounds.width
@@ -82,8 +97,16 @@ export async function captureRegionPng(dependencies: RegionCaptureDependencies, 
     width: Math.min(size.width - left, Math.ceil(rect.width * scaleX)),
     height: Math.min(size.height - top, Math.ceil(rect.height * scaleY))
   }
-  if (crop.width < 1 || crop.height < 1) throw new ZToolsError(errorCodes.screenError, '截取所选区域失败')
+  if (crop.width < 1 || crop.height < 1) {
+    throw new ZToolsError(errorCodes.screenError, t('regionCapture.error.captureFailed'), {
+      i18nKey: 'regionCapture.error.captureFailed'
+    })
+  }
   const png = source.thumbnail.crop(crop).toPNG()
-  if (png.length === 0) throw new ZToolsError(errorCodes.screenError, '截取所选区域失败')
+  if (png.length === 0) {
+    throw new ZToolsError(errorCodes.screenError, t('regionCapture.error.captureFailed'), {
+      i18nKey: 'regionCapture.error.captureFailed'
+    })
+  }
   return png
 }

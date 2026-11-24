@@ -11,8 +11,13 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { HudService } from './hud-service.js'
+import { getResolvedLocale } from '../i18n/index.js'
 
 const execFileAsync = promisify(execFile)
+
+function _taskbarText(zh: string, en: string): string {
+  return getResolvedLocale() === 'zh-CN' ? zh : en
+}
 
 export interface TaskbarActionResult {
   readonly success: boolean
@@ -42,7 +47,12 @@ export function isMacAutomationPermissionError(error: string | undefined): boole
   return /not authori[sz]ed to send apple events|-1743\b|errAEEventNotPermitted/i.test(error)
 }
 
-const MAC_AUTOMATION_PERMISSION_HINT = '请在「系统设置 > 隐私与安全性 > 自动化」中允许 ZTools 控制 System Events'
+function macAutomationPermissionHint(): string {
+  return _taskbarText(
+    '请在「系统设置 > 隐私与安全性 > 自动化」中允许 ZTools 控制 System Events',
+    'Please allow ZTools to control System Events in System Settings > Privacy & Security > Automation'
+  )
+}
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -106,7 +116,7 @@ export class DefaultTaskbarWin32Adapter implements TaskbarWin32Adapter {
 
     if (this.platform !== 'win32') {
       // 仅支持 Windows 与 macOS，其它平台没有执行任何操作，如实返回失败
-      return { success: false, error: 'unsupported: 当前系统不支持任务栏显隐切换' }
+      return { success: false, error: 'unsupported: Taskbar visibility toggle is not supported on this platform' }
     }
 
     const nCmdShow = visible ? 5 : 0 // SW_SHOW = 5, SW_HIDE = 0
@@ -212,8 +222,12 @@ export class TaskbarService {
 
     this.isVisible = visible
     const message = this.platform === 'darwin'
-      ? (visible ? 'Dock 常驻显示已开启' : 'Dock 自动隐藏已开启')
-      : (visible ? '任务栏已显示' : '任务栏已隐藏')
+      ? (visible
+        ? _taskbarText('Dock 常驻显示已开启', 'Dock always-visible enabled')
+        : _taskbarText('Dock 自动隐藏已开启', 'Dock auto-hide enabled'))
+      : (visible
+        ? _taskbarText('任务栏已显示', 'Taskbar shown')
+        : _taskbarText('任务栏已隐藏', 'Taskbar hidden'))
     this.notify(message, visible ? 'window-maximize' : 'window-minus')
     return { success: true, visible, message }
   }
@@ -231,12 +245,14 @@ export class TaskbarService {
 
   private failureMessage(error: string | undefined): string {
     if (this.platform === 'darwin') {
-      return isMacAutomationPermissionError(error) ? `Dock 设置失败，${MAC_AUTOMATION_PERMISSION_HINT}` : 'Dock 设置失败'
+      return isMacAutomationPermissionError(error)
+        ? _taskbarText(`Dock 设置失败，${macAutomationPermissionHint()}`, `Failed to update Dock settings. ${macAutomationPermissionHint()}`)
+        : _taskbarText('Dock 设置失败', 'Failed to update Dock settings')
     }
     if (this.platform === 'win32') {
-      return '任务栏切换失败'
+      return _taskbarText('任务栏切换失败', 'Failed to toggle taskbar visibility')
     }
-    return '当前系统不支持任务栏显隐切换'
+    return _taskbarText('当前系统不支持任务栏显隐切换', 'Taskbar visibility toggle is not supported on this platform')
   }
 
   private notify(message: string, icon: string, durationMs = 1000): void {
@@ -268,12 +284,12 @@ export class TaskbarService {
   ): Promise<{ success: boolean; edge: 'bottom' | 'left' | 'right'; message: string; error?: string }> {
     const normalized = String(edge ?? '').trim().toLowerCase()
     if (normalized !== 'bottom' && normalized !== 'left' && normalized !== 'right') {
-      throw new Error(`无效的 Dock 停靠位置: ${String(edge)}`)
+      throw new Error(_taskbarText(`无效的 Dock 停靠位置: ${String(edge)}`, `Invalid Dock position: ${String(edge)}`))
     }
 
     if (this.platform !== 'darwin') {
       // Dock 只存在于 macOS，其它平台没有执行任何操作，不能报成功
-      const message = '当前系统没有 Dock，仅 macOS 支持设置停靠位置'
+      const message = _taskbarText('当前系统没有 Dock，仅 macOS 支持设置停靠位置', 'Dock is only available on macOS')
       return { success: false, edge: normalized, message, error: message }
     }
 
@@ -287,19 +303,21 @@ export class TaskbarService {
       return { success: false, edge: normalized, message: this.dockCommandFailureMessage(error), error }
     }
 
-    const labelMap: Record<'bottom' | 'left' | 'right', string> = {
-      bottom: '底部',
-      left: '左侧',
-      right: '右侧'
-    }
-    const message = `Dock 停靠位置已切换至${labelMap[normalized]}`
+    const label = normalized === 'bottom'
+      ? _taskbarText('底部', 'bottom')
+      : normalized === 'left'
+        ? _taskbarText('左侧', 'left')
+        : _taskbarText('右侧', 'right')
+    const message = _taskbarText(`Dock 停靠位置已切换至${label}`, `Dock position moved to ${label}`)
     this.notify(message, '✓')
     return { success: true, edge: normalized, message }
   }
 
   /** Dock 命令失败的提示：权限错误给授权路径，其它错误直接给出原因 */
   private dockCommandFailureMessage(error: string): string {
-    return isMacAutomationPermissionError(error) ? `Dock 设置失败，${MAC_AUTOMATION_PERMISSION_HINT}` : error
+    return isMacAutomationPermissionError(error)
+      ? _taskbarText(`Dock 设置失败，${macAutomationPermissionHint()}`, `Failed to update Dock settings. ${macAutomationPermissionHint()}`)
+      : error
   }
 
   /**
@@ -308,7 +326,7 @@ export class TaskbarService {
   public async restartDock(): Promise<{ success: boolean; message: string; error?: string }> {
     if (this.platform !== 'darwin') {
       // Dock 只存在于 macOS，其它平台没有执行任何操作，不能报成功
-      const message = '当前系统没有 Dock，仅 macOS 支持重启 Dock'
+      const message = _taskbarText('当前系统没有 Dock，仅 macOS 支持重启 Dock', 'Dock restart is only available on macOS')
       return { success: false, message, error: message }
     }
     try {
@@ -317,7 +335,7 @@ export class TaskbarService {
       const error = errorText(err)
       return { success: false, message: error, error }
     }
-    const message = 'Dock 已重启'
+    const message = _taskbarText('Dock 已重启', 'Dock restarted')
     this.notify(message, '✓')
     return { success: true, message }
   }

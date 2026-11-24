@@ -12,6 +12,6 @@ export function createPlatformProcessDiscoveryAdapter(
     case 'darwin':
       return new MacosProcessDiscoveryAdapter()
     default:
-      throw new ZToolsError(errorCodes.notSupported, `当前平台未配置进程发现适配器: ${platform}`)
+      throw new ZToolsError(errorCodes.notSupported, `No process discovery adapter configured for platform: ${platform}`)
   }
 }

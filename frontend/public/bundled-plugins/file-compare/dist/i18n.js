@@ -1,5 +1,5 @@
 import { createTranslator } from '@ztools/declarative-ui';
-export const t = createTranslator({
+const MESSAGES = {
     'zh-CN': {
         sideLeft: '左侧',
         sideRight: '右侧',
@@ -78,9 +78,9 @@ export const t = createTranslator({
         sideLeftFull: 'Left (Original)',
         sideRightFull: 'Right (Modified)',
         clipboardName: 'Clipboard',
-        maxLinesExceeded: 'Text exceeds {max} lines and cannot be compared',
-        fileMaxLinesExceeded: '{name} exceeds {max} lines and cannot be compared',
-        previewTruncated: 'This hunk has {total} lines; preview shows the first {shown} lines. Copy this hunk or the diff report for the full output.',
+        maxLinesExceeded: 'Text exceeds {max} [[max:line|lines]] and cannot be compared',
+        fileMaxLinesExceeded: '{name} exceeds {max} [[max:line|lines]] and cannot be compared',
+        previewTruncated: 'This hunk has {total} [[total:line|lines]]; preview shows the first {shown} [[shown:line|lines]]. Copy this hunk or the diff report for the full output.',
         hunkRemoved: '-{count} line(s)',
         hunkAdded: '+{count} line(s)',
         hunkJoiner: ', ',
@@ -116,7 +116,7 @@ export const t = createTranslator({
         copiedReportToast: 'Copied unified diff report',
         sectionCannotCompare: 'Cannot Compare',
         panelActions: 'Actions',
-        sectionLoadedSide: 'Loaded {side}: {name} ({lines} lines)',
+        sectionLoadedSide: 'Loaded {side}: {name} ({lines} [[lines:line|lines]])',
         needOtherSideTitle: '{side} is still required to compare',
         needOtherSideSubtitle: 'Select a file, paste from clipboard, or edit text to fill the other side',
         panelFillOtherSide: 'Fill Other Side',
@@ -134,7 +134,7 @@ export const t = createTranslator({
         identicalDetailExact: 'Both sides match with no differences.',
         identicalDetailLineEnding: 'Every line has the same content; only line endings (CRLF vs LF) or trailing newline differ, which line-by-line diff ignores.',
         approximatePrefix: 'Too many changes, showing approximate diff · ',
-        diffSummarySection: '{left} ↔ {right} · {approx}-{removed} / +{added} lines · {hunks} hunk(s)',
+        diffSummarySection: '{left} ↔ {right} · {approx}-{removed} / +{added} lines · {hunks} [[hunks:hunk|hunks]]',
         hunkLineTitle: 'Around line {line}',
         panelDiff: 'Diff',
         actionCopyHunk: 'Copy This Hunk',
@@ -144,4 +144,25 @@ export const t = createTranslator({
         searchPlaceholderIdle: 'Press Enter to start, {key} for more actions',
         panelGlobalActions: 'Global Actions'
     }
-}, { defaultLocale: 'zh-CN' });
+};
+const rawT = createTranslator(MESSAGES, { defaultLocale: 'en-US' });
+export const t = (key, params) => {
+    const out = rawT(key, params);
+    if (!out.includes('[['))
+        return out;
+    return out.replace(/\[\[([A-Za-z0-9_.-]+):([^|\]]+)\|([^\]]+)\]\]/g, (_m, k, one, other) => {
+        const v = params?.[k];
+        const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/,/g, ''));
+        return n === 1 ? one : other;
+    });
+};
+/** 判断名称是否属于任一语言下的默认侧名（用于语言热切换时自动跟随当前 locale） */
+export function isDefaultSideName(name) {
+    if (!name)
+        return true;
+    for (const catalog of Object.values(MESSAGES)) {
+        if (name === catalog.sideLeft || name === catalog.sideRight)
+            return true;
+    }
+    return false;
+}

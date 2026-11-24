@@ -18,6 +18,114 @@
 
   // ==================== 工具函数 ====================
 
+  const SDK_I18N = {
+    'en-US': {
+      dropOverlayText: 'Drop files here',
+      closeConfirmTitle: 'Confirm Close',
+      closeConfirmMessage: 'Are you sure you want to close this window?',
+      closeConfirmCancel: 'Cancel',
+      closeConfirmConfirm: 'Close',
+      invalidFileDropPayload: 'Invalid SDK2 file drop payload',
+      fileDropListenerLimitExceeded: 'File drop listener limit (256) exceeded'
+    },
+    'zh-CN': {
+      dropOverlayText: '拖放文件到此处',
+      closeConfirmTitle: '确认关闭',
+      closeConfirmMessage: '确定要关闭此窗口吗？',
+      closeConfirmCancel: '取消',
+      closeConfirmConfirm: '关闭',
+      invalidFileDropPayload: 'SDK2 文件拖放数据无效',
+      fileDropListenerLimitExceeded: '文件拖放监听超过256项'
+    }
+  }
+
+  /**
+   * 清理语言标签：去首尾空白、剥离 POSIX `.UTF-8` / `@...` 后缀并将 `_` 转为 `-`。
+   * 与 `packages/ztools-plugins-spec/src/locale.js` 保持 100% 行为等价。
+   */
+  function stripSdkLocaleSuffix(value) {
+    if (typeof value !== 'string') return ''
+    const trimmed = value.trim()
+    if (!trimmed) return ''
+    const withoutPosix = trimmed.split(/[.@]/)[0] || ''
+    return withoutPosix.trim().replace(/_/g, '-')
+  }
+
+  /**
+   * 严格匹配受支持语言标签（zh-CN / en-US）。
+   * 遇到空值、`'system'`/`'auto'`/`'default'` 或第三语种（如 `ja-JP`/`fr-FR`）必须返回 `null`，
+   * 以便候选列表向后顺延而非提前截断。
+   */
+  function matchSdkLocale(value) {
+    const cleaned = stripSdkLocaleSuffix(value)
+    if (!cleaned) return null
+    const lower = cleaned.toLowerCase()
+    if (lower === 'system' || lower === 'auto' || lower === 'default') {
+      return null
+    }
+    if (lower === 'zh' || lower.startsWith('zh-')) {
+      return 'zh-CN'
+    }
+    if (lower === 'en' || lower.startsWith('en-')) {
+      return 'en-US'
+    }
+    return null
+  }
+
+  /**
+   * 实时解析当前插件运行语言
+   * 优先级：运行期热切换 __ztoolsLocale > 宿主启动 initialLocale > html lang > navigator.language > en-US
+   */
+  function resolveSdkLocale() {
+    const candidates = [
+      global.__ztoolsLocale,
+      typeof globalThis !== 'undefined' ? globalThis.__ztoolsLocale : undefined,
+      global.__ztoolsElectron && global.__ztoolsElectron.initialLocale,
+      typeof document !== 'undefined' && document.documentElement
+        ? document.documentElement.lang
+        : undefined,
+      typeof navigator !== 'undefined' ? navigator.language : undefined
+    ]
+    for (let i = 0; i < candidates.length; i += 1) {
+      const matched = matchSdkLocale(candidates[i])
+      if (matched) return matched
+    }
+    return 'en-US'
+  }
+
+  /**
+   * 应用运行期语言热切换（更新全局 __ztoolsLocale、html lang 及默认拖拽遮罩文案）
+   */
+  function applyLocaleChange(nextRawLocale) {
+    const resolved = matchSdkLocale(nextRawLocale)
+    if (!resolved) return
+    global.__ztoolsLocale = resolved
+    if (typeof globalThis !== 'undefined') {
+      try {
+        globalThis.__ztoolsLocale = resolved
+      } catch (_) {
+        // 沙箱 globalThis 受限时忽略
+      }
+    }
+    if (typeof document !== 'undefined' && document.documentElement) {
+      document.documentElement.lang = resolved
+    }
+    if (FILE_DROP.overlay && !FILE_DROP.options.overlayText && typeof FILE_DROP.overlay.querySelector === 'function') {
+      const textEl = FILE_DROP.overlay.querySelector('.zt-drop-text')
+      if (textEl) {
+        textEl.textContent = tSdk('dropOverlayText')
+      }
+    }
+  }
+
+  /**
+   * 获取当前语言对应的 SDK UI 或错误文案
+   */
+  function tSdk(key) {
+    const dict = SDK_I18N[resolveSdkLocale()] || SDK_I18N['en-US']
+    return dict[key] || SDK_I18N['en-US'][key] || key
+  }
+
   /**
    * 统一的日志输出
    */
@@ -85,7 +193,7 @@
         return global.matchMedia('(prefers-color-scheme: dark)').matches
       }
     } catch (error) {
-      console.warn('[PluginSDK] 读取系统主题失败:', error)
+      console.warn('[PluginSDK] Failed to read system theme:', error)
     }
     return false
   }
@@ -243,7 +351,7 @@
     // 主提示文字
     const text = document.createElement('div')
     text.className = 'zt-drop-text'
-    text.textContent = options.overlayText || '拖放文件到此处'
+    text.textContent = options.overlayText || tSdk('dropOverlayText')
 
     // 副提示（可选）
     const hint = document.createElement('div')
@@ -266,6 +374,13 @@
     const el = FILE_DROP.overlay
 
     if (show) {
+      // 未指定自定义文案时，每次展示按当前运行语言刷新默认提示文字
+      if (!FILE_DROP.options.overlayText && typeof el.querySelector === 'function') {
+        const textEl = el.querySelector('.zt-drop-text')
+        if (textEl) {
+          textEl.textContent = tSdk('dropOverlayText')
+        }
+      }
       // 显示：移除隐藏类和内联 display 样式，添加可见类
       el.classList.remove('zt-drop-hiding')
       el.style.display = ''
@@ -452,7 +567,7 @@
 
       // 标题
       const title = document.createElement('div')
-      title.textContent = '确认关闭'
+      title.textContent = tSdk('closeConfirmTitle')
       title.style.cssText = `
         font-size: 16px;
         font-weight: 600;
@@ -462,7 +577,7 @@
 
       // 内容
       const content = document.createElement('div')
-      content.textContent = '确定要关闭此窗口吗？'
+      content.textContent = tSdk('closeConfirmMessage')
       content.style.cssText = `
         font-size: 14px;
         margin-bottom: 20px;
@@ -511,8 +626,8 @@
         return btn
       }
 
-      const cancelBtn = createButton('取消', false, () => closeDialog(false))
-      const confirmBtn = createButton('关闭', true, () => closeDialog(true))
+      const cancelBtn = createButton(tSdk('closeConfirmCancel'), false, () => closeDialog(false))
+      const confirmBtn = createButton(tSdk('closeConfirmConfirm'), true, () => closeDialog(true))
 
       buttons.appendChild(cancelBtn)
       buttons.appendChild(confirmBtn)
@@ -571,7 +686,7 @@
    * 注册一个文件拖放回调，并返回只注销本次注册的幂等清理函数。
    */
   function referenceDropPayload(data) {
-    const invalid = () => { throw new Error('SDK2 文件拖放数据无效') }
+    const invalid = () => { throw new Error(tSdk('invalidFileDropPayload')) }
     if (global.__ztoolsElectron?.contractVersion !== 2 || !data || typeof data !== 'object' || Array.isArray(data) ||
         Object.keys(data).some(key => !['contractVersion', 'files', 'errors'].includes(key)) || data.contractVersion !== 2 ||
         !Array.isArray(data.files) || data.files.length > 100 || !Array.isArray(data.errors) || data.errors.length > 100) invalid()
@@ -600,7 +715,7 @@
   function subscribeFileDropHandler(callback) {
     if (typeof callback !== 'function') return undefined
     if (global.__ztoolsElectron?.contractVersion === 2 && DROP_HANDLERS.size >= 256) {
-      const error = new Error('文件拖放监听超过256项'); error.code = 'FILE_TOO_LARGE'; throw error
+      const error = new Error(tSdk('fileDropListenerLimitExceeded')); error.code = 'FILE_TOO_LARGE'; throw error
     }
 
     const registration = { callback }
@@ -713,6 +828,20 @@
       }
     })
 
+    // 语言热切换事件（与 preload Object.freeze 的 initialLocale 解耦，支持独立插件窗口实时切换）
+    events.on('system.LocaleChange', (envelope) => {
+      try {
+        const payload = envelope && (envelope.payload || envelope.data || envelope)
+        const nextLocale = typeof payload === 'string' ? payload : payload && payload.locale
+        if (typeof nextLocale === 'string' && nextLocale.trim().length > 0) {
+          applyLocaleChange(nextLocale)
+          log('locale ->', resolveSdkLocale())
+        }
+      } catch (e) {
+        console.error('system.LocaleChange dispatch error', e)
+      }
+    })
+
     // 拖拽进入事件（Delphi CEF OnDragEnter 触发）
     events.on('plugin_drag_enter', () => {
       if (FILE_DROP.enabled) {
@@ -761,7 +890,7 @@
       const style = document.createElement('style')
       style.id = 'ztools-context-menu-styles'
       style.textContent = `
-        /* ===== 菜单容器 ===== */
+        /* ===== Menu container ===== */
         .ztools-context-menu {
           position: fixed;
           z-index: 99999;
@@ -785,14 +914,14 @@
           transform: scale(1);
         }
 
-        /* ===== 深色模式 ===== */
+        /* ===== Dark mode ===== */
         .dark .ztools-context-menu {
           background: #1f2937;
           border-color: #374151;
           box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
         }
 
-        /* ===== 菜单项 ===== */
+        /* ===== Menu item ===== */
         .ztools-context-menu-item {
           display: flex;
           align-items: center;
@@ -824,7 +953,7 @@
           cursor: not-allowed;
         }
 
-        /* ===== 菜单图标 ===== */
+        /* ===== Menu icon ===== */
         .ztools-context-menu-icon {
           font-size: 16px;
           flex-shrink: 0;
@@ -835,13 +964,13 @@
           justify-content: center;
         }
 
-        /* ===== 菜单标签 ===== */
+        /* ===== Menu label ===== */
         .ztools-context-menu-label {
           flex: 1;
           white-space: nowrap;
         }
 
-        /* ===== 分隔线 ===== */
+        /* ===== Separator ===== */
         .ztools-context-menu-separator {
           height: 1px;
           background-color: #e5e7eb;

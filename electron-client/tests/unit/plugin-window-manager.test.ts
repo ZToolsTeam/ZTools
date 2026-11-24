@@ -17,6 +17,7 @@ import type { PluginSessionProvider } from '../../src/main/windows/plugin-sessio
 import type { PluginStateProvider } from '../../src/main/services/plugin-state-service.js'
 import { EventService } from '../../src/main/services/event-service.js'
 import type { CallerIdentity } from '../../src/contracts/capabilities.js'
+import { getLocaleSetting, setLocale } from '../../src/main/i18n/index.js'
 
 let nextWebContentsId = 100
 const originalConsoleInfo = console.info
@@ -997,5 +998,32 @@ test('releases session strong reference symmetrically when last plugin window is
   assert.deepEqual(releasedSessions, ['plugin.test'])
 
   await context.manager.stop()
+})
+
+test('uses localized plugin name from manifest.i18n for window title according to current locale', async () => {
+  const previous = getLocaleSetting()
+  try {
+    const bilingualManifest = manifest({
+      name: '测试插件',
+      i18n: {
+        'en-US': { name: 'Test Plugin' },
+        'zh-CN': { name: '测试插件中文名' }
+      }
+    })
+
+    setLocale('en-US')
+    const enContext = setup(bilingualManifest)
+    await enContext.manager.open({ pluginId: 'plugin.test' })
+    assert.equal(enContext.options[0]?.title, 'Test Plugin')
+    await enContext.manager.stop()
+
+    setLocale('zh-CN')
+    const zhContext = setup(bilingualManifest)
+    await zhContext.manager.open({ pluginId: 'plugin.test' })
+    assert.equal(zhContext.options[0]?.title, '测试插件中文名')
+    await zhContext.manager.stop()
+  } finally {
+    setLocale(previous, 'zh-CN')
+  }
 })
 

@@ -29,7 +29,7 @@ test('dialog filter errors do not echo attacker-controlled extensions', () => {
     (error) => {
       if (!(error instanceof ZToolsError) || error.code !== errorCodes.invalidRequest) return false
       const publicError = toPublicError(error)
-      return publicError.message === '文件筛选扩展名无效' &&
+      return publicError.message === 'Invalid file filter extension' &&
         !publicError.message.includes('secret-token') &&
         !publicError.message.includes('forged.log')
     }

@@ -17,7 +17,7 @@ export interface UploadReferenceParams {
   timeout?: number
 }
 
-const invalid = () => new ZToolsError(errorCodes.invalidRequest, '文件引用传输参数无效')
+const invalid = () => new ZToolsError(errorCodes.invalidRequest, 'Invalid file reference transfer parameters')
 function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype ||
       Object.keys(value).some(key => !keys.includes(key))) throw invalid()

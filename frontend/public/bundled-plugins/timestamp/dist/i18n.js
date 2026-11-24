@@ -44,13 +44,15 @@ export const t = createTranslator({
         wcFormFieldTitle: "时间戳或日期",
         wcFormDesc: "带时区的日期按给定偏移换算；未写时区时按本机时区解释。",
         wcNavTitle: "世界时钟",
-        wcSearchPlaceholder: "搜索城市或 IANA 时区，如 纽约、Europe/Paris",
+        wcSearchPlaceholder: "搜索城市、国家或 IANA 时区，如 旧金山、Tokyo、Europe/Paris",
         wcRefTooltip: "时差参考时区",
         wcConvertAction: "换算指定时间…",
         wcResetAction: "恢复当前时间",
         wcSectionLive: "当前时间 · 相对 {ref} 的时差",
         wcSectionFixed: "指定时刻 · 相对 {ref} 的时差",
         wcOffsetAcc: "时差 {offset}",
+        wcDayDiffPlus: "+{days}天",
+        wcDayDiffMinus: "-{days}天",
         wcCopyLocal: "复制当地时间",
         wcCopiedLocalToast: "已复制当地时间",
         wcSetRef: "设为时差参考"
@@ -99,15 +101,17 @@ export const t = createTranslator({
         wcFormFieldTitle: "Timestamp or Date",
         wcFormDesc: "Dates with timezone offsets are converted accordingly; otherwise local timezone is used.",
         wcNavTitle: "World Clock",
-        wcSearchPlaceholder: "Search city or IANA timezone, e.g. New York, Europe/Paris",
+        wcSearchPlaceholder: "Search city, country, or IANA timezone, e.g. San Francisco, Tokyo, Europe/Paris",
         wcRefTooltip: "Reference Timezone",
         wcConvertAction: "Convert Specific Time…",
         wcResetAction: "Restore Current Time",
         wcSectionLive: "Current Time · Offset vs {ref}",
         wcSectionFixed: "Selected Time · Offset vs {ref}",
         wcOffsetAcc: "Offset {offset}",
+        wcDayDiffPlus: "+{days}d",
+        wcDayDiffMinus: "-{days}d",
         wcCopyLocal: "Copy Local Time",
         wcCopiedLocalToast: "Copied local time",
         wcSetRef: "Set as Reference Zone"
     }
-}, { defaultLocale: "zh-CN" });
+}, { defaultLocale: "en-US" });

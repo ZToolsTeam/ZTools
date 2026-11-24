@@ -164,6 +164,8 @@ test('启动项（Windows）：需要管理员权限由 sc.exe 退出码 5 / sch
     assert.equal(done.success, true); assert.deepEqual(sys.calls, ['sc.exe config HeavySvc start= demand'])
     const task = await new SystemRegistryHostPluginHandler(ctx, fakeSystem({ schtasks: fail(1, 'ERROR: Access is denied.') }).deps).handleStartupManager('setEnabled', { name: 'Upd', source: 'task', taskPath: '\\Ghost\\Upd', enabled: true }) as Result
     assert.equal(task.errorCode, 'ADMIN_REQUIRED')
+    const taskZh = await new SystemRegistryHostPluginHandler(ctx, fakeSystem({ schtasks: fail(1, '错误: 拒绝访问。') }).deps).handleStartupManager('setEnabled', { name: 'Upd', source: 'task', taskPath: '\\Ghost\\Upd', enabled: true }) as Result
+    assert.equal(taskZh.errorCode, 'ADMIN_REQUIRED')
   })
 })
 
@@ -182,14 +184,14 @@ test('启动项（Windows）：清理残留先 reg query 再删除，不依赖�
   const gone = path.join(os.tmpdir(), `ztools-missing-${process.pid}`, 'Gone.exe')
   const reg = (name: string, extra: Record<string, unknown> = {}) => ({ id: `reg:HKCU:${name}`, name, source: 'registry', scope: 'HKCU', ...extra })
   await asWindows(async () => {
-    // A：只在 Run 存在（RunDisabled 返回中文“找不到”）→ 只删 Run；B：删除被拒绝访问
+    // A：只在 Run 存在（RunDisabled 返回中文“找不到”）→ 只删 Run；B：删除被拒绝访问（退出码 5 / Access is denied）
     const sys = fakeSystem({ reg: [
       regValue(RUN, 'A', `"${gone}" --tray`), ...NOT_IN_DISABLED, ok('操作成功完成。'),
-      regValue(RUN, 'B', `"${gone}"`), ...NOT_IN_DISABLED, fail(1, '错误: 拒绝访问。')
+      regValue(RUN, 'B', `"${gone}"`), ...NOT_IN_DISABLED, fail(5, 'ERROR: Access is denied.')
     ] })
     const partial = await new SystemRegistryHostPluginHandler(ctx, sys.deps).handleStartupManager('removeBroken', { items: [reg('A'), reg('B')] }) as Result & { removedIds: string[]; failed: Array<Record<string, unknown>> }
     assert.equal(partial.ok, true); assert.equal(partial.success, true); assert.equal(partial.partial, true)
-    assert.equal(partial.errorCode, 'PARTIAL_FAILED'); assert.match(partial.error!, /^已清理 1 个，1 个未清理：reg:HKCU:B：.*拒绝访问/)
+    assert.equal(partial.errorCode, 'PARTIAL_FAILED'); assert.match(partial.error!, /^已清理 1 个，1 个未清理：reg:HKCU:B：.*Access is denied/)
     assert.deepEqual(partial.removedIds, ['reg:HKCU:A']); assert.equal(partial.removedCount, 1)
     assert.deepEqual(partial.failed.map(f => [f.id, f.errorCode]), [['reg:HKCU:B', 'ADMIN_REQUIRED']])
     assert.deepEqual(sys.calls, [
@@ -204,13 +206,19 @@ test('启动项（Windows）：清理残留先 reg query 再删除，不依赖�
     assert.equal(disabledOnly.calls.at(-1), `reg delete ${RUN_DISABLED} /v D /f`)
 
     // 全部失败：ok:false，同样带 failed，错误文本以错误码开头
-    const denied = await new SystemRegistryHostPluginHandler(ctx, fakeSystem({ reg: [regValue(RUN, 'B', `"${gone}"`), ...NOT_IN_DISABLED, fail(1, '错误: 拒绝访问。')] }).deps).handleStartupManager('removeBroken', { item: reg('B') }) as Result & { failed: unknown[] }
+    const denied = await new SystemRegistryHostPluginHandler(ctx, fakeSystem({ reg: [regValue(RUN, 'B', `"${gone}"`), ...NOT_IN_DISABLED, fail(1, 'ERROR: Access is denied. (0x80070005)')] }).deps).handleStartupManager('removeBroken', { item: reg('B') }) as Result & { failed: unknown[] }
     assert.equal(denied.ok, false); assert.equal(denied.errorCode, 'ADMIN_REQUIRED'); assert.match(denied.error!, /^ADMIN_REQUIRED: /); assert.equal(denied.removedCount, 0); assert.equal(denied.failed.length, 1)
-    const other = await new SystemRegistryHostPluginHandler(ctx, fakeSystem({ reg: [regValue(RUN, 'C', `"${gone}"`), ...NOT_IN_DISABLED, fail(1, '错误: 无效的参数。')] }).deps).handleStartupManager('removeBroken', { item: reg('C') }) as Result
+    const other = await new SystemRegistryHostPluginHandler(ctx, fakeSystem({ reg: [regValue(RUN, 'C', `"${gone}"`), ...NOT_IN_DISABLED, fail(1, 'ERROR: Invalid parameter.')] }).deps).handleStartupManager('removeBroken', { item: reg('C') }) as Result
     assert.equal(other.errorCode, 'REGISTRY_DELETE_FAILED'); assert.match(other.error!, /^REGISTRY_DELETE_FAILED: /)
 
-    // 查询本身失败（拒绝访问 / 其他退出码）不能当成“值不存在”，也不删除
-    for (const [broken, code] of [[fail(1, '错误: 拒绝访问。'), 'ADMIN_REQUIRED'], [fail(124, ''), 'REGISTRY_QUERY_FAILED']] as const) {
+    // 查询本身失败（结构化拒绝访问 / 中文 Windows 拒绝访问 / 其他退出码）不能当成“值不存在”，也不删除
+    for (const [broken, code] of [
+      [fail(5, 'ERROR_ACCESS_DENIED'), 'ADMIN_REQUIRED'],
+      [fail(1, 'ERROR: Access is denied.'), 'ADMIN_REQUIRED'],
+      [fail(1, '错误: 拒绝访问。'), 'ADMIN_REQUIRED'],
+      [fail(1, '请求的操作需要提升。'), 'ADMIN_REQUIRED'],
+      [fail(124, ''), 'REGISTRY_QUERY_FAILED']
+    ] as const) {
       const q = fakeSystem({ reg: [broken] })
       const res = await new SystemRegistryHostPluginHandler(ctx, q.deps).handleStartupManager('removeBroken', { item: reg('Q') }) as Result
       assert.equal(res.errorCode, code); assert.deepEqual(q.calls, [`reg query ${RUN} /v Q`])

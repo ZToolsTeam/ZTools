@@ -1,7 +1,10 @@
+import { resolveErrorMessage } from '@/utils/errorMessage'
+import { t } from '@/i18n'
+
 /** 在发起安装前监听通知，以宿主任务标识匹配结果；漏收通知时查询终态。 */
 export async function runPluginInstall({ pluginId, start, events, getStatus }) {
   if (typeof events?.on !== 'function' || typeof events?.off !== 'function') {
-    throw new Error('客户端安装通知不可用，请重新启动客户端后重试')
+    throw new Error(t('pluginInstall.eventsUnavailable'))
   }
   let operationId = ''
   let timer = null
@@ -24,7 +27,7 @@ export async function runPluginInstall({ pluginId, start, events, getStatus }) {
     settled = true
     cleanup()
     if (payload.success === true) resolveResult(payload)
-    else rejectResult(Object.assign(new Error(payload.error || '安装失败'), { code: payload.errorCode }))
+    else rejectResult(Object.assign(new Error(resolveErrorMessage(payload, 'pluginInstall.failed')), { code: payload.errorCode }))
   }
   const onEvent = (evt) => {
     const payload = evt?.payload && typeof evt.payload === 'object' ? evt.payload : evt
@@ -40,16 +43,16 @@ export async function runPluginInstall({ pluginId, start, events, getStatus }) {
       const result = await getStatus(pluginId, operationId)
       if (settled) return
       if (result?.operationId !== operationId || result?.pluginId !== pluginId) {
-        throw new Error('安装状态响应与当前任务不一致')
+        throw new Error(t('pluginInstall.statusMismatch'))
       }
       if (result.status === 'completed' && typeof result.success === 'boolean') finish(result)
       else if (result.status === 'running') timer = setTimeout(checkStatus, 30_000)
-      else throw new Error('客户端未找到这次安装的最终结果')
+      else throw new Error(t('pluginInstall.resultNotFound'))
     } catch (cause) {
       if (settled) return
       settled = true
       cleanup()
-      rejectResult(Object.assign(new Error('暂时无法确认安装结果，请刷新插件列表查看'), {
+      rejectResult(Object.assign(new Error(t('pluginInstall.statusUnknown')), {
         code: 'INSTALL_STATUS_UNKNOWN', cause
       }))
     }
@@ -59,7 +62,7 @@ export async function runPluginInstall({ pluginId, start, events, getStatus }) {
     // 订阅确认后才发起任务，避免主进程尚未开始转发事件。
     await events.subscribe?.('plugin_install_complete')
     const started = await start()
-    if (!started || started.success === false) throw new Error(started?.error || '安装执行失败')
+    if (!started || started.success === false) throw new Error(resolveErrorMessage(started, 'pluginInstall.executionFailed'))
     if (!started.operationId) return started
     operationId = started.operationId
     const early = earlyResults.get(operationId)

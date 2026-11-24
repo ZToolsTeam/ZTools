@@ -102,7 +102,19 @@
             "color accessibility"
           ]
         }
-      }
+      },
+      "screenshots": [
+        {
+          "file": "screenshots/en-US/01.png",
+          "title": "Color Format Conversion"
+        }
+      ]
     }
-  }
+  },
+  "screenshots": [
+    {
+      "path": "screenshots/01.png",
+      "title": "颜色格式换算"
+    }
+  ]
 }

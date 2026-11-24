@@ -3,7 +3,7 @@ export interface FontRequest { action: 'list' | 'preview' | 'reveal'; operationI
 export interface InstalledFont { id: string; family: string; style: string; filePath: string; hasLicense: boolean; system: boolean }
 export interface FontPreview { id: string; png: string; fallbacks: string[]; coverageWarning?: string; license: string; licenseUrl: string; copyright: string; manufacturer: string }
 export function validateFontRequest(value: unknown): asserts value is FontRequest {
-  const invalid = () => new ZToolsError(errorCodes.invalidRequest, '字体操作参数无效')
+  const invalid = () => new ZToolsError(errorCodes.invalidRequest, 'Invalid font operation parameters')
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalid()
   const p = value as Record<string, unknown>
   if (Object.keys(p).some(key => !['action', 'operationId', 'id', 'text'].includes(key)) || typeof p.action !== 'string' || !['list', 'preview', 'reveal'].includes(p.action) || typeof p.operationId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(p.operationId)) throw invalid()

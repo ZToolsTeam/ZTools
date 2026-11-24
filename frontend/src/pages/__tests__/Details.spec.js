@@ -6,7 +6,8 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { Modal } from 'ant-design-vue'
 
 import Details from '../Details.vue'
-import { usePluginsStore } from '@/stores/plugins'
+import { HIDDEN_BUNDLED_CONFIG_KEY, usePluginsStore } from '@/stores/plugins'
+import { getCurrentLocale, setI18nLocale, t } from '@/i18n'
 
 const toastSpies = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
@@ -246,7 +247,8 @@ describe('Details Page', () => {
 
     expect(wrapper.find('[aria-label="插件信息"]').exists()).toBe(false)
     expect(wrapper.findAll('.detail-card').map((card) => card.attributes('data-section'))).toEqual(['detail'])
-    expect(wrapper.get('.detail-card .card-title').text()).toBe('插件详情')
+    expect(wrapper.get('.detail-overview [data-test="comments-action"]').exists()).toBe(true)
+    expect(wrapper.find('.usage-example').exists()).toBe(false)
     expect(wrapper.find('.detail-card [data-test="description-panel"]').exists()).toBe(true)
     // 插件数据里带了版本记录，开源版也不显示
     expect(wrapper.text()).not.toContain('版本记录')
@@ -301,6 +303,72 @@ describe('Details Page', () => {
     })
     await flushPromises()
     expect(JSON.parse(wrapper.get('[data-test="shots"]').text())).toEqual([good])
+  })
+
+  it('用插件声明的文本口令展示真实示例，切换语言后更新触发词和说明', async () => {
+    const originalLocale = getCurrentLocale()
+    apiMocks.getPluginDetails.mockResolvedValueOnce({
+      pluginId: 'plugin-1', name: 'Test', version: '1.0.0',
+      features: [null, { code: 'unsupported' }, { code: 'region', cmds: ['截图识字'], explain: '识别并复制' }],
+      i18n: { 'en-US': { features: { region: { cmds: ['screen OCR'], explain: 'Recognize and copy' } } } }
+    })
+    try {
+      setI18nLocale('zh-CN')
+      wrapper = mount(Details, { global: { plugins: [router], stubs: { PluginDetailHeader: true } } })
+      await flushPromises()
+      expect(wrapper.get('.usage-command').text()).toBe('截图识字')
+      expect(wrapper.get('.usage-example').text()).toContain('识别并复制')
+      setI18nLocale('en-US')
+      await flushPromises()
+      expect(wrapper.get('.usage-command').text()).toBe('screen OCR')
+      expect(wrapper.get('.usage-example').text()).toContain('Recognize and copy')
+    } finally {
+      setI18nLocale(originalLocale)
+    }
+  })
+
+  it('切换语言后详情页响应式切换本地化截图与标题', async () => {
+    const originalLocale = getCurrentLocale()
+    const zhShot = { url: 'https://cdn.ztools.cn/plugins-v2/official/plugin-1/screenshots/1.0.0/01-zh.png', title: '中文主界面', width: 1280, height: 800 }
+    const enShot = { url: 'https://cdn.ztools.cn/plugins-v2/official/plugin-1/screenshots/1.0.0/01-en.png', title: 'English Main View', width: 1280, height: 800 }
+    apiMocks.getPluginDetails.mockResolvedValueOnce({
+      pluginId: 'plugin-1',
+      name: 'Plugin 1',
+      version: '1.0.0',
+      changelogs: [],
+      screenshots: [zhShot],
+      i18n: {
+        'en-US': {
+          name: 'Plugin 1 EN',
+          screenshots: [enShot]
+        }
+      }
+    })
+    try {
+      setI18nLocale('zh-CN')
+      wrapper = mount(Details, {
+        global: {
+          plugins: [router],
+          stubs: {
+            PluginDetailHeader: true,
+            PluginDescription: true,
+            PluginScreenshots: { props: ['screenshots'], template: '<div data-test="shots">{{ JSON.stringify(screenshots) }}</div>' }
+          }
+        }
+      })
+      await flushPromises()
+      expect(JSON.parse(wrapper.get('[data-test="shots"]').text())).toEqual([zhShot])
+
+      setI18nLocale('en-US')
+      await flushPromises()
+      expect(JSON.parse(wrapper.get('[data-test="shots"]').text())).toEqual([enShot])
+
+      setI18nLocale('zh-CN')
+      await flushPromises()
+      expect(JSON.parse(wrapper.get('[data-test="shots"]').text())).toEqual([zhShot])
+    } finally {
+      setI18nLocale(originalLocale)
+    }
   })
 
   it('内置插件的截图只用随客户端分发的本地副本，不请求插件目录', async () => {
@@ -508,14 +576,22 @@ describe('Details Page', () => {
       await flushPromises()
       expect(confirm).not.toHaveBeenCalled()
       expect(apiMocks.uninstallPluginNative).not.toHaveBeenCalled()
-      expect(toastSpies.toastInfo).toHaveBeenCalledWith('请在设置中卸载或还原内置插件')
+      expect(toastSpies.toastInfo).toHaveBeenCalledWith(t('details.manageBundledInSettings'))
       expect(router.currentRoute.value.name).toBe('advanced-settings')
       expect(router.currentRoute.value.query.manageBundled).toBe('calculator')
       confirm.mockRestore()
     })
 
-    it('已被假卸载的随客户端内置插件：详情页标记为未安装，点击安装入口直接本地一键还原且无需请求下载签名', async () => {
-      await pluginsStore.hideBundledPlugin('calculator')
+    it('已隐藏的内置插件在详情页可以恢复显示，无需请求下载签名', async () => {
+      const config = new Map([[HIDDEN_BUNDLED_CONFIG_KEY, ['calculator']]])
+      window.ztools.config = {
+        get: vi.fn(async (key, fallback) => config.get(key) ?? fallback),
+        set: vi.fn(async (key, value) => {
+          config.set(key, JSON.parse(value))
+          return true
+        })
+      }
+      await pluginsStore.fetchInstalledPlugins()
       const entry = await mountDetailsFor('calculator', 'win32')
       expect(entry.text()).toBe('false|true|false')
 
@@ -524,6 +600,7 @@ describe('Details Page', () => {
       expect(apiMocks.getDownloadSign).not.toHaveBeenCalled()
       expect(apiMocks.installPluginNative).not.toHaveBeenCalled()
       expect(pluginsStore.isBundledHidden('calculator')).toBe(false)
+      expect(config.get(HIDDEN_BUNDLED_CONFIG_KEY)).toEqual([])
       expect(entry.text()).toBe('true|true|false')
       expect(toastSpies.toastSuccess).toHaveBeenCalledWith('已还原内置插件')
     })

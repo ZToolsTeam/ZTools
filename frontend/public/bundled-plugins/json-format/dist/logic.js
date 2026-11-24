@@ -41,7 +41,8 @@ const JSON_LOGIC_MESSAGES = {
         rustGenFailed: (message) => `// 无法生成 Rust Struct：${message}`,
         goInvalidTagComment: (rawKey) => `// 原始键 ${rawKey} 含 struct tag 不支持的字符，需要自定义 UnmarshalJSON`,
         goGenFailed: (message) => `// 无法生成 Go Struct：${message}`,
-        invalidJsonFallback: "JSON 无效"
+        invalidJsonFallback: "JSON 无效",
+        invalidEscapedJson: "内容不是合法的转义 JSON 字符串"
     },
     "en-US": {
         endOfInput: "end of input",
@@ -78,7 +79,8 @@ const JSON_LOGIC_MESSAGES = {
         rustGenFailed: (message) => `// Failed to generate Rust Struct: ${message}`,
         goInvalidTagComment: (rawKey) => `// Key ${rawKey} contains characters unsupported in Go struct tags; custom UnmarshalJSON required`,
         goGenFailed: (message) => `// Failed to generate Go Struct: ${message}`,
-        invalidJsonFallback: "Invalid JSON"
+        invalidJsonFallback: "Invalid JSON",
+        invalidEscapedJson: "Input is not a valid escaped JSON string"
     }
 };
 function jsonStrings() {
@@ -486,6 +488,106 @@ export function minifyJson(raw) {
         return raw;
     }
     return reformatJsonText(raw, null);
+}
+/**
+ * 将文本或 JSON 转义为合法的 JSON 字符串字面量（带双引号）
+ */
+export function escapeJson(raw) {
+    const s = jsonStrings();
+    if (typeof raw !== "string" || raw.length === 0) {
+        return { ok: false, error: s.emptyContent };
+    }
+    return { ok: true, value: JSON.stringify(raw) };
+}
+/**
+ * 去除 JSON 字符串转义：
+ * - 支持带外层双引号的 JSON 字符串字面量（如 `"{\"a\":1}"`）
+ * - 支持不含外层双引号但含转义序列的内容（如 `{\"a\":1}`、`line1\nline2`）
+ * - 空内容或非法转义序列返回失败结果
+ */
+export function unescapeJson(raw) {
+    const s = jsonStrings();
+    if (typeof raw !== "string" || !raw.trim()) {
+        return { ok: false, error: s.emptyContent };
+    }
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (typeof parsed === "string") {
+                return { ok: true, value: parsed };
+            }
+        }
+        catch {
+            return { ok: false, error: s.invalidEscapedJson };
+        }
+        return { ok: false, error: s.invalidEscapedJson };
+    }
+    if (!trimmed.includes("\\")) {
+        return { ok: false, error: s.invalidEscapedJson };
+    }
+    try {
+        const parsed = JSON.parse(`"${trimmed}"`);
+        if (typeof parsed === "string") {
+            return { ok: true, value: parsed };
+        }
+    }
+    catch {
+        return { ok: false, error: s.invalidEscapedJson };
+    }
+    return { ok: false, error: s.invalidEscapedJson };
+}
+function serializeAstSorted(node, indentUnit, depth) {
+    switch (node.kind) {
+        case "null":
+            return "null";
+        case "boolean":
+            return node.value ? "true" : "false";
+        case "number":
+            return node.raw;
+        case "string":
+            return JSON.stringify(node.value);
+        case "array": {
+            if (node.items.length === 0)
+                return "[]";
+            const childIndent = indentUnit.repeat(depth + 1);
+            const closingIndent = indentUnit.repeat(depth);
+            const body = node.items
+                .map((item) => `${childIndent}${serializeAstSorted(item, indentUnit, depth + 1)}`)
+                .join(",\n");
+            return `[\n${body}\n${closingIndent}]`;
+        }
+        case "object": {
+            const entries = entriesOf(node);
+            if (entries.length === 0)
+                return "{}";
+            const sorted = [...entries].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+            const childIndent = indentUnit.repeat(depth + 1);
+            const closingIndent = indentUnit.repeat(depth);
+            const body = sorted
+                .map(([k, v]) => `${childIndent}${JSON.stringify(k)}: ${serializeAstSorted(v, indentUnit, depth + 1)}`)
+                .join(",\n");
+            return `{\n${body}\n${closingIndent}}`;
+        }
+    }
+}
+/**
+ * 递归按对象 Key 字母序（Unicode 码点稳定排序）格式化 JSON；
+ * 基于无损 AST 保留长整数与小数原文写法；非法 JSON 原样返回。
+ */
+export function sortJsonKeys(raw, indent = 2) {
+    const unit = indent === "tab" || indent === "\t" ? "\t" : " ".repeat(Number(indent) || 2);
+    if (typeof raw !== "string") {
+        return serializeAstSorted(valueToAst(raw), unit, 0);
+    }
+    try {
+        JSON.parse(raw);
+        const ast = astOfText(raw);
+        return serializeAstSorted(ast, unit, 0);
+    }
+    catch {
+        return raw;
+    }
 }
 /**
  * 统计 JSON 深度、键数量、体积与压缩指标；压缩体积取本插件真实的压缩结果

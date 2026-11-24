@@ -107,20 +107,9 @@ Building from source produces an **offline edition**:
 - Omits account sign-in, in-app feedback, plugin reviews/ratings, cloud sync, and auto-update checks (download new releases from Releases);
 - Never contacts the official backend or sends usage telemetry;
 - The sidebar "Feedback" link opens [GitHub Issues](https://github.com/ZToolsTeam/ZTools/issues) in your browser;
-- The plugin marketplace reads the public CDN catalog normally—browsing, installing, and updating plugins work out of the box;
-- Online translation requires build-time configuration (below). Without it, the translate command uses only the built-in dictionary and reports that no translation service is configured for other queries.
+- The plugin marketplace reads the public CDN catalog normally—browsing, installing, and updating plugins work out of the box.
 
 Edition-specific capabilities are isolated behind an edition interface implemented in `frontend/src/edition-oss/` and `electron-client/src/main/edition-oss/`. See [Edition Interface](architecture.md#edition-interface).
-
-Optional build-time environment variable:
-
-| Variable | Description |
-| --- | --- |
-| `VITE_TRANSLATION_ENDPOINT` | Online translation API endpoint (`http://` or `https://`) passed when building the client or frontend, or set in `frontend/.env.local`. When unset or invalid, only the built-in dictionary is used |
-
-```bash
-VITE_TRANSLATION_ENDPOINT=https://translate.example.com/api npm --prefix electron-client run build
-```
 
 ## Windows Installers
 

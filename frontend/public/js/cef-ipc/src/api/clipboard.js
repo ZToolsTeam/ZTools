@@ -1,3 +1,5 @@
+import { resolveSdkText } from '../core/environment.js'
+
 function clipboardBytesToBase64(bytes) {
   let binary = ''
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
@@ -26,11 +28,18 @@ class ClipboardAPI {
     if (window.__ztoolsElectron?.contractVersion === 2) {
       const refs = new ReferenceFileSystemAPI(this.transport)
       refs._options(options, ['signal'])
-      if (typeof text === 'string' && new TextEncoder().encode(text).length > 8 * 1024 * 1024) throw refs._error('RESPONSE_TOO_LARGE', '剪贴板文本超过8MiB')
+      if (typeof text === 'string' && new TextEncoder().encode(text).length > 8 * 1024 * 1024) {
+        throw refs._error('RESPONSE_TOO_LARGE', resolveSdkText('剪贴板文本超过8MiB', 'Clipboard text exceeds 8 MiB'))
+      }
       await refs._call('clipboard_copy_text', typeof text === 'string' ? { text } : { fileGrantId: refs._reference(text, ['file'], 'read') }, options)
       return true
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) {
+      throw Object.assign(
+        new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+        { code: 'NOT_SUPPORTED' }
+      )
+    }
     const MAX_IPC_SIZE = 200 * 1024 // 200KB 阈值
 
     // 大文本：写入临时文件，只传文件路径
@@ -76,11 +85,18 @@ class ClipboardAPI {
     if (window.__ztoolsElectron?.contractVersion === 2) {
       const refs = new ReferenceFileSystemAPI(this.transport)
       refs._options(options, ['signal'])
-      if (typeof image === 'string' && new TextEncoder().encode(image).length > 700 * 1024) throw refs._error('FILE_TOO_LARGE', '大图请使用FileRef')
+      if (typeof image === 'string' && new TextEncoder().encode(image).length > 700 * 1024) {
+        throw refs._error('FILE_TOO_LARGE', resolveSdkText('大图请使用FileRef', 'Please use a FileRef for large images'))
+      }
       await refs._call('clipboard_copy_image', typeof image === 'string' ? { image } : { fileGrantId: refs._reference(image, ['file'], 'read') }, options)
       return true
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) {
+      throw Object.assign(
+        new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+        { code: 'NOT_SUPPORTED' }
+      )
+    }
     const r = await this.transport.call('clipboard_copy_image', { image })
     return r && r.success === true
   }
@@ -116,10 +132,17 @@ class ClipboardAPI {
       const refs = new ReferenceFileSystemAPI(this.transport)
       refs._options(options, ['signal'])
       const result = await refs._call('clipboard_read_text', {}, options)
-      if (typeof result.text !== 'string' || new TextEncoder().encode(result.text).length > 8 * 1024 * 1024) throw refs._error('RESPONSE_TOO_LARGE', '剪贴板文本响应无效')
+      if (typeof result.text !== 'string' || new TextEncoder().encode(result.text).length > 8 * 1024 * 1024) {
+        throw refs._error('RESPONSE_TOO_LARGE', resolveSdkText('剪贴板文本响应无效', 'Invalid clipboard text response'))
+      }
       return result.text
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) {
+      throw Object.assign(
+        new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+        { code: 'NOT_SUPPORTED' }
+      )
+    }
     const r = await this.transport.call('clipboard_read_text', {})
     if (r && r.success && r.text !== undefined) {
       return r.text
@@ -136,18 +159,22 @@ class ClipboardAPI {
     refs._options(options, ['signal'])
     const result = await refs._call('clipboard_read_image', {}, options)
     if (result.useReference === false) {
-      if (typeof result.image !== 'string' || (result.image !== '' && (!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(result.image) || result.image.length > 700 * 1024))) throw refs._error('CLIPBOARD_ERROR', '剪贴板图片响应无效')
+      if (typeof result.image !== 'string' || (result.image !== '' && (!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(result.image) || result.image.length > 700 * 1024))) {
+        throw refs._error('CLIPBOARD_ERROR', resolveSdkText('剪贴板图片响应无效', 'Invalid clipboard image response'))
+      }
       return result.image
     }
     const reference = refs._returnedReference(result.reference, ['file'])
     try {
-      if (result.useReference !== true || result.fileUrl !== 'ztools://file/' + reference.grantId + '/' + encodeURIComponent(reference.displayName) || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024 || !Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 || result.width * result.height > 32 * 1024 * 1024) throw refs._error('CLIPBOARD_ERROR', '剪贴板图片引用响应无效')
+      if (result.useReference !== true || result.fileUrl !== 'ztools://file/' + reference.grantId + '/' + encodeURIComponent(reference.displayName) || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024 || !Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 || result.width * result.height > 32 * 1024 * 1024) {
+        throw refs._error('CLIPBOARD_ERROR', resolveSdkText('剪贴板图片引用响应无效', 'Invalid clipboard image reference response'))
+      }
       let released
       return Object.freeze({ type: 'reference', reference: Object.freeze({ ...reference, operations: Object.freeze([...reference.operations]) }), fileUrl: result.fileUrl, size: result.size, width: result.width, height: result.height,
         release: () => released ??= refs.revoke(reference),
         toDataURL: async (readOptions = {}) => {
           refs._options(readOptions, ['signal'])
-          if (released) throw refs._error('PERMISSION_DENIED', '图片引用已释放')
+          if (released) throw refs._error('PERMISSION_DENIED', resolveSdkText('图片引用已释放', 'Image reference has been released'))
           const bytes = new Uint8Array(await refs.readFileAsBinary(reference, readOptions))
           return 'data:image/png;base64,' + clipboardBytesToBase64(bytes)
         }
@@ -162,7 +189,12 @@ class ClipboardAPI {
       try { return await result.toDataURL(options) }
       finally { await result.release() }
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) {
+      throw Object.assign(
+        new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+        { code: 'NOT_SUPPORTED' }
+      )
+    }
     const r = await this.transport.call('clipboard_read_image', {})
     if (r && r.success) {
       if (r.useTempFile) {
@@ -184,7 +216,7 @@ class ClipboardAPI {
               const blob = new Blob([binary], { type: 'image/png' })
               return URL.createObjectURL(blob)
             }
-            throw new Error('filesystem API not available')
+            throw new Error(resolveSdkText('文件系统 API 不可用', 'Filesystem API is not available'))
           }
         }
       } else {
@@ -204,26 +236,37 @@ class ClipboardAPI {
     refs._options(options, ['signal'])
     const result = await refs._call('clipboard_read_files', {}, options), acquired = new Set()
     try {
-      if (!Array.isArray(result.files) || result.files.length > 256 || !Array.isArray(result.errors) || result.errors.length > 256) throw refs._error('CLIPBOARD_ERROR', '文件剪贴板响应无效')
+      if (!Array.isArray(result.files) || result.files.length > 256 || !Array.isArray(result.errors) || result.errors.length > 256) {
+        throw refs._error('CLIPBOARD_ERROR', resolveSdkText('文件剪贴板响应无效', 'Invalid clipboard files response'))
+      }
       const files = result.files.map(file => {
         const ref = refs._returnedReference(file, ['file', 'directory'])
-        if (acquired.has(ref.grantId)) throw refs._error('CLIPBOARD_ERROR', '文件剪贴板引用重复')
+        if (acquired.has(ref.grantId)) throw refs._error('CLIPBOARD_ERROR', resolveSdkText('文件剪贴板引用重复', 'Duplicate file reference in clipboard response'))
         acquired.add(ref.grantId)
-        if (ref.kind === 'directory' && (ref.operations.length !== 2 || !ref.operations.includes('read') || !ref.operations.includes('list'))) throw refs._error('CLIPBOARD_ERROR', '剪贴板目录权限无效')
+        if (ref.kind === 'directory' && (ref.operations.length !== 2 || !ref.operations.includes('read') || !ref.operations.includes('list'))) {
+          throw refs._error('CLIPBOARD_ERROR', resolveSdkText('剪贴板目录权限无效', 'Invalid clipboard directory permissions'))
+        }
         return Object.freeze({ ...ref, operations: Object.freeze([...ref.operations]) })
       })
       const errors = result.errors.map(error => {
-        if (!error || typeof error !== 'object' || Object.keys(error).some(key => !['index', 'code', 'message'].includes(key)) || !Number.isSafeInteger(error.index) || error.index < 0 || error.index >= 256 || typeof error.code !== 'string' || error.code.length > 64 || typeof error.message !== 'string' || error.message.length > 2048) throw refs._error('CLIPBOARD_ERROR', '文件剪贴板错误响应无效')
+        if (!error || typeof error !== 'object' || Object.keys(error).some(key => !['index', 'code', 'message'].includes(key)) || !Number.isSafeInteger(error.index) || error.index < 0 || error.index >= 256 || typeof error.code !== 'string' || error.code.length > 64 || typeof error.message !== 'string' || error.message.length > 2048) {
+          throw refs._error('CLIPBOARD_ERROR', resolveSdkText('文件剪贴板错误响应无效', 'Invalid clipboard file error response'))
+        }
         return Object.freeze({ ...error })
       })
-      if (options.signal?.aborted) throw refs._error('CALLER_DESTROYED', '文件剪贴板请求已取消')
+      if (options.signal?.aborted) throw refs._error('CALLER_DESTROYED', resolveSdkText('文件剪贴板请求已取消', 'Clipboard file request aborted'))
       return Object.freeze({ files: Object.freeze(files), errors: Object.freeze(errors) })
     } catch (error) { await Promise.all([...acquired].map(grantId => refs._call('filesystem_revoke', { grantId }))); throw error }
   }
 
   async readFiles(options = {}) {
     if (window.__ztoolsElectron?.contractVersion === 2) return (await this.readFilesDetailed(options)).files
-    if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) {
+      throw Object.assign(
+        new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+        { code: 'NOT_SUPPORTED' }
+      )
+    }
     const r = await this.transport.call('clipboard_read_files', {})
     if (r && r.success && r.files) {
       return r.files
@@ -299,7 +342,12 @@ class ClipboardAPI {
       const refs = new ReferenceFileSystemAPI(this.transport)
       refs._options(options, ['signal']); await refs._call('clipboard_clear', {}, options); return true
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) {
+      throw Object.assign(
+        new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+        { code: 'NOT_SUPPORTED' }
+      )
+    }
     const r = await this.transport.call('clipboard_clear', {})
     return r && r.success === true
   }
@@ -332,7 +380,7 @@ class ClipboardAPI {
    */
   onChange(handler) {
     if (typeof handler !== 'function') {
-      throw new Error('Handler must be a function')
+      throw new Error(resolveSdkText('监听器必须为函数', 'Handler must be a function'))
     }
 
     const existing = this.changeHandlers.get(handler)
@@ -357,7 +405,9 @@ class ClipboardAPI {
    * @param {function} handler - 要取消的回调函数（可选）
    */
   offChange(handler) {
-    if (handler !== undefined && typeof handler !== 'function') throw new TypeError('Handler must be a function')
+    if (handler !== undefined && typeof handler !== 'function') {
+      throw new TypeError(resolveSdkText('监听器必须为函数', 'Handler must be a function'))
+    }
     if (handler === undefined) { for (const record of [...this.changeHandlers.values()]) record.dispose() }
     else this.changeHandlers.get(handler)?.dispose()
   }

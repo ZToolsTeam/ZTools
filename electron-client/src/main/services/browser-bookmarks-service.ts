@@ -28,25 +28,25 @@ export class BrowserBookmarksService {
   async #scan(value: unknown, caller: CallerIdentity, signal: AbortSignal): Promise<BookmarkScan> {
     validateBookmarkRequest(value); signal.throwIfAborted()
     const key = owner(caller)
-    if (this.#stopped) throw new Error('书签读取服务已停止')
-    if (this.#jobs.size >= 2 || this.#jobs.has(key)) throw new Error('书签正在读取，请稍后重试')
+    if (this.#stopped) throw new Error('Bookmark reader service has stopped')
+    if (this.#jobs.size >= 2 || this.#jobs.has(key)) throw new Error('Bookmark scan is already in progress, please retry later')
     const worker = new Worker(new URL('../workers/bookmark-reader-worker.js', pathToFileURL(__filename)), {
       workerData: this.environment satisfies BookmarkEnvironment, execArgv: [], resourceLimits: { maxOldGenerationSizeMb: 128, stackSizeMb: 4 }
     })
     let failure: Error | undefined, reply: unknown, messages = 0
-    const abort = () => { failure ??= new Error('书签读取已取消'); void worker.terminate().catch(error => { failure = new Error(`停止书签读取失败：${String(error)}`) }) }
+    const abort = () => { failure ??= new Error('Bookmark scan cancelled'); void worker.terminate().catch(error => { failure = new Error(`Failed to terminate bookmark scan: ${String(error)}`) }) }
     const done = new Promise<BookmarkScan>((resolve, reject) => {
-      const timer = setTimeout(() => { failure = new Error('书签读取超时，请关闭繁忙的浏览器后重试'); abort() }, this.timeoutMs)
+      const timer = setTimeout(() => { failure = new Error('Bookmark scan timed out; close busy browsers and retry'); abort() }, this.timeoutMs)
       signal.addEventListener('abort', abort, { once: true })
-      worker.on('message', value => { reply = value; if (++messages > 1) { failure = new Error('书签读取响应重复'); abort() } })
+      worker.on('message', value => { reply = value; if (++messages > 1) { failure = new Error('Duplicate bookmark scan response'); abort() } })
       worker.on('error', error => { failure = error; abort() })
       worker.once('exit', code => {
         clearTimeout(timer); signal.removeEventListener('abort', abort)
         this.#jobs.delete(key)
         if (failure) { reject(failure); return }
-        if (code || messages !== 1) { reject(new Error('书签读取进程意外退出')); return }
+        if (code || messages !== 1) { reject(new Error('Bookmark reader worker exited unexpectedly')); return }
         try {
-          if ((reply as { success?: unknown })?.success === false) throw new Error(String((reply as { error?: unknown }).error || '书签读取失败'))
+          if ((reply as { success?: unknown })?.success === false) throw new Error(String((reply as { error?: unknown }).error || 'Bookmark scan failed'))
           resolve(validateBookmarkScan(reply))
         } catch (error) { reject(error) }
       })

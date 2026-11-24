@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import type { DnsCommand } from './dns-network-provider.js'
 export class DnsWriteOutcomeUnknownError extends Error {
-  constructor() { super('DNS 组件未在取消后结束，系统写入状态未确认') }
+  constructor() { super('DNS helper did not exit after cancellation; system write outcome is unconfirmed') }
 }
 
 /** 原生组件在预提交阶段响应 SIGTERM，提交后完成应用/恢复；宿主必须等 close 后才能判断结果。 */
@@ -15,13 +15,13 @@ export const runDnsWriteCommand = (file: string, args: readonly string[], signal
     failure ??= reason; child.kill('SIGTERM')
     forced ??= setTimeout(() => { failure = new DnsWriteOutcomeUnknownError(); child.kill('SIGKILL') }, graceMs)
   }
-  const abort = () => terminate(new Error('DNS 写入请求已取消'))
+  const abort = () => terminate(new Error('DNS write request cancelled'))
   signal.addEventListener('abort', abort, { once: true })
   if (signal.aborted) abort()
-  const timer = setTimeout(() => terminate(new Error('DNS 系统授权或写入超时')), timeoutMs)
+  const timer = setTimeout(() => terminate(new Error('DNS system authorization or write timed out')), timeoutMs)
   const collect = (chunks: Buffer[], data: Buffer) => {
     size += data.length
-    if (size > 128 * 1024) terminate(new Error('DNS 组件响应超过限制'))
+    if (size > 128 * 1024) terminate(new Error('DNS helper response exceeded size limit'))
     else chunks.push(data)
   }
   child.stdout.on('data', data => collect(stdout, data)); child.stderr.on('data', data => collect(stderr, data))
@@ -31,8 +31,8 @@ export const runDnsWriteCommand = (file: string, args: readonly string[], signal
     if (forced) clearTimeout(forced)
     const errorText = Buffer.concat(stderr).toString('utf8').trim()
     // 提交阶段收到取消后，组件仍可能成功完成事务；以实际退出结果为准。
-    if (code === 3 && !exitSignal) reject(failure || new Error('DNS 请求已在提交前取消'))
-    else if (code !== 0 || exitSignal || errorText || size > 128 * 1024) reject(child.pid ? new DnsWriteOutcomeUnknownError() : failure || new Error('DNS 组件未启动'))
+    if (code === 3 && !exitSignal) reject(failure || new Error('DNS request was cancelled before commit'))
+    else if (code !== 0 || exitSignal || errorText || size > 128 * 1024) reject(child.pid ? new DnsWriteOutcomeUnknownError() : failure || new Error('DNS helper failed to start'))
     else resolve(Buffer.concat(stdout).toString('utf8'))
   })
 })

@@ -1082,7 +1082,7 @@ test('SqlitePlugin 默认工作区数据库：未注入 dataRoot 时回退用户
   try {
     await assert.rejects(
       invalidHost.handlePluginCall('SqlitePlugin', 'inspectWorkspace', { scanAppData: true }),
-      /输出路径必须是绝对路径/
+      /Output path must be an absolute path/
     )
   } finally {
     await invalidHost.stop()
@@ -1244,7 +1244,7 @@ test('Security Hardening: protects user root directories (~/Desktop, homedir), e
       error?: string
     }
     assert.equal(shredRes.ok, false)
-    assert.match(String(shredRes.error), /受保护|保护/)
+    assert.match(String(shredRes.error), /Protected system path|受保护|保护/i)
 
     // 3. ClipboardHistoryPlugin.setClipboardText fails explicitly when clipboard port is absent
     const clipRes = (await hostWithoutClipboard.handlePluginCall('ClipboardHistoryPlugin', 'setClipboardText', {
@@ -1268,7 +1268,7 @@ test('Security Hardening: protects user root directories (~/Desktop, homedir), e
       error?: string
     }
     assert.equal(dlProtectedRes.ok, false)
-    assert.match(String(dlProtectedRes.error), /系统保护路径|路径/)
+    assert.match(String(dlProtectedRes.error), /Protected system path|系统保护路径|路径/i)
   } finally {
     await hostWithoutClipboard.stop()
   }
@@ -1314,7 +1314,7 @@ test('[故障] 没有路径授权时，相对输出目录与相对输入路径�
         saveDir
       })) as { ok: boolean; error?: string }
       assert.equal(res.ok, false, `相对输出目录 ${saveDir} 必须被拒绝`)
-      assert.match(String(res.error), /必须是绝对路径/)
+      assert.match(String(res.error), /must be an absolute path/i)
     }
     // Windows 上盘符相对与当前盘根相对的路径同样拒绝
     for (const saveDir of ['C:relative', '\\rooted']) {
@@ -1323,7 +1323,7 @@ test('[故障] 没有路径授权时，相对输出目录与相对输入路径�
         saveDir
       })) as { ok: boolean; error?: string }
       assert.equal(res.ok, false, `Windows 上 ${saveDir} 必须被拒绝`)
-      assert.match(String(res.error), /必须是绝对路径/)
+      assert.match(String(res.error), /must be an absolute path/i)
     }
     // 输入路径（粉碎文件）：相对路径不按工作目录解析
     await fs.writeFile(path.join(workDir, 'victim.txt'), 'keep me', 'utf8')
@@ -1334,7 +1334,7 @@ test('[故障] 没有路径授权时，相对输出目录与相对输入路径�
     assert.equal(shred.ok, false)
     assert.equal(shred.shreddedCount, 0)
     assert.equal(shred.errors.length, 1)
-    assert.match(shred.errors[0]!.error, /必须是绝对路径/)
+    assert.match(shred.errors[0]!.error, /must be an absolute path/i)
     assert.equal(await fs.readFile(path.join(workDir, 'victim.txt'), 'utf8'), 'keep me', '相对路径指向的文件不能被改动')
     // 工作目录里除了测试自己写的文件，什么都没有新建
     assert.deepEqual((await fs.readdir(workDir)).sort(), ['victim.txt'])

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 
 interface WindowSDK {
   showOpenDialog(params?: unknown, options?: unknown): Promise<unknown>
@@ -20,17 +20,9 @@ interface ScreenSDK { capture(params?: unknown): Promise<unknown>; captureRegion
 const file = { grantId: 'a'.repeat(43), displayName: 'file.png', kind: 'file', operations: ['read'] }
 const save = { grantId: 'b'.repeat(43), displayName: 'output', kind: 'save', operations: ['write'] }
 const fileUrl = 'ztools://file/' + file.grantId + '/file.png'
-function stripModuleSyntax(source: string) {
-  return source.split(/\r?\n/).map(line => {
-    const trimmed = line.trim()
-    if (trimmed.startsWith('import ')) return ''
-    if (/^export\s+default\b/.test(trimmed) || /^export\s*\{/.test(trimmed)) return ''
-    return line.replace(/^(\s*)export\s+/, '$1')
-  }).join('\n')
-}
 function fixture() {
-  const names = ['fs.js', 'fs-reference.js', 'window.js', 'clipboard.js', 'runtime-capability.js', 'screen.js', 'file-producers-reference.js']
-  const source = names.map(name => stripModuleSyntax(fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name, 'utf8'))).join('\n')
+  const names = ['api/fs.js', 'api/fs-reference.js', 'api/window.js', 'api/clipboard.js', 'api/runtime-capability.js', 'api/screen.js', 'api/file-producers-reference.js']
+  const source = loadCefIpcSources(names)
   const calls: { method: string; params: unknown; options: { timeout?: number } }[] = []
   let result: unknown = { success: true }
   const transport = { isElectronEnvironment: () => true, call: async (method: string, params: unknown, options: { timeout?: number }) => { calls.push({ method, params: JSON.parse(JSON.stringify(params)), options }); return result } }

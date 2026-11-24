@@ -58,9 +58,9 @@ function copyOwner(owner: CallerIdentity): CallerIdentity {
 }
 
 function abortError(reason: unknown): ZToolsError {
-  if (reason === errorCodes.appStopping) return new ZToolsError(errorCodes.appStopping, '应用正在退出')
-  if (reason === errorCodes.callerDestroyed) return new ZToolsError(errorCodes.callerDestroyed, '插件窗口已关闭')
-  return new ZToolsError(errorCodes.requestTimeout, '权限申请等待已取消')
+  if (reason === errorCodes.appStopping) return new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
+  if (reason === errorCodes.callerDestroyed) return new ZToolsError(errorCodes.callerDestroyed, 'Plugin window closed')
+  return new ZToolsError(errorCodes.requestTimeout, 'Permission request wait cancelled')
 }
 
 /** Main-owned, instance-scoped in-memory authorization for screen capture. */
@@ -103,7 +103,7 @@ export class RuntimeCapabilityAuthorizationService {
     this.#requireRunning()
     if (signal?.aborted) return Promise.reject(abortError(signal.reason))
     if (capability !== 'screen.capture') {
-      throw new ZToolsError(errorCodes.notSupported, '当前仅支持申请屏幕采集权限')
+      throw new ZToolsError(errorCodes.notSupported, 'Only screen capture permission requests are currently supported')
     }
     this.#assertCurrentPlugin(caller)
     const key = ownerKey(caller)
@@ -173,7 +173,7 @@ export class RuntimeCapabilityAuthorizationService {
   revokeCapability(capability: RuntimeCapabilityId, caller: CallerIdentity): { success: true; authorization: 'denied' } {
     this.#requireRunning()
     if (capability !== 'screen.capture') {
-      throw new ZToolsError(errorCodes.notSupported, '当前仅支持撤销屏幕采集权限')
+      throw new ZToolsError(errorCodes.notSupported, 'Only screen capture permission revocation is currently supported')
     }
     this.#assertCurrentPlugin(caller)
     this.#revokeOwner(this.#state(caller), caller)
@@ -183,7 +183,7 @@ export class RuntimeCapabilityAuthorizationService {
   beginOperation(capability: RuntimeCapabilityId, caller: CallerIdentity): RuntimeCapabilityLease | undefined {
     this.#requireRunning()
     if (capability !== 'screen.capture') {
-      throw new ZToolsError(errorCodes.notSupported, '当前仅支持屏幕采集权限')
+      throw new ZToolsError(errorCodes.notSupported, 'Only screen capture permission is currently supported')
     }
     if (caller.type === 'main') {
       this.#assertCurrentMain(caller)
@@ -192,7 +192,7 @@ export class RuntimeCapabilityAuthorizationService {
     this.#assertCurrentPlugin(caller)
     const state = this.#state(caller)
     if (state.authorization !== 'granted' || !state.grant) {
-      throw new ZToolsError(errorCodes.permissionDenied, '此插件实例尚未获得屏幕采集授权')
+      throw new ZToolsError(errorCodes.permissionDenied, 'This plugin instance has not been granted screen capture authorization')
     }
     const generation = state.generation
     const grantId = state.grant.grantId
@@ -204,7 +204,7 @@ export class RuntimeCapabilityAuthorizationService {
       assertCurrent: () => {
         if (released || controller.signal.aborted || !this.#isCurrentPlugin(caller) ||
             state.generation !== generation || state.authorization !== 'granted' || state.grant?.grantId !== grantId) {
-          throw new ZToolsError(errorCodes.permissionDenied, '屏幕采集授权已撤销')
+          throw new ZToolsError(errorCodes.permissionDenied, 'Screen capture authorization has been revoked')
         }
       },
       release: () => {
@@ -233,12 +233,12 @@ export class RuntimeCapabilityAuthorizationService {
       this.#assertCurrentMain(mainCaller)
       if (!this.#isCurrentPlugin(state.owner)) {
         this.closeOwner(state.owner.webContentsId)
-        throw new ZToolsError(errorCodes.invalidRequest, '授权已失效，请刷新列表')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Authorization is no longer valid; please refresh the list')
       }
       this.#revokeOwner(state, state.owner)
       return { success: true, revoked: true }
     }
-    throw new ZToolsError(errorCodes.invalidRequest, '授权不存在或已撤销')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Authorization does not exist or has been revoked')
   }
 
   closeOwner(owner: CallerIdentity | number): void {
@@ -343,7 +343,7 @@ export class RuntimeCapabilityAuthorizationService {
 
   #assertCurrentPlugin(owner: CallerIdentity): void {
     if (owner.type !== 'plugin' || !owner.pluginId || !owner.pluginInstanceId || !this.#isCurrentPlugin(owner)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '当前插件实例身份无效')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Invalid current plugin instance identity')
     }
   }
 
@@ -351,7 +351,7 @@ export class RuntimeCapabilityAuthorizationService {
     if (owner.type !== 'main' || !sameOwner(this.registry.get(owner.webContentsId), owner) ||
         !this.registry.getWebContents(owner.webContentsId) ||
         this.registry.getWebContents(owner.webContentsId)?.isDestroyed()) {
-      throw new ZToolsError(errorCodes.permissionDenied, '仅当前主窗口可管理插件授权')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Only the main window can manage plugin authorizations')
     }
   }
 
@@ -375,6 +375,6 @@ export class RuntimeCapabilityAuthorizationService {
   }
 
   #requireRunning(): void {
-    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
   }
 }

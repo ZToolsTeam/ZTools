@@ -23,6 +23,7 @@ import {
   type PreservedPluginDataSnapshot
 } from './plugin-data-recovery-service.js'
 import { isCommonPluginRoot } from './common-plugin-registry.js'
+import { resolvePluginCategoryIds } from '../i18n/plugin-i18n.js'
 import { PluginStateService } from './plugin-state-service.js'
 import { resolveNormalizedRuntimePlatformAndArch } from '../platform/runtime-architecture.js'
 
@@ -135,17 +136,17 @@ function validateIdentifier(value: string, label: string): void {
     value.endsWith('.') ||
     WINDOWS_DEVICE_PATTERN.test(value)
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, `${label} 格式无效`)
+    throw new ZToolsError(errorCodes.invalidRequest, `Invalid ${label} format`)
   }
 }
 
 function normalizeChecksum(value: unknown): string {
   if (typeof value !== 'string') {
-    throw new ZToolsError(errorCodes.pluginIntegrity, '安装包缺少有效 SHA-256')
+    throw new ZToolsError(errorCodes.pluginIntegrity, 'Package is missing a valid SHA-256 checksum')
   }
   const match = SHA256_PATTERN.exec(value.trim())
   if (!match?.[1]) {
-    throw new ZToolsError(errorCodes.pluginIntegrity, '安装包缺少有效 SHA-256')
+    throw new ZToolsError(errorCodes.pluginIntegrity, 'Package is missing a valid SHA-256 checksum')
   }
   return match[1].toLowerCase()
 }
@@ -177,7 +178,7 @@ export async function verifyArchiveSha256(
     await fs.rm(archivePath, { force: true }).catch(() => undefined)
     throw new ZToolsError(
       errorCodes.checksumMismatch,
-      `CHECKSUM_MISMATCH: 安装包 SHA-256 校验失败 (预期: ${normalizedExpected}, 实际: ${digest})`
+      `CHECKSUM_MISMATCH: Package SHA-256 verification failed (expected: ${normalizedExpected}, actual: ${digest})`
     )
   }
   return digest
@@ -186,17 +187,17 @@ export async function verifyArchiveSha256(
 function requireNotAborted(signal: AbortSignal): void {
   if (!signal.aborted) return
   if (signal.reason === errorCodes.appStopping) {
-    throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
   }
-  throw new ZToolsError(errorCodes.callerDestroyed, '插件操作已取消')
+  throw new ZToolsError(errorCodes.callerDestroyed, 'Plugin operation cancelled')
 }
 
 function operationError(error: unknown): { code: string; message: string } {
   if (error instanceof ZToolsError) return { code: error.code, message: error.message }
   if (error instanceof Error && error.name === 'AbortError') {
-    return { code: errorCodes.callerDestroyed, message: '插件操作已取消' }
+    return { code: errorCodes.callerDestroyed, message: 'Plugin operation cancelled' }
   }
-  return { code: errorCodes.internalError, message: '插件操作失败' }
+  return { code: errorCodes.internalError, message: 'Plugin operation failed' }
 }
 
 function filesystemErrorCode(error: unknown): string {
@@ -212,7 +213,7 @@ function validateRemoteUrl(source: string): URL {
   try {
     url = new URL(source)
   } catch {
-    throw new ZToolsError(errorCodes.invalidRequest, '下载地址无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid download URL')
   }
   const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1'
   if (
@@ -220,14 +221,14 @@ function validateRemoteUrl(source: string): URL {
     url.username !== '' ||
     url.password !== ''
   ) {
-    throw new ZToolsError(errorCodes.permissionDenied, '插件下载只允许 HTTPS 或本机测试地址')
+    throw new ZToolsError(errorCodes.permissionDenied, 'Plugin download only allows HTTPS or local test URLs')
   }
   return url
 }
 
 function validateArchivePath(fileName: string, reservedName?: string): string[] {
   if (fileName.length === 0 || fileName.length > 32 * 1024 || fileName.includes('\0') || fileName.includes('\\')) {
-    throw new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP 包含无效路径')
+    throw new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP archive contains an invalid path')
   }
   const normalized = fileName.endsWith('/') ? fileName.slice(0, -1) : fileName
   const segments = normalized.split('/')
@@ -245,7 +246,7 @@ function validateArchivePath(fileName: string, reservedName?: string): string[] 
     ) ||
     (reservedName !== undefined && normalized.toLowerCase() === reservedName.toLowerCase())
   ) {
-    throw new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP 包含不安全路径')
+    throw new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP archive contains an unsafe path')
   }
   return segments
 }
@@ -352,11 +353,18 @@ export class PluginInstallService implements PluginDirectoryProvider {
         const revokedReason = typeof stateValue?.revoked_reason === 'string'
           ? stateValue.revoked_reason
           : (typeof stateValue?.revokedReason === 'string' ? stateValue.revokedReason : undefined)
+        const normalizedCategoryIds = resolvePluginCategoryIds(manifest)
+        const normalizedCategoryId = normalizedCategoryIds.length === 1
+          ? normalizedCategoryIds[0]
+          : normalizedCategoryIds.length > 1
+            ? normalizedCategoryIds
+            : undefined
         data.push({
           ...manifest,
           id: manifest.id,
           pluginId: manifest.id,
           entry: manifest.entry,
+          ...(normalizedCategoryId !== undefined ? { categoryId: normalizedCategoryId } : {}),
           ...(iconUrl ? { icon: iconUrl, localIconUrl: iconUrl } : {}),
           revoked: isRevoked,
           ...(isRevoked && revokedReason ? { revoked_reason: revokedReason, revokedReason } : {}),
@@ -397,7 +405,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     if (revoked) {
       this.#publish('plugin_revoked', {
         pluginId,
-        reason: reason || '该插件已被官方下架禁用'
+        reason: reason || 'This plugin has been revoked and disabled by the official registry'
       })
     }
   }
@@ -434,7 +442,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     this.#requireRunning()
     const key = pluginId.toLowerCase()
     if (this.#pluginLocks.has(key) || this.#pluginReaders.has(key)) {
-      throw new ZToolsError(errorCodes.pluginBusy, '插件正在执行其他操作')
+      throw new ZToolsError(errorCodes.pluginBusy, 'Plugin is busy with another operation')
     }
     this.#pluginLocks.add(key)
     try {
@@ -459,10 +467,10 @@ export class PluginInstallService implements PluginDirectoryProvider {
     return this.#withPluginDirectory(pluginId, async (manifest, _pluginRoot, runtimeMetadata) => {
       const rev = this.#pluginState.isRevoked ? await this.#pluginState.isRevoked(manifest.id) : { revoked: false }
       if (rev.revoked) {
-        throw new ZToolsError(errorCodes.permissionDenied, `该插件已被官方下架禁用: ${rev.reason || '存在安全合规风险'}`)
+        throw new ZToolsError(errorCodes.permissionDenied, `This plugin has been revoked and disabled: ${rev.reason || 'security or compliance risk'}`)
       }
       if (!(await this.#pluginState.isEnabled(manifest.id, manifest.enabled !== false))) {
-        throw new ZToolsError(errorCodes.pluginNotFound, '插件已禁用')
+        throw new ZToolsError(errorCodes.pluginNotFound, 'Plugin is disabled')
       }
       return action(manifest, runtimeMetadata)
     }, true)
@@ -489,7 +497,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     validateIdentifier(pluginId, 'pluginId')
     const key = pluginId.toLowerCase()
     if (this.#pluginLocks.has(key) || (!shared && this.#pluginReaders.has(key))) {
-      throw new ZToolsError(errorCodes.pluginBusy, '插件正在执行其他操作')
+      throw new ZToolsError(errorCodes.pluginBusy, 'Plugin is busy with another operation')
     }
     // Manifest consumers (window startup and DLL resolution) may overlap.
     // Keep the directory protected from maintenance until the last reader exits.
@@ -498,7 +506,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     try {
       const target = this.#pluginPath(pluginId)
       if (!(await this.#isOrdinaryDirectory(target))) {
-        throw new ZToolsError(errorCodes.pluginNotFound, '插件不存在')
+        throw new ZToolsError(errorCodes.pluginNotFound, 'Plugin not found')
       }
       const manifest = await this.#readManifest(target, pluginId)
       const resolvedTarget = await this.#assertRuntimeTarget(manifest, target)
@@ -530,14 +538,14 @@ export class PluginInstallService implements PluginDirectoryProvider {
     this.#requireRunning()
     validateIdentifier(params.pluginId, 'pluginId')
     if (isCommonPluginRoot(params.pluginId)) {
-      throw new ZToolsError(errorCodes.permissionDenied, 'CommonPlugins 是客户端保留目录')
+      throw new ZToolsError(errorCodes.permissionDenied, 'CommonPlugins is a reserved client directory')
     }
     if ((params as unknown as Record<string, unknown>).revoked === true) {
-      throw new ZToolsError(errorCodes.permissionDenied, '该插件已被官方下架，禁止安装')
+      throw new ZToolsError(errorCodes.permissionDenied, 'This plugin has been revoked and cannot be installed')
     }
     const revokedCheck = this.#pluginState.isRevoked ? await this.#pluginState.isRevoked(params.pluginId) : { revoked: false }
     if (revokedCheck.revoked) {
-      throw new ZToolsError(errorCodes.permissionDenied, `该插件已被官方下架，禁止安装: ${revokedCheck.reason || '安全合规原因'}`)
+      throw new ZToolsError(errorCodes.permissionDenied, `This plugin has been revoked and cannot be installed: ${revokedCheck.reason || 'security or compliance policy'}`)
     }
     validateRemoteUrl(params.url)
     const installParams: VerifiedPluginInstallParams = {
@@ -545,11 +553,11 @@ export class PluginInstallService implements PluginDirectoryProvider {
       checksum: normalizeChecksum(params.checksum)
     }
     if (!VERSION_PATTERN.test(params.version)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'version 格式无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid version format')
     }
     const key = params.pluginId.toLowerCase()
     if (this.#pluginLocks.has(key) || this.#pluginReaders.has(key)) {
-      throw new ZToolsError(errorCodes.pluginBusy, '插件正在执行其他操作')
+      throw new ZToolsError(errorCodes.pluginBusy, 'Plugin is busy with another operation')
     }
     this.#pluginLocks.add(key)
     try {
@@ -557,7 +565,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
       const installed = await this.#isOrdinaryDirectory(target)
       this.#requireRunning()
       if (requestedUpdate && !installed) {
-        throw new ZToolsError(errorCodes.pluginNotFound, '插件不存在')
+        throw new ZToolsError(errorCodes.pluginNotFound, 'Plugin not found')
       }
       const isUpdate = requestedUpdate || installed
       const controller = new AbortController()
@@ -631,11 +639,11 @@ export class PluginInstallService implements PluginDirectoryProvider {
     this.#requireRunning()
     validateIdentifier(params.pluginId, 'pluginId')
     if (isCommonPluginRoot(params.pluginId)) {
-      throw new ZToolsError(errorCodes.permissionDenied, 'CommonPlugins 是客户端保留目录')
+      throw new ZToolsError(errorCodes.permissionDenied, 'CommonPlugins is a reserved client directory')
     }
     const key = params.pluginId.toLowerCase()
     if (this.#pluginLocks.has(key) || this.#pluginReaders.has(key)) {
-      throw new ZToolsError(errorCodes.pluginBusy, '插件正在执行其他操作')
+      throw new ZToolsError(errorCodes.pluginBusy, 'Plugin is busy with another operation')
     }
     this.#pluginLocks.add(key)
     const operation = this.#uninstall(params.pluginId)
@@ -646,7 +654,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     } catch (error) {
       throw error instanceof ZToolsError
         ? error
-        : new ZToolsError(errorCodes.storageError, '插件卸载失败，文件可能被占用')
+        : new ZToolsError(errorCodes.storageError, 'Failed to uninstall plugin; files may be in use')
     } finally {
       this.#maintenanceOperations.delete(operation)
       this.#pluginLocks.delete(key)
@@ -691,7 +699,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
   async #uninstall(pluginId: string): Promise<void> {
     const target = this.#pluginPath(pluginId)
     if (!(await this.#isOrdinaryDirectory(target))) {
-      throw new ZToolsError(errorCodes.pluginNotFound, '插件不存在')
+      throw new ZToolsError(errorCodes.pluginNotFound, 'Plugin not found')
     }
     await this.#preservePluginTree(target, pluginId, 'uninstall')
     await this.#pluginState.remove(pluginId)
@@ -731,7 +739,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
       const { manifest, sha256: manifestSha256 } = await this.#readManifestSnapshot(staging, params.pluginId)
       await this.#assertRuntimeTarget(manifest, staging, signal, true)
       if (manifest.version !== params.version) {
-        throw new ZToolsError(errorCodes.pluginPackageInvalid, '插件包版本与授权版本不一致')
+        throw new ZToolsError(errorCodes.pluginPackageInvalid, 'Plugin package version does not match authorized version')
       }
       this.#progress(params.pluginId, 80, 'validate')
       for (let index = 0; index < manifest.commonLibs.length; index += 1) {
@@ -748,7 +756,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
       this.#progress(params.pluginId, 95, 'commit')
       if (await exists(target)) {
         if (!(await this.#isOrdinaryDirectory(target))) {
-          throw new ZToolsError(errorCodes.permissionDenied, '插件目标目录不是普通目录')
+          throw new ZToolsError(errorCodes.permissionDenied, 'Plugin target directory is not a regular directory')
         }
         if (this.#preparePluginReplace) {
           const installedManifest = await this.#readManifest(target, params.pluginId)
@@ -761,11 +769,11 @@ export class PluginInstallService implements PluginDirectoryProvider {
       try {
         const finalManifest = await this.#readManifestSnapshot(staging, params.pluginId)
         if (finalManifest.sha256 !== manifestSha256) {
-          throw new ZToolsError(errorCodes.pluginIntegrity, '安装期间 plugin.json 字节发生变化')
+          throw new ZToolsError(errorCodes.pluginIntegrity, 'plugin.json bytes changed during installation')
         }
         await this.#assertRuntimeTarget(finalManifest.manifest, staging, signal, true)
         if ((await this.#readManifestSnapshot(staging, params.pluginId)).sha256 !== manifestSha256) {
-          throw new ZToolsError(errorCodes.pluginIntegrity, '安装文件校验期间 plugin.json 字节发生变化')
+          throw new ZToolsError(errorCodes.pluginIntegrity, 'plugin.json bytes changed during installation verification')
         }
         await this.#renamePath(staging, target, signal)
         committed = true
@@ -860,7 +868,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
       )
       if (await exists(target)) {
         if (!(await this.#isOrdinaryDirectory(target))) {
-          throw new ZToolsError(errorCodes.permissionDenied, '依赖库目标目录不是普通目录')
+          throw new ZToolsError(errorCodes.permissionDenied, 'Dependency library target directory is not a regular directory')
         }
         await this.#renamePath(target, backup, signal)
         backupCreated = true
@@ -911,7 +919,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     })
     requireNotAborted(signal)
     if (!isRecord(data)) {
-      throw new ZToolsError(errorCodes.dataCorrupt, '公共库完整性元数据无效')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Common library integrity metadata is invalid')
     }
     if (
       data.libId !== libId ||
@@ -920,7 +928,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
       (data.fileSize !== null && data.fileSize !== undefined &&
         (!Number.isSafeInteger(data.fileSize) || (data.fileSize as number) < 0 || (data.fileSize as number) > LIBRARY_ARCHIVE_LIMIT))
     ) {
-      throw new ZToolsError(errorCodes.dataCorrupt, '公共库完整性元数据无效')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Common library integrity metadata is invalid')
     }
     validateRemoteUrl(data.downloadUrl)
     const checksum = resolvePinnedLibraryChecksum({
@@ -948,7 +956,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     const expectedChecksum = normalizeChecksum(options.checksum)
     const response = await this.#fetchFollowingRedirects(options.url, options.signal, DOWNLOAD_TIMEOUT_MS)
     if (!response.ok || !response.body) {
-      throw new ZToolsError(errorCodes.networkError, '下载安装包失败')
+      throw new ZToolsError(errorCodes.networkError, 'Failed to download package')
     }
     const contentLengthValue = response.headers.get('content-length')
     const contentLength = contentLengthValue === null ? 0 : Number(contentLengthValue)
@@ -956,7 +964,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
       contentLengthValue !== null &&
       (!Number.isSafeInteger(contentLength) || contentLength < 0 || contentLength > options.maxBytes)
     ) {
-      throw new ZToolsError(errorCodes.fileTooLarge, '安装包超过下载大小上限')
+      throw new ZToolsError(errorCodes.fileTooLarge, 'Package exceeds download size limit')
     }
     const handle = await fs.open(options.target, 'wx', 0o600)
     const reader = response.body.getReader()
@@ -970,7 +978,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
         if (chunk.done) break
         downloaded += chunk.value.byteLength
         if (downloaded > options.maxBytes) {
-          throw new ZToolsError(errorCodes.fileTooLarge, '安装包超过下载大小上限')
+          throw new ZToolsError(errorCodes.fileTooLarge, 'Package exceeds download size limit')
         }
         hash.update(chunk.value)
         let offset = 0
@@ -994,11 +1002,11 @@ export class PluginInstallService implements PluginDirectoryProvider {
     }
     if (options.expectedSize > 0 && downloaded !== options.expectedSize) {
       await fs.rm(options.target, { force: true })
-      throw new ZToolsError(errorCodes.pluginIntegrity, '安装包大小与授权元数据不一致')
+      throw new ZToolsError(errorCodes.pluginIntegrity, 'Package size does not match authorized metadata')
     }
     if (hash.digest('hex') !== expectedChecksum) {
       await fs.rm(options.target, { force: true })
-      throw new ZToolsError(errorCodes.pluginIntegrity, '安装包 SHA-256 校验失败')
+      throw new ZToolsError(errorCodes.pluginIntegrity, 'Package SHA-256 verification failed')
     }
     options.onProgress(100)
   }
@@ -1021,26 +1029,26 @@ export class PluginInstallService implements PluginDirectoryProvider {
         requireNotAborted(signal)
         throw new ZToolsError(
           errorCodes.networkError,
-          timeout.aborted ? '下载请求超时' : '下载请求失败'
+          timeout.aborted ? 'Download request timed out' : 'Download request failed'
         )
       }
       if (![301, 302, 303, 307, 308].includes(response.status)) return response
       const location = response.headers.get('location')
       if (!location || redirect === 5) {
         await response.body?.cancel().catch(() => undefined)
-        throw new ZToolsError(errorCodes.networkError, '下载重定向无效或次数过多')
+        throw new ZToolsError(errorCodes.networkError, 'Download redirect is invalid or exceeded limit')
       }
       await response.body?.cancel().catch(() => undefined)
       url = validateRemoteUrl(new URL(location, url).toString())
     }
-    throw new ZToolsError(errorCodes.networkError, '下载重定向次数过多')
+    throw new ZToolsError(errorCodes.networkError, 'Download redirect limit exceeded')
   }
 
   async #readBoundedText(response: Response, maxBytes: number, signal: AbortSignal): Promise<string> {
     const declaredLength = Number(response.headers.get('content-length') ?? 0)
     if (!Number.isSafeInteger(declaredLength) || declaredLength < 0 || declaredLength > maxBytes) {
       await response.body?.cancel().catch(() => undefined)
-      throw new ZToolsError(errorCodes.responseTooLarge, '公共库元数据超过大小上限')
+      throw new ZToolsError(errorCodes.responseTooLarge, 'Common library metadata exceeds size limit')
     }
     if (!response.body) return ''
     const reader = response.body.getReader()
@@ -1053,7 +1061,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
         if (chunk.done) break
         size += chunk.value.byteLength
         if (size > maxBytes) {
-          throw new ZToolsError(errorCodes.responseTooLarge, '公共库元数据超过大小上限')
+          throw new ZToolsError(errorCodes.responseTooLarge, 'Common library metadata exceeds size limit')
         }
         chunks.push(Buffer.from(chunk.value))
       }
@@ -1087,20 +1095,20 @@ export class PluginInstallService implements PluginDirectoryProvider {
         entries += 1
         expanded += entry.uncompressedSize
         if (entries > MAX_ARCHIVE_ENTRIES || expanded > expandedLimit || entry.uncompressedSize > ENTRY_EXPANDED_LIMIT) {
-          throw new ZToolsError(errorCodes.fileTooLarge, 'ZIP 解压规模超过上限')
+          throw new ZToolsError(errorCodes.fileTooLarge, 'ZIP extraction size exceeds limit')
         }
         if (entry.isEncrypted() || !entry.canDecodeFileData() || isSymlink(entry)) {
-          throw new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP 包含不支持或不安全的条目')
+          throw new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP archive contains unsupported or unsafe entries')
         }
         const segments = validateArchivePath(entry.fileName, reservedName)
         const relative = segments.join(path.sep)
         const target = path.resolve(destination, relative)
         if (!isWithin(destination, target) || target === destination) {
-          throw new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP 路径越界')
+          throw new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP entry path escapes extraction root')
         }
         const key = relative.toLowerCase()
         if (names.has(key)) {
-          throw new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP 包含大小写冲突或重复路径')
+          throw new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP archive contains case-conflicting or duplicate paths')
         }
         names.add(key)
         if (entry.fileName.endsWith('/')) {
@@ -1115,7 +1123,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
       requireNotAborted(signal)
       throw error instanceof ZToolsError
         ? error
-        : new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP 包损坏或无法解压')
+        : new ZToolsError(errorCodes.pluginPackageInvalid, 'ZIP archive is corrupted or cannot be extracted')
     } finally {
       zip.close()
     }
@@ -1129,37 +1137,37 @@ export class PluginInstallService implements PluginDirectoryProvider {
     const manifestPath = path.join(root, 'plugin.json')
     const stat = await fs.lstat(manifestPath).catch(() => undefined)
     if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > MAX_MANIFEST_BYTES) {
-      throw new ZToolsError(errorCodes.pluginPackageInvalid, '插件包缺少有效 plugin.json')
+      throw new ZToolsError(errorCodes.pluginPackageInvalid, 'Plugin package is missing a valid plugin.json')
     }
     const handle = await fs.open(manifestPath, constants.O_RDONLY | constants.O_NOFOLLOW)
     let source: Buffer
     try {
       const opened = await handle.stat()
       if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size !== stat.size ||
-          opened.size > MAX_MANIFEST_BYTES) throw new ZToolsError(errorCodes.pluginIntegrity, 'plugin.json 文件对象发生变化')
+          opened.size > MAX_MANIFEST_BYTES) throw new ZToolsError(errorCodes.pluginIntegrity, 'plugin.json file object changed')
       source = Buffer.alloc(opened.size)
       let offset = 0
       while (offset < source.length) {
         this.#requireRunning()
         const { bytesRead } = await handle.read(source, offset, source.length - offset, offset)
-        if (bytesRead === 0) throw new ZToolsError(errorCodes.pluginIntegrity, 'plugin.json 读取期间被截断')
+        if (bytesRead === 0) throw new ZToolsError(errorCodes.pluginIntegrity, 'plugin.json was truncated while reading')
         offset += bytesRead
       }
       const after = await handle.stat(), namedAfter = await fs.lstat(manifestPath)
       if (!namedAfter.isFile() || namedAfter.isSymbolicLink() || namedAfter.dev !== opened.dev || namedAfter.ino !== opened.ino ||
           after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs ||
           namedAfter.size !== opened.size || namedAfter.mtimeMs !== opened.mtimeMs || namedAfter.ctimeMs !== opened.ctimeMs) {
-        throw new ZToolsError(errorCodes.pluginIntegrity, 'plugin.json 读取期间文件对象发生变化')
+        throw new ZToolsError(errorCodes.pluginIntegrity, 'plugin.json file object changed while reading')
       }
     } finally { await handle.close() }
     let value: unknown
     try {
       value = JSON.parse(source.toString('utf8'))
     } catch {
-      throw new ZToolsError(errorCodes.pluginPackageInvalid, 'plugin.json 不是有效 JSON')
+      throw new ZToolsError(errorCodes.pluginPackageInvalid, 'plugin.json is not valid JSON')
     }
     if (!isRecord(value)) {
-      throw new ZToolsError(errorCodes.pluginPackageInvalid, 'plugin.json 必须是对象')
+      throw new ZToolsError(errorCodes.pluginPackageInvalid, 'plugin.json must be an object')
     }
     const id = value.id
     const name = value.name
@@ -1179,25 +1187,25 @@ export class PluginInstallService implements PluginDirectoryProvider {
       (entry === '' && dllloader === '') ||
       !Array.isArray(commonLibs) || commonLibs.length > 32
     ) {
-      throw new ZToolsError(errorCodes.pluginPackageInvalid, 'plugin.json 必填字段无效')
+      throw new ZToolsError(errorCodes.pluginPackageInvalid, 'plugin.json has invalid required fields')
     }
     validateIdentifier(id, 'pluginId')
     const checkedLibraries = commonLibs.map((item) => {
       if (typeof item !== 'string') {
-        throw new ZToolsError(errorCodes.pluginPackageInvalid, 'commonLibs 包含无效项')
+        throw new ZToolsError(errorCodes.pluginPackageInvalid, 'commonLibs contains an invalid item')
       }
       validateIdentifier(item, 'libId')
       return item
     })
     if (new Set(checkedLibraries.map((item) => item.toLowerCase())).size !== checkedLibraries.length) {
-      throw new ZToolsError(errorCodes.pluginPackageInvalid, 'commonLibs 包含重复项')
+      throw new ZToolsError(errorCodes.pluginPackageInvalid, 'commonLibs contains duplicate items')
     }
     for (const [label, relative] of [['entry', entry], ['dllloader', dllloader]] as const) {
       if (relative === '') continue
       const segments = validateArchivePath(relative.replaceAll('\\', '/'))
       const target = path.resolve(root, ...segments)
       if (!isWithin(root, target) || !(await fs.lstat(target).catch(() => undefined))?.isFile()) {
-        throw new ZToolsError(errorCodes.pluginPackageInvalid, `${label} 文件不存在或路径无效`)
+        throw new ZToolsError(errorCodes.pluginPackageInvalid, `${label} file does not exist or path is invalid`)
       }
     }
     return { sha256: createHash('sha256').update(source).digest('hex'), manifest: {
@@ -1219,7 +1227,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
       ...(this.#macNativeCatalogLookup ? { macNativeCatalogLookup: this.#macNativeCatalogLookup } : {})
     })
     if (resolved.target?.minSdkContractVersion === 2 && !this.#isReferenceRuntimeReady()) {
-      throw new ZToolsError(errorCodes.notSupported, 'SDK 契约版本 2 要求引用文件运行时已就绪')
+      throw new ZToolsError(errorCodes.notSupported, 'SDK contract version 2 requires the reference file runtime to be ready')
     }
     const realRoot = await fs.realpath(root)
     if (this.#runtimeTarget.platform === 'win32') {
@@ -1241,30 +1249,30 @@ export class PluginInstallService implements PluginDirectoryProvider {
       const segments = validateArchivePath(component.entry.replaceAll('\\', '/'))
       const target = path.resolve(root, ...segments)
       if (!isWithin(root, target) || target === root) {
-        throw new ZToolsError(errorCodes.pluginPackageInvalid, `nativeComponents.${component.id}.entry 路径越界`)
+        throw new ZToolsError(errorCodes.pluginPackageInvalid, `nativeComponents.${component.id}.entry path escapes plugin root`)
       }
       const stat = await fs.lstat(target).catch(() => undefined)
       if (!stat?.isFile() || stat.isSymbolicLink()) {
         throw new ZToolsError(
           errorCodes.pluginPackageInvalid,
-          `当前平台目标 ${component.targetId} 的 native component 文件不存在或不是普通文件：${component.entry}`
+          `Native component file for target ${component.targetId} does not exist or is not a regular file: ${component.entry}`
         )
       }
       const realTarget = await fs.realpath(target)
       if (!isWithin(realRoot, realTarget)) {
-        throw new ZToolsError(errorCodes.pluginPackageInvalid, `nativeComponents.${component.id}.entry 指向插件目录外`)
+        throw new ZToolsError(errorCodes.pluginPackageInvalid, `nativeComponents.${component.id}.entry points outside the plugin directory`)
       }
       if (this.#runtimeTarget.platform === 'darwin') {
         const approved = this.#macNativeCatalogLookup?.(manifest.id, component.id)
         if (!approved || approved.relativePath !== component.entry) {
-          throw new ZToolsError(errorCodes.notSupported, 'Mac 原生组件可信目录已不可用')
+          throw new ZToolsError(errorCodes.notSupported, 'macOS native component trusted catalog is unavailable')
         }
         let directory = root
         for (const segment of segments.slice(0, -1)) {
           directory = path.join(directory, segment)
           const directoryStat = await fs.lstat(directory)
           if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
-            throw new ZToolsError(errorCodes.pluginPackageInvalid, 'Mac 原生组件目录不允许符号链接')
+            throw new ZToolsError(errorCodes.pluginPackageInvalid, 'macOS native component directory must not contain symbolic links')
           }
         }
         const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW)
@@ -1272,7 +1280,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
           const opened = await handle.stat()
           if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino ||
               opened.size !== stat.size || opened.size > PLUGIN_EXPANDED_LIMIT) {
-            throw new ZToolsError(errorCodes.pluginIntegrity, 'Mac 原生组件对象已变化或超出上限')
+            throw new ZToolsError(errorCodes.pluginIntegrity, 'macOS native component file changed or exceeds size limit')
           }
           const hash = createHash('sha256'), buffer = Buffer.alloc(64 * 1024)
           let total = 0
@@ -1282,13 +1290,13 @@ export class PluginInstallService implements PluginDirectoryProvider {
             const { bytesRead } = await handle.read(buffer, 0, buffer.length, null)
             if (bytesRead === 0) break
             total += bytesRead
-            if (total > opened.size) throw new ZToolsError(errorCodes.pluginIntegrity, 'Mac 原生组件读取期间已变化')
+            if (total > opened.size) throw new ZToolsError(errorCodes.pluginIntegrity, 'macOS native component changed while reading')
             hash.update(buffer.subarray(0, bytesRead))
           }
           const after = await handle.stat()
           if (total !== opened.size || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs ||
               after.ctimeMs !== opened.ctimeMs || hash.digest('hex') !== approved.sha256) {
-            throw new ZToolsError(errorCodes.pluginIntegrity, 'Mac 原生组件未匹配当前 App 的可信 SHA-256')
+            throw new ZToolsError(errorCodes.pluginIntegrity, 'macOS native component does not match trusted SHA-256 for this app')
           }
         } finally { await handle.close() }
       }
@@ -1360,7 +1368,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     await fs.mkdir(root, { recursive: true, mode: 0o700 })
     const stat = await fs.lstat(root)
     if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      throw new ZToolsError(errorCodes.permissionDenied, '安装数据根目录不是普通目录')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Installation data root is not a regular directory')
     }
   }
 
@@ -1371,18 +1379,18 @@ export class PluginInstallService implements PluginDirectoryProvider {
   ): Promise<string> {
     validateIdentifier(pluginId, 'pluginId')
     if (!(await this.#isOrdinaryDirectory(source))) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件旧目录不是普通目录')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Previous plugin directory is not a regular directory')
     }
     await this.#ensureOrdinaryRoot(this.#pluginDataRoot)
     const pluginData = path.join(this.#pluginDataRoot, pluginId)
     if (await exists(pluginData) && !(await this.#isOrdinaryDirectory(pluginData))) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件数据目录不是普通目录')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Plugin data directory is not a regular directory')
     }
     await fs.mkdir(pluginData, { recursive: true, mode: 0o700 })
     await this.#ensureOrdinaryRoot(pluginData)
     const legacyRoot = path.join(pluginData, 'legacy')
     if (await exists(legacyRoot) && !(await this.#isOrdinaryDirectory(legacyRoot))) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件历史数据目录不是普通目录')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Legacy plugin data directory is not a regular directory')
     }
     await fs.mkdir(legacyRoot, { recursive: true, mode: 0o700 })
     await this.#ensureOrdinaryRoot(legacyRoot)
@@ -1406,7 +1414,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     const resolvedRoot = path.resolve(root)
     const resolvedTarget = path.resolve(target)
     if (resolvedTarget === resolvedRoot || !isWithin(resolvedRoot, resolvedTarget)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '拒绝清理安装根目录之外的路径')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Refusing to clean up path outside the installation root')
     }
     await fs.rm(resolvedTarget, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
   }
@@ -1429,11 +1437,11 @@ export class PluginInstallService implements PluginDirectoryProvider {
 
   #pluginPath(pluginId: string): string {
     if (isCommonPluginRoot(pluginId)) {
-      throw new ZToolsError(errorCodes.permissionDenied, 'CommonPlugins 是客户端保留目录')
+      throw new ZToolsError(errorCodes.permissionDenied, 'CommonPlugins is a reserved client directory')
     }
     const target = path.resolve(this.#pluginRoot, pluginId)
     if (!isWithin(this.#pluginRoot, target) || target === this.#pluginRoot) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件路径越界')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Plugin path escapes allowed root')
     }
     return target
   }
@@ -1441,7 +1449,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
   #libraryPath(libId: string): string {
     const target = path.resolve(this.#libraryRoot, libId)
     if (!isWithin(this.#libraryRoot, target) || target === this.#libraryRoot) {
-      throw new ZToolsError(errorCodes.permissionDenied, '依赖库路径越界')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Dependency library path escapes allowed root')
     }
     return target
   }
@@ -1465,7 +1473,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
 
   #requireRunning(): void {
     if (this.#state !== 'running') {
-      throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+      throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
     }
   }
 }

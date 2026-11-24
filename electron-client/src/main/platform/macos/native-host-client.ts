@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { getResolvedLocale, ZTOOLS_LOCALE_ENV_KEY } from '../../i18n/index.js'
 import type {
   NativeDllCallResult,
   NativeDllEventListener,
@@ -342,7 +343,11 @@ export class MacNativeHostClient implements OrdinaryNativeRuntimePort {
   }
 
   #spawn(hostPath: string, workerPath: string): void {
-    const environment: NodeJS.ProcessEnv = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LANG: 'C' }
+    const environment: NodeJS.ProcessEnv = {
+      PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+      LANG: 'C',
+      [ZTOOLS_LOCALE_ENV_KEY]: getResolvedLocale()
+    }
     if (typeof process.env.TMPDIR === 'string' && path.isAbsolute(process.env.TMPDIR)) environment.TMPDIR = process.env.TMPDIR
     const child = spawn(hostPath, [
       '--resources', this.options.resourcesPath,
@@ -666,7 +671,11 @@ export class MacNativeHostClient implements OrdinaryNativeRuntimePort {
     this.#maintenance.set(pluginId, (this.#maintenance.get(pluginId) ?? 0) + 1)
     try {
       if (this.#startup) {
-        try { await this.#startup } catch {}
+        try {
+          await this.#startup
+        } catch (startupError) {
+          console.warn('[MacNativeHostClient] startup failed before plugin maintenance:', startupError)
+        }
       }
       if (this.#unexpectedReadyHostExit || (this.#child !== null && this.#state !== 'ready')) {
         throw new Error('MAC_NATIVE_PLUGIN_MAINTENANCE_HOST_STATE_UNKNOWN')
@@ -725,7 +734,9 @@ export class MacNativeHostClient implements OrdinaryNativeRuntimePort {
     try {
       const result = await this.#sendRequest(1n, 1n, MacNativeFrameType.shutdown, { operation: 'shutdown' })
       graceful = isRecord(result) && result.stopped === true
-    } catch {}
+    } catch (shutdownError) {
+      console.warn('[MacNativeHostClient] graceful shutdown request failed:', shutdownError)
+    }
     this.#state = 'stopping'
     const stopped = await this.#waitChildClose(child, Math.max(1, Math.min(timeoutMs, 30_000)))
     let forced = false

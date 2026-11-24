@@ -1,5 +1,5 @@
 import { createTranslator } from "@ztools/declarative-ui";
-export const t = createTranslator({
+const rawT = createTranslator({
     "zh-CN": {
         detailAlpha: "**透明度** {alpha}%（下列对比度按不透明颜色计算）",
         detailWhiteContrast: "**白字对比度** {ratio}:1（{rating}）",
@@ -158,7 +158,7 @@ export const t = createTranslator({
         swapColorsAction: "Swap Foreground & Background",
         sectionTooMany: "Cannot Compute",
         tooManyTitle: "Only two colors can be compared",
-        tooManySub: "Entered {count} tokens; please provide foreground and background only",
+        tooManySub: "Entered {count} [[count:token|tokens]]; please provide foreground and background only",
         contrastInvalidSub: "Supports #RGB, #RRGGBB, rgb(), hsl(), hsv(), oklch(), cmyk(), and CSS color names",
         sectionPair: "Foreground & Background",
         pairTitle: "{fg} on {bg}",
@@ -170,4 +170,14 @@ export const t = createTranslator({
         contrastNavTitle: "Contrast Checker",
         contrastSearchPlaceholder: "Foreground Background, e.g. #333333 #FFFFFF"
     }
-}, { defaultLocale: "zh-CN" });
+}, { defaultLocale: "en-US" });
+export const t = (key, params) => {
+    const out = rawT(key, params);
+    if (!out.includes('[['))
+        return out;
+    return out.replace(/\[\[([A-Za-z0-9_.-]+):([^|\]]+)\|([^\]]+)\]\]/g, (_m, k, one, other) => {
+        const v = params?.[k];
+        const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/,/g, ''));
+        return n === 1 ? one : other;
+    });
+};

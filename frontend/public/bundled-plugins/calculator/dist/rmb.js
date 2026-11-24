@@ -1,7 +1,6 @@
 import { List, ActionPanel, Action, Icon, useState, useLocale } from "@ztools/declarative-ui";
 import { t } from "./i18n.js";
-const DIGITS = "零壹贰叁肆伍陆柒捌玖";
-const UNITS = ["", "拾", "佰", "仟"];
+import { RMB_DIGITS, RMB_UNITS, RMB_SECTION_UNITS, RMB_ZERO, RMB_NEGATIVE, RMB_YUAN, RMB_ZHENG, RMB_JIAO, RMB_FEN } from "./rmb.zh-data.js";
 function groupText(group) {
     let text = "";
     let zero = false;
@@ -13,8 +12,8 @@ function groupText(group) {
             continue;
         }
         if (zero)
-            text += "零";
-        text += DIGITS[digit] + UNITS[group.length - i - 1];
+            text += RMB_ZERO;
+        text += RMB_DIGITS[digit] + RMB_UNITS[group.length - i - 1];
         zero = false;
     }
     return text;
@@ -41,21 +40,21 @@ export function toChineseAmount(input) {
             continue;
         }
         if (result && (gap || Number(group) < 1000))
-            result += "零";
-        result += groupText(group) + ["", "万", "亿"][groups.length - i - 1];
+            result += RMB_ZERO;
+        result += groupText(group) + RMB_SECTION_UNITS[groups.length - i - 1];
         gap = false;
     }
     const [jiao, fen] = rawFraction.padEnd(2, "0").split("").map(Number);
     const negative = text.startsWith("-") && (integer !== "0" || jiao !== 0 || fen !== 0);
-    result = (negative ? "负" : "") + (result || "零") + "元";
+    result = (negative ? RMB_NEGATIVE : "") + (result || RMB_ZERO) + RMB_YUAN;
     if (!jiao && !fen)
-        return result + "整";
+        return result + RMB_ZHENG;
     if (jiao)
-        result += DIGITS[jiao] + "角";
+        result += RMB_DIGITS[jiao] + RMB_JIAO;
     else if (integer !== "0")
-        result += "零";
+        result += RMB_ZERO;
     if (fen)
-        result += DIGITS[fen] + "分";
+        result += RMB_DIGITS[fen] + RMB_FEN;
     return result;
 }
 export default function RmbCommand() {

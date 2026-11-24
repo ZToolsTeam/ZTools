@@ -7,8 +7,8 @@ import type { PathGrantService, PathGrantOwnerLifecycle } from '../services/path
 type Grants = Pick<PathGrantService, 'create' | 'createDirectory' | 'deriveDirectory' | 'reference' | 'revoke'>
 interface Root { caller: CallerIdentity; parentId: string; reference: PathGrantRef }
 interface Pending { caller: CallerIdentity; controller: AbortController; work: Promise<PathGrantRef> }
-const denied = () => new ZToolsError(errorCodes.permissionDenied, '缓存目录身份无效')
-const failed = () => new ZToolsError(errorCodes.fileError, '缓存目录授权清理未确认')
+const denied = () => new ZToolsError(errorCodes.permissionDenied, 'Invalid cache root identity')
+const failed = () => new ZToolsError(errorCodes.fileError, 'Cache root authorization cleanup was not confirmed')
 
 /** Trusted Main composition only. The data root and intermediate grants are never projected to Renderer. */
 export class ReferenceCacheRoots {

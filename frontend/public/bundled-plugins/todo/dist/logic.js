@@ -48,6 +48,24 @@ export function toggleTodoStatus(todos, id) {
         return item;
     });
 }
+export function updateTodoItem(todos, id, updates) {
+    const s = todoLogicStrings();
+    const trimmed = (updates.title || "").trim();
+    if (!trimmed) {
+        throw new Error(s.titleRequired);
+    }
+    const priority = updates.priority === "high" || updates.priority === "low" ? updates.priority : "medium";
+    return todos.map((item) => {
+        if (item.id === id) {
+            return {
+                ...item,
+                title: trimmed,
+                priority
+            };
+        }
+        return item;
+    });
+}
 export function deleteTodoItem(todos, id) {
     return todos.filter((item) => item.id !== id);
 }
@@ -164,5 +182,5 @@ export function formatListDate(timestamp, now = Date.now()) {
         return "";
     const date = new Date(timestamp);
     const sameYear = date.getFullYear() === new Date(now).getFullYear();
-    return date.toLocaleDateString([], sameYear ? { month: "2-digit", day: "2-digit" } : { year: "numeric", month: "2-digit", day: "2-digit" });
+    return date.toLocaleDateString(getLocale(), sameYear ? { month: "2-digit", day: "2-digit" } : { year: "numeric", month: "2-digit", day: "2-digit" });
 }

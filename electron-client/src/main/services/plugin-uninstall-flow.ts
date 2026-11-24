@@ -21,10 +21,10 @@ export async function uninstallPluginWithCleanup(
   const removeShortcut = await steps.planShortcutCleanup(pluginId)
   const result = await steps.uninstall(pluginId)
   await steps.removeTriggers(pluginId).catch((error: unknown) =>
-    steps.warn(`插件 ${pluginId} 已卸载，清理快捷键失败:`, error)
+    steps.warn(`Plugin ${pluginId} uninstalled, but failed to clean up triggers:`, error)
   )
   await removeShortcut().catch((error: unknown) =>
-    steps.warn(`插件 ${pluginId} 已卸载，删除桌面快捷方式失败:`, error)
+    steps.warn(`Plugin ${pluginId} uninstalled, but failed to remove desktop shortcut:`, error)
   )
   return result
 }

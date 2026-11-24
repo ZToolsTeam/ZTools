@@ -32,7 +32,7 @@ function parseAutostart(value: unknown): boolean {
     if (normalized === 'true') return true
     if (normalized === 'false') return false
   }
-  throw new ZToolsError(errorCodes.invalidRequest, 'system.autostart 必须是布尔值')
+  throw new ZToolsError(errorCodes.invalidRequest, 'system.autostart must be a boolean')
 }
 
 function serializeSetting(value: unknown): string {
@@ -45,7 +45,7 @@ function serializeSetting(value: unknown): string {
   } catch {
     // Keep the config API's stable validation error for non-serializable settings.
   }
-  throw new ZToolsError(errorCodes.invalidRequest, '设置值必须可序列化')
+  throw new ZToolsError(errorCodes.invalidRequest, 'Setting value must be serializable')
 }
 
 function normalizeSettingPath(key: string): string {
@@ -59,15 +59,15 @@ function decodeSystemDocument(value: string): Record<string, unknown> {
   try {
     decoded = JSON.parse(value)
   } catch {
-    throw new ZToolsError(errorCodes.dataCorrupt, 'system 配置不是有效 JSON 对象')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'system configuration is not a valid JSON object')
   }
-  if (!isRecord(decoded)) throw new ZToolsError(errorCodes.dataCorrupt, 'system 配置必须是对象')
+  if (!isRecord(decoded)) throw new ZToolsError(errorCodes.dataCorrupt, 'system configuration must be an object')
   return decoded
 }
 
 function decodeSystemInput(value: string): Record<string, unknown> {
   const decoded = parseStoredValue(value)
-  if (!isRecord(decoded)) throw new ZToolsError(errorCodes.invalidRequest, 'system 配置必须是对象')
+  if (!isRecord(decoded)) throw new ZToolsError(errorCodes.invalidRequest, 'system configuration must be an object')
   return { ...decoded }
 }
 
@@ -88,12 +88,12 @@ export class LoginItemConfigService {
       return this.config.get(fileName, pathValue, defaultValue)
     }
     if (isAutostartDescendant(pathValue)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'system.autostart 不能包含子路径')
+      throw new ZToolsError(errorCodes.invalidRequest, 'system.autostart cannot contain child paths')
     }
     if (pathValue === AUTOSTART_PATH) return String(this.loginItems.get().openAtLogin)
     if (pathValue === AUTOSTART_STATUS_PATH) return this.loginItems.get().status
     if (isReadonlyStatusPath(pathValue)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'system.autostartStatus 只允许读取')
+      throw new ZToolsError(errorCodes.invalidRequest, 'system.autostartStatus is read-only')
     }
     if (pathValue !== 'system') return this.config.get(fileName, pathValue, defaultValue)
 
@@ -113,13 +113,13 @@ export class LoginItemConfigService {
       return this.config.set(fileName, pathValue, value, syncEnabled)
     }
     if (isReadonlyStatusPath(pathValue)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'system.autostartStatus 只允许读取')
+      throw new ZToolsError(errorCodes.invalidRequest, 'system.autostartStatus is read-only')
     }
     if (pathValue === AUTOSTART_PATH) {
       return this.#enqueueSystemWrite(() => this.#setAutostart(value, syncEnabled))
     }
     if (isAutostartDescendant(pathValue)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'system.autostart 不能包含子路径')
+      throw new ZToolsError(errorCodes.invalidRequest, 'system.autostart cannot contain child paths')
     }
     if (pathValue === 'system') {
       return this.#enqueueSystemWrite(() => this.#setSystemDocument(value, syncEnabled))
@@ -165,7 +165,7 @@ export class LoginItemConfigService {
   async #setSystemDocument(value: string, syncEnabled: boolean): Promise<void> {
     const document = decodeSystemInput(value)
     if (Object.hasOwn(document, 'autostartStatus')) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'system.autostartStatus 只允许读取')
+      throw new ZToolsError(errorCodes.invalidRequest, 'system.autostartStatus is read-only')
     }
     const includesAutostart = Object.hasOwn(document, 'autostart')
     const enabled = includesAutostart ? parseAutostart(document.autostart) : undefined
@@ -195,7 +195,7 @@ export class LoginItemConfigService {
       } catch {
         throw new ZToolsError(
           errorCodes.fileWriteOutcomeUnknown,
-          'macOS 登录项设置与 user_settings.json 状态不一致：配置写入失败且无法确认 OS 回滚'
+          'macOS login item state is inconsistent with user_settings.json: config write failed and OS rollback could not be confirmed'
         )
       }
       throw error

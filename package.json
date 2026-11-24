@@ -1,6 +1,6 @@
 {
   "name": "ztools",
-  "version": "1.1.9.0",
+  "version": "1.2.0.0",
   "private": true,
   "description": "ZTools - 纯粹开源、免费极客、轻量宿主、极致性能的现代化双端效率中枢平台",
   "type": "module",
@@ -15,7 +15,8 @@
     "scan-plugins": "node scripts/scan-plugin-security.mjs",
     "start:mac": "npm --prefix electron-client run start:mac",
     "package:mac": "npm --prefix electron-client run package:app:darwin:universal --",
-    "package:mac:dmg": "npm --prefix electron-client run package:dmg:darwin --"
+    "package:mac:dmg": "npm --prefix electron-client run package:dmg:darwin --",
+    "test:i18n:e2e": "node --test tests/e2e-i18n-hot-switch.test.mjs"
   },
   "workspaces": [
     "packages/*"

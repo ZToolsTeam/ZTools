@@ -5,6 +5,13 @@ import type { ConfigService } from '../services/config-service.js'
 import type { JsonObject } from '../services/json-file-store.js'
 import { PluginStateService, type PluginStateProvider } from '../services/plugin-state-service.js'
 import type { SystemToolsListResult, SystemToolsProvider, SystemToolTarget } from '../services/system-tools-service.js'
+import { t } from '../i18n/index.js'
+import {
+  getAllPluginSearchKeywords,
+  getLocalizedPluginDescription,
+  getLocalizedPluginName,
+  getPluginAltNames
+} from '../i18n/plugin-i18n.js'
 import {
   CURRENT_PINNED_SCHEMA_VERSION,
   MAX_PINNED_ENTRIES,
@@ -38,15 +45,21 @@ function stringValue(value: unknown, maximum = 4096): string {
   return typeof value === 'string' && value.length <= maximum ? value : ''
 }
 
-function pluginKeywords(manifest: Record<string, unknown>): string[] {
-  const values = Array.isArray(manifest.keywords)
-    ? manifest.keywords
-    : typeof manifest.keyword === 'string'
-      ? manifest.keyword.split(/\s+/)
-      : []
-  return values.filter((item): item is string =>
-    typeof item === 'string' && item.trim().length > 0 && item.length <= 128
-  ).slice(0, 100)
+function normalizeAltNames(raw: unknown, primaryName: string): string[] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of raw) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (trimmed.length === 0 || trimmed.length > 128 || trimmed === primaryName || seen.has(trimmed)) {
+      continue
+    }
+    seen.add(trimmed)
+    result.push(trimmed)
+    if (result.length >= 32) break
+  }
+  return result
 }
 
 function pluginState(document: JsonObject, pluginId: string): Record<string, unknown> {
@@ -61,6 +74,7 @@ export interface SuperPanelItem {
   description: string
   iconUrl: string
   keywords: string[]
+  altNames?: string[]
   pinned: boolean
   recent: boolean
   common: boolean
@@ -224,8 +238,11 @@ export class SuperPanelDataService {
     const pluginItems: PanelItemEntry[] = []
     for (const manifest of pluginResult.data.slice(0, 1000)) {
       const id = stringValue(manifest.id, 128)
-      const name = stringValue(manifest.name, 256)
-      if (!PLUGIN_ID_PATTERN.test(id) || !name) continue
+      const baseName = stringValue(manifest.name, 256)
+      if (!PLUGIN_ID_PATTERN.test(id) || !baseName) continue
+      const localizedName = stringValue(getLocalizedPluginName(manifest), 256) || baseName
+      const localizedDescription = stringValue(getLocalizedPluginDescription(manifest), 2048)
+      const altNames = getPluginAltNames(manifest)
       const currentState = pluginState(state, id)
       const enabled = typeof currentState.enabled === 'boolean'
         ? currentState.enabled
@@ -239,10 +256,11 @@ export class SuperPanelDataService {
         item: {
           id,
           type: 'plugin',
-          name,
-          description: stringValue(manifest.description, 2048),
+          name: localizedName,
+          description: localizedDescription,
           iconUrl,
-          keywords: pluginKeywords(manifest),
+          keywords: getAllPluginSearchKeywords(manifest),
+          ...(altNames.length > 0 ? { altNames } : {}),
           pinned,
           recent,
           common: pinned || recent
@@ -273,11 +291,11 @@ export class SuperPanelDataService {
   async setPin(entryInput: unknown, pinned: unknown, caller?: CallerIdentity): Promise<SetPinResult> {
     this.#assertActive()
     if (typeof pinned !== 'boolean') {
-      throw new Error('pinned 参数必须为布尔值')
+      throw new Error(t('superPanel.error.pinnedMustBeBoolean'))
     }
     const parsedEntry = parsePinnedEntry(entryInput, this.#platform)
     if (!parsedEntry) {
-      throw new Error('固定项格式无效')
+      throw new Error(t('superPanel.error.invalidPinEntry'))
     }
 
     let targetEntry: PinnedEntry = parsedEntry
@@ -294,16 +312,16 @@ export class SuperPanelDataService {
   async reorderPins(order: unknown): Promise<ReorderPinsResult> {
     this.#assertActive()
     if (!Array.isArray(order) || order.length > MAX_PINNED_ENTRIES) {
-      throw new Error('固定排序列表无效')
+      throw new Error(t('superPanel.error.invalidPinOrder'))
     }
     const normalizedOrder: string[] = []
     const seen = new Set<string>()
     for (const item of order) {
       if (typeof item !== 'string' || item.length === 0 || item.length > MAX_PIN_KEY_LENGTH || item.includes('\0')) {
-        throw new Error('固定排序列表无效')
+        throw new Error(t('superPanel.error.invalidPinOrder'))
       }
       if (seen.has(item)) {
-        throw new Error('固定排序列表包含重复项')
+        throw new Error(t('superPanel.error.duplicatePinOrder'))
       }
       seen.add(item)
       normalizedOrder.push(item)
@@ -325,7 +343,7 @@ export class SuperPanelDataService {
         return {
           success: false,
           stale: true,
-          error: '固定列表已变化，请重试',
+          error: t('superPanel.error.pinListStale'),
           pinnedEntries: await this.#resolvePinnedEntries(currentEntries)
         }
       }
@@ -349,9 +367,9 @@ export class SuperPanelDataService {
   async togglePin(id: string, itemType: string): Promise<boolean> {
     this.#assertActive()
     if (itemType !== 'plugin') {
-      throw new Error('不支持的项目类型')
+      throw new Error(t('superPanel.error.unsupportedItemType'))
     }
-    if (!PLUGIN_ID_PATTERN.test(id)) throw new Error('插件 ID 无效')
+    if (!PLUGIN_ID_PATTERN.test(id)) throw new Error(t('superPanel.error.invalidPluginId'))
     const entry: PinnedEntry = { kind: 'plugin', pluginId: id }
 
     return this.#enqueueConfigWrite(async () => {
@@ -374,10 +392,10 @@ export class SuperPanelDataService {
       pinKey.length > MAX_PIN_KEY_LENGTH ||
       pinKey.includes('\0')
     ) {
-      throw new Error('固定项目标不存在或已失效')
+      throw new Error(t('superPanel.error.pinTargetInvalid'))
     }
     if (action !== 'open' && action !== 'reveal') {
-      throw new Error('固定项打开动作无效')
+      throw new Error(t('superPanel.error.invalidOpenAction'))
     }
 
     const configuration = await this.#ensureMigratedConfiguration()
@@ -387,23 +405,23 @@ export class SuperPanelDataService {
         entry.kind === 'file' && resolvePinKey(entry, this.#platform) === pinKey
     )
     if (!targetEntry) {
-      throw new Error('固定项目标不存在或已失效')
+      throw new Error(t('superPanel.error.pinTargetInvalid'))
     }
 
     const lstatResult = await fs.lstat(targetEntry.path).catch(() => undefined)
     this.#assertActive()
     if (!lstatResult || lstatResult.isSymbolicLink()) {
-      throw new Error('固定项目标不存在或已失效')
+      throw new Error(t('superPanel.error.pinTargetInvalid'))
     }
     const realPath = await fs.realpath(targetEntry.path).catch(() => '')
     this.#assertActive()
     if (!realPath) {
-      throw new Error('固定项目标不存在或已失效')
+      throw new Error(t('superPanel.error.pinTargetInvalid'))
     }
     const realStat = await fs.lstat(realPath).catch(() => undefined)
     this.#assertActive()
     if (!realStat || realStat.isSymbolicLink() || (!realStat.isFile() && !realStat.isDirectory())) {
-      throw new Error('固定项目标不存在或已失效')
+      throw new Error(t('superPanel.error.pinTargetInvalid'))
     }
 
     if (action === 'reveal') {
@@ -413,7 +431,7 @@ export class SuperPanelDataService {
         return
       }
       if (!this.#revealPath) {
-        throw new Error('文件定位能力不可用')
+        throw new Error(t('superPanel.error.revealUnavailable'))
       }
       await this.#revealPath(realPath)
       return
@@ -424,11 +442,11 @@ export class SuperPanelDataService {
   }
 
   #assertActive(): void {
-    if (this.#stopped) throw new Error('超级面板数据服务已停止')
+    if (this.#stopped) throw new Error(t('superPanel.error.dataServiceStopped'))
   }
 
   async markPluginUsed(id: string): Promise<void> {
-    if (!PLUGIN_ID_PATTERN.test(id)) throw new Error('插件 ID 无效')
+    if (!PLUGIN_ID_PATTERN.test(id)) throw new Error(t('superPanel.error.invalidPluginId'))
     await this.#pluginState.markUsed(id)
   }
 
@@ -459,12 +477,16 @@ export class SuperPanelDataService {
     const name = stringValue(target.name, 256)
     if (!SYSTEM_TOOL_ID_PATTERN.test(id) || !name) return undefined
     const category = stringValue(target.category, 64)
-    const keywords = ['系统工具', ...systemToolCategoryKeywords(category)]
-    if (id === 'this_pc') keywords.push('我的电脑 计算机')
-    else if (id === 'settings') keywords.push('电脑设置 Windows设置 设置中心')
-    else if (id === 'powershell') keywords.push('PowerShell 命令行 终端')
-    else if (id === 'registry_editor') keywords.push('注册表 regedit')
-    else if (id === 'control_panel') keywords.push('控制面板 control')
+    const altNames = normalizeAltNames(target.altNames, name)
+    const keywords = [t('systemTools.category.root'), ...systemToolCategoryKeywords(category)]
+    if (id === 'this_pc') keywords.push(t('systemTools.aliases.this_pc'))
+    else if (id === 'settings') keywords.push(t('systemTools.aliases.settings'))
+    else if (id === 'powershell') keywords.push(t('systemTools.aliases.powershell'))
+    else if (id === 'registry_editor') keywords.push(t('systemTools.aliases.registry_editor'))
+    else if (id === 'control_panel') keywords.push(t('systemTools.aliases.control_panel'))
+    for (const alt of altNames) {
+      if (!keywords.includes(alt)) keywords.push(alt)
+    }
     return {
       id: `system-tool:${id}`,
       target: id,
@@ -473,6 +495,7 @@ export class SuperPanelDataService {
       description: stringValue(target.description, 2048),
       iconUrl: '',
       keywords,
+      ...(altNames.length > 0 ? { altNames } : {}),
       pinned: false,
       recent: false,
       common: false
@@ -565,24 +588,24 @@ export class SuperPanelDataService {
     caller?: CallerIdentity
   ): Promise<Extract<PinnedEntry, { kind: 'file' }>> {
     if (!this.#resolveAuthorizedReadPath) {
-      throw new Error('文件读权限校验器未配置')
+      throw new Error(t('superPanel.error.readAuthorizerMissing'))
     }
     const authorizedPath = await this.#resolveAuthorizedReadPath(entry.path, caller)
     this.#assertActive()
     const inputStat = await fs.lstat(entry.path).catch(() => undefined)
     this.#assertActive()
     if (!inputStat || inputStat.isSymbolicLink()) {
-      throw new Error('不允许固定符号链接或无效路径')
+      throw new Error(t('superPanel.error.symlinkOrInvalidPath'))
     }
     const realPath = await fs.realpath(authorizedPath).catch(() => '')
     this.#assertActive()
     if (!realPath) {
-      throw new Error('目标文件或目录不存在')
+      throw new Error(t('superPanel.error.targetNotFound'))
     }
     const realStat = await fs.lstat(realPath).catch(() => undefined)
     this.#assertActive()
     if (!realStat || realStat.isSymbolicLink() || (!realStat.isFile() && !realStat.isDirectory())) {
-      throw new Error('目标不是普通文件或目录')
+      throw new Error(t('superPanel.error.targetNotRegularFileOrDir'))
     }
     return { ...entry, path: realPath }
   }
@@ -606,7 +629,7 @@ export class SuperPanelDataService {
         }
       }
       if (currentEntries.length >= MAX_PINNED_ENTRIES) {
-        throw new Error('固定数量已达上限')
+        throw new Error(t('superPanel.error.pinLimitReached'))
       }
       const nextEntries = [...currentEntries, entry]
       const nextSource: Record<string, unknown> = {
@@ -719,12 +742,12 @@ export class SuperPanelDataService {
 }
 
 function systemToolCategoryKeywords(category: string): string[] {
-  if (category === 'core') return ['常用 核心']
-  if (category === 'terminal') return ['终端 命令行']
-  if (category === 'management') return ['管理工具 管理控制台']
-  if (category === 'system') return ['系统 系统属性']
-  if (category === 'network') return ['网络']
-  if (category === 'hardware') return ['硬件']
-  if (category === 'settings') return ['设置 系统设置']
+  if (category === 'core') return [t('systemTools.category.core')]
+  if (category === 'terminal') return [t('systemTools.category.terminal')]
+  if (category === 'management') return [t('systemTools.category.management')]
+  if (category === 'system') return [t('systemTools.category.system')]
+  if (category === 'network') return [t('systemTools.category.network')]
+  if (category === 'hardware') return [t('systemTools.category.hardware')]
+  if (category === 'settings') return [t('systemTools.category.settings')]
   return category ? [category] : []
 }

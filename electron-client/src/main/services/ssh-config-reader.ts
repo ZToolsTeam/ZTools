@@ -11,9 +11,9 @@ export interface SshReadOptions { home: string; systemDirectory?: string; enviro
 
 /** 只拆词，不展开 shell、执行 Match 或读取密钥内容。 */
 export function sshConfigTokens(line: string): string[] {
-  if (line.length > 32768 || line.includes('\0')) throw new Error('SSH 配置行过长或含空字符')
+  if (line.length > 32768 || line.includes('\0')) throw new Error('SSH config line exceeds max length or contains NUL character')
   const directive = /^\s*([^\s=#]+)(?:\s*=\s*|\s+|$)/.exec(line)
-  if (!directive) { if (!line.trim() || line.trimStart().startsWith('#')) return []; throw new Error('SSH 配置指令无效') }
+  if (!directive) { if (!line.trim() || line.trimStart().startsWith('#')) return []; throw new Error('Invalid SSH config directive') }
   const words: string[] = [directive[1]!], args = line.slice(directive[0].length)
   let value = '', quote = '', present = false
   for (let i = 0; i < args.length; i++) {
@@ -30,7 +30,7 @@ export function sshConfigTokens(line: string): string[] {
     }
     value += c; present = true
   }
-  if (quote) throw new Error('SSH 配置引号未闭合')
+  if (quote) throw new Error('Unterminated quote in SSH config')
   if (present) words.push(value)
   return words
 }
@@ -40,25 +40,25 @@ export async function readSshConfigurationFile(file: string, signal: AbortSignal
   signal.throwIfAborted()
   let target: string
   try { await fs.lstat(file) }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw new Error('SSH 配置路径无法读取') }
-  try { target = await fs.realpath(file) } catch { throw new Error('SSH 配置链接或路径无法读取') }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw new Error('Unable to read SSH config path') }
+  try { target = await fs.realpath(file) } catch { throw new Error('Unable to resolve SSH config symlink or path') }
   const handle = await fs.open(target, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'EISDIR') throw new Error('SSH 配置必须是可读取的普通文件且不超过 256 KiB')
+    if (error.code === 'EISDIR') throw new Error('SSH config must be a readable regular file not exceeding 256 KiB')
     throw error
   })
   try {
     const stat = await handle.stat()
-    if (!stat.isFile() || stat.size > 256 * 1024 || (process.getuid && stat.uid !== process.getuid() && stat.uid !== 0)) throw new Error('SSH 配置必须是可读取的普通文件且不超过 256 KiB')
+    if (!stat.isFile() || stat.size > 256 * 1024 || (process.getuid && stat.uid !== process.getuid() && stat.uid !== 0)) throw new Error('SSH config must be a readable regular file not exceeding 256 KiB')
     const bytes = Buffer.alloc(256 * 1024 + 1); let size = 0
     while (size < bytes.length) { signal.throwIfAborted(); const next = await handle.read(bytes, size, Math.min(16384, bytes.length - size), size); if (!next.bytesRead) break; size += next.bytesRead }
-    if (size > 256 * 1024) throw new Error('SSH 配置读取超过 256 KiB')
+    if (size > 256 * 1024) throw new Error('SSH config read exceeded 256 KiB')
     return bytes.subarray(0, size)
   } finally { await handle.close() }
 }
 
 export async function readSshDocuments(options: SshReadOptions, signal: AbortSignal): Promise<SshDocuments> {
   const systemDirectory = options.systemDirectory ?? '/etc/ssh', environment = options.environment ?? process.env
-  if (!path.isAbsolute(options.home) || !path.isAbsolute(systemDirectory)) throw new Error('SSH 配置目录必须为绝对路径')
+  if (!path.isAbsolute(options.home) || !path.isAbsolute(systemDirectory)) throw new Error('SSH config directory must be an absolute path')
   const warnings = new Set<string>(), fingerprint = createHash('sha256'), visiting = new Set<string>()
   let files = 0, totalBytes = 0, directoryEntries = 0
   const userDirectory = path.join(options.home, '.ssh')
@@ -75,12 +75,12 @@ export async function readSshDocuments(options: SshReadOptions, signal: AbortSig
     })
     // 与具体目标有关的路径须由实际 ssh 解释，扫描不能猜测或执行表达式。
     if (unresolved || /\$\{|^~[^/]|\*\*|[{}()]/.test(expanded) || (base === systemDirectory && expanded.startsWith('~'))) {
-      warnings.add('部分 Include 使用动态或未设置的路径，主机预览可能不完整；连接时由系统 SSH 解释原配置'); return { paths: [], unresolved: true }
+      warnings.add('Some Include directives use dynamic or unset paths; host preview may be incomplete and system SSH will interpret the original config when connecting'); return { paths: [], unresolved: true }
     }
     const absolute = expanded.startsWith('~/') ? path.join(options.home, expanded.slice(2)) : path.resolve(base, expanded)
     const root = path.parse(absolute).root
     const pieces = absolute.slice(root.length).split(path.sep).filter(Boolean)
-    if (pieces.length > 32) throw new Error('SSH Include 路径层级超过限制')
+    if (pieces.length > 32) throw new Error('SSH Include path depth exceeds limit')
     let parents = [root]
     for (const piece of pieces) {
       signal.throwIfAborted(); const next: string[] = []
@@ -88,12 +88,12 @@ export async function readSshDocuments(options: SshReadOptions, signal: AbortSig
       for (const parent of parents) {
         let directory
         try { directory = await fs.opendir(parent) }
-        catch (error) { if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code || '')) continue; throw new Error('SSH Include 目录无法扫描') }
+        catch (error) { if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code || '')) continue; throw new Error('Unable to scan SSH Include directory') }
         for await (const entry of directory) {
           signal.throwIfAborted()
-          if (++directoryEntries > 8192) throw new Error('SSH Include 扫描条目超过限制，停止读取')
+          if (++directoryEntries > 8192) throw new Error('SSH Include scan entry limit exceeded; aborting read')
           if ((!entry.name.startsWith('.') || piece.startsWith('.')) && path.matchesGlob(entry.name, piece)) next.push(path.join(parent, entry.name))
-          if (next.length > 128) throw new Error('SSH Include 匹配文件过多')
+          if (next.length > 128) throw new Error('SSH Include matched too many files')
         }
       }
       parents = next.sort()
@@ -102,20 +102,20 @@ export async function readSshDocuments(options: SshReadOptions, signal: AbortSig
   }
   async function load(file: string, base: string, depth: number): Promise<SshDocument | undefined> {
     signal.throwIfAborted()
-    if (depth > 16 || ++files > 128) throw new Error('SSH Include 递归或文件数量超过限制')
+    if (depth > 16 || ++files > 128) throw new Error('SSH Include recursion depth or file count exceeded limit')
     const bytes = await readSshConfigurationFile(file, signal)
     fingerprint.update(JSON.stringify([file, bytes?.length ?? null])); fingerprint.update(bytes ?? '')
     if (!bytes) return undefined
     const real = await fs.realpath(file)
-    if (visiting.has(real)) throw new Error('SSH Include 出现循环引用')
-    if ((totalBytes += bytes.length) > 2 * 1024 * 1024) throw new Error('SSH 配置总大小超过 2 MiB')
+    if (visiting.has(real)) throw new Error('Circular reference detected in SSH Include')
+    if ((totalBytes += bytes.length) > 2 * 1024 * 1024) throw new Error('Total SSH config size exceeds 2 MiB')
     let text: string
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { throw new Error('SSH 配置不是有效 UTF-8 文本') }
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { throw new Error('SSH config is not valid UTF-8 text') }
     const directives: SshDirective[] = []; visiting.add(real)
     try {
       for (const [index, line] of text.split(/\r?\n/).entries()) {
         signal.throwIfAborted(); const words = sshConfigTokens(line); if (!words.length) continue
-        const key = words.shift()!.toLowerCase(); if (!words.length) throw new Error(`SSH 配置第 ${index + 1} 行缺少参数`)
+        const key = words.shift()!.toLowerCase(); if (!words.length) throw new Error(`SSH config line ${index + 1} is missing arguments`)
         const item: SshDirective = { key, args: words, source: file, line: index + 1 }
         if (key === 'include') {
           item.includes = []

@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { InboxIcon } from '@lucide/vue'
+import { getCurrentLocale, setI18nLocale } from '@/i18n'
 import RcTag from '../RcTag.vue'
 import RcEmpty from '../RcEmpty.vue'
 import RcLoading from '../RcLoading.vue'
@@ -27,6 +28,12 @@ describe('RcTag 状态标签', () => {
 })
 
 describe('RcEmpty / RcLoading', () => {
+  const originalLocale = getCurrentLocale()
+
+  afterEach(() => {
+    setI18nLocale(originalLocale)
+  })
+
   it('空状态：图标、标题、说明与操作插槽；没有说明时不渲染说明行', () => {
     const empty = mount(RcEmpty, { props: { icon: InboxIcon, title: '暂无反馈', description: '换个分类看看' }, slots: { action: '<button>去提交</button>' } })
     expect(empty.find('.rc-empty-title').text()).toBe('暂无反馈')
@@ -38,8 +45,11 @@ describe('RcEmpty / RcLoading', () => {
     expect(bare.find('.rc-empty-icon').exists()).toBe(false)
   })
 
-  it('加载态：块级默认文案，行内形态用自定义文案', () => {
+  it('加载态：块级默认文案随语言切换，行内形态用自定义文案', () => {
+    setI18nLocale('zh-CN')
     expect(mount(RcLoading).text()).toBe('加载中…')
+    setI18nLocale('en-US')
+    expect(mount(RcLoading).text()).toBe('Loading…')
     const inline = mount(RcLoading, { props: { inline: true, text: '同步中' } })
     expect(inline.classes()).toContain('is-inline')
     expect(inline.text()).toBe('同步中')

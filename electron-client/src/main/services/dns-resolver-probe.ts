@@ -13,7 +13,7 @@ export async function probeDnsServer(server: string, signal: AbortSignal, domain
   try {
     const answers = await resolver.resolve4(domain)
     signal.throwIfAborted()
-    if (!answers.length || answers.some(value => isIP(value) !== 4)) throw new Error('DNS 未返回有效 IPv4 解析结果')
+    if (!answers.length || answers.some(value => isIP(value) !== 4)) throw new Error('DNS did not return valid IPv4 resolution results')
     return { server, milliseconds: Math.round((performance.now() - started) * 10) / 10, answers, error: null }
   } catch (error) {
     signal.throwIfAborted()

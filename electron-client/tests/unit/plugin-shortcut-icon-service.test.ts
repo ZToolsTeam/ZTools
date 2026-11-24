@@ -259,8 +259,8 @@ test('图标下载在插件目录锁之外进行：下载期间不占锁，下�
   let entered = 0
   const counting = { withPluginDirectory: async <T>(_pluginId: string, action: (m: PluginManifest, r: string) => Promise<T>) => { entered++; return action(manifest(), root) } }
   const offline = new PluginIconService(counting, state, (async () => { throw new DOMException('timeout', 'TimeoutError') }) as typeof fetch)
-  await assert.rejects(offline.refresh('plugin.test', 'https://cdn.example/icon.png'), /下载插件图标失败/)
+  await assert.rejects(offline.refresh('plugin.test', 'https://cdn.example/icon.png'), /Failed to download plugin icon/)
   const notFound = new PluginIconService(counting, state, (async () => new Response('x', { status: 404 })) as typeof fetch)
-  await assert.rejects(notFound.refresh('plugin.test', 'https://cdn.example/icon.png'), /下载插件图标失败/)
+  await assert.rejects(notFound.refresh('plugin.test', 'https://cdn.example/icon.png'), /Failed to download plugin icon/)
   assert.equal(entered, 0)
 })

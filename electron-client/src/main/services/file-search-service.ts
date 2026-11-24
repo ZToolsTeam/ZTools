@@ -44,11 +44,11 @@ export class FileSearchService {
    */
   public async openFile(targetPath: string): Promise<FileActionResult> {
     if (!targetPath || typeof targetPath !== 'string') {
-      return { success: false, path: '', error: '无效的文件路径' }
+      return { success: false, path: '', error: 'Invalid file path' }
     }
     const resolved = path.resolve(targetPath)
     if (!fs.existsSync(resolved)) {
-      return { success: false, path: resolved, error: '文件不存在' }
+      return { success: false, path: resolved, error: 'File does not exist' }
     }
 
     try {
@@ -67,11 +67,11 @@ export class FileSearchService {
    */
   public revealFile(targetPath: string): FileActionResult {
     if (!targetPath || typeof targetPath !== 'string') {
-      return { success: false, path: '', error: '无效的文件路径' }
+      return { success: false, path: '', error: 'Invalid file path' }
     }
     const resolved = path.resolve(targetPath)
     if (!fs.existsSync(resolved)) {
-      return { success: false, path: resolved, error: '文件或目录不存在' }
+      return { success: false, path: resolved, error: 'File or directory does not exist' }
     }
 
     try {
@@ -87,11 +87,11 @@ export class FileSearchService {
    */
   public async quickLookSelection(filePath: string): Promise<FileActionResult> {
     if (!filePath || typeof filePath !== 'string' || !filePath.trim()) {
-      return { success: false, path: '', error: '无效的文件路径' }
+      return { success: false, path: '', error: 'Invalid file path' }
     }
     const normalized = path.resolve(filePath.trim())
     if (!fs.existsSync(normalized)) {
-      return { success: false, path: normalized, error: '文件不存在' }
+      return { success: false, path: normalized, error: 'File does not exist' }
     }
 
     if (process.platform === 'darwin') {
@@ -100,7 +100,7 @@ export class FileSearchService {
           detached: true,
           stdio: 'ignore'
         })
-        child.on('error', (err) => console.warn('[QuickLook] 进程启动失败:', err))
+        child.on('error', (err) => console.warn('[QuickLook] Failed to start process:', err))
         child.unref()
         return { success: true, path: normalized }
       } catch (err: unknown) {
@@ -116,18 +116,18 @@ export class FileSearchService {
    */
   public async calculateSha256(targetPath: string): Promise<FileSha256Result> {
     if (!targetPath || typeof targetPath !== 'string') {
-      return { success: false, path: '', error: '无效的文件路径' }
+      return { success: false, path: '', error: 'Invalid file path' }
     }
     const resolved = path.resolve(targetPath)
     if (!fs.existsSync(resolved)) {
-      return { success: false, path: resolved, error: '文件不存在' }
+      return { success: false, path: resolved, error: 'File does not exist' }
     }
 
     const t0 = performance.now()
     try {
       const stat = await fs.promises.stat(resolved)
       if (stat.isDirectory()) {
-        return { success: false, path: resolved, error: '目标为目录，无法直接计算单个文件哈希' }
+        return { success: false, path: resolved, error: 'Target is a directory; cannot compute single-file hash' }
       }
 
       return await new Promise<FileSha256Result>((resolve) => {
@@ -139,7 +139,7 @@ export class FileSearchService {
           resolve({
             success: false,
             path: resolved,
-            error: `读取流失败: ${err.message}`
+            error: `Failed to read stream: ${err.message}`
           })
         })
         stream.on('end', () => {

@@ -141,7 +141,7 @@ function isStatus<T extends string>(value: unknown, statuses: ReadonlySet<T>): v
 
 function copyDefinition(definition: RuntimeCapabilityDefinition): RuntimeCapabilityDefinition {
   if (typeof definition !== 'object' || definition === null || !isRuntimeCapabilityId(definition.id)) {
-    throw new TypeError('运行时能力定义必须使用符合公开契约的稳定 capability ID')
+    throw new TypeError('Runtime capability definitions must use stable capability IDs matching the public contract')
   }
 
   if (definition.callerGate === undefined) return { id: definition.id }
@@ -156,7 +156,7 @@ function copyDefinition(definition: RuntimeCapabilityDefinition): RuntimeCapabil
     gate.methodGateCallers.some((callerType) => !CALLER_TYPES.has(callerType)) ||
     new Set(gate.methodGateCallers).size !== gate.methodGateCallers.length
   ) {
-    throw new TypeError(`运行时能力 ${definition.id} 的 callerGate 无效`)
+    throw new TypeError(`Runtime capability ${definition.id} has an invalid callerGate`)
   }
 
   return {
@@ -170,9 +170,9 @@ function copyDefinition(definition: RuntimeCapabilityDefinition): RuntimeCapabil
 
 function queryAbortError(reason: unknown): ZToolsError {
   if (reason === errorCodes.appStopping) {
-    return new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    return new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
   }
-  return new ZToolsError(errorCodes.callerDestroyed, '运行时能力查询已取消')
+  return new ZToolsError(errorCodes.callerDestroyed, 'Runtime capability query cancelled')
 }
 
 function awaitWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -218,11 +218,11 @@ export class RuntimeCapabilityService {
     definitions: readonly RuntimeCapabilityDefinition[],
     private readonly providers: RuntimeCapabilityProviders = {}
   ) {
-    if (!Array.isArray(definitions)) throw new TypeError('必须注入显式运行时能力目录')
+    if (!Array.isArray(definitions)) throw new TypeError('An explicit runtime capability catalog must be injected')
     for (const source of definitions) {
       const definition = copyDefinition(source)
       if (this.#definitions.has(definition.id)) {
-        throw new TypeError(`运行时能力目录存在重复 ID: ${definition.id}`)
+        throw new TypeError(`Runtime capability catalog contains duplicate ID: ${definition.id}`)
       }
       this.#definitions.set(definition.id, definition)
     }
@@ -233,15 +233,15 @@ export class RuntimeCapabilityService {
     caller: CallerIdentity,
     signal?: AbortSignal
   ): Promise<RuntimeCapabilitySnapshot> {
-    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
     const capabilityValue = typeof params === 'object' && params !== null
       ? params.capability
       : undefined
     if (!isRuntimeCapabilityId(capabilityValue)) {
-      throw new ZToolsError(errorCodes.invalidRequest, '未知运行时能力')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Unknown runtime capability')
     }
     const definition = this.#definitions.get(capabilityValue)
-    if (!definition) throw new ZToolsError(errorCodes.invalidRequest, '未知运行时能力')
+    if (!definition) throw new ZToolsError(errorCodes.invalidRequest, 'Unknown runtime capability')
 
     const trustedCaller = isCallerIdentity(caller) ? copyCallerIdentity(caller) : undefined
     const snapshotKey = capabilityStateKey(definition.id, trustedCaller)
@@ -371,9 +371,9 @@ export class RuntimeCapabilityService {
 
   #assertQueryActive(signal: AbortSignal, ownerId: number | undefined, ownerEpoch: number): void {
     if (signal.aborted) throw queryAbortError(signal.reason)
-    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
     if (ownerId !== undefined && (this.#ownerCloseEpochs.get(ownerId) ?? 0) !== ownerEpoch) {
-      throw new ZToolsError(errorCodes.callerDestroyed, '运行时能力查询已取消')
+      throw new ZToolsError(errorCodes.callerDestroyed, 'Runtime capability query cancelled')
     }
   }
 

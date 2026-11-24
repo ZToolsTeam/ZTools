@@ -20,7 +20,7 @@ export interface PluginStateProvider {
 
 function validatePluginId(pluginId: string): void {
   if (!PLUGIN_ID_PATTERN.test(pluginId)) {
-    throw new ZToolsError(errorCodes.invalidRequest, '插件 ID 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid plugin ID')
   }
 }
 
@@ -69,7 +69,7 @@ export class PluginStateService implements PluginStateProvider {
       state.revoked = revoked
       if (revoked) {
         state.enabled = false
-        state.revoked_reason = reason || '该插件已被官方下架禁用'
+        state.revoked_reason = reason || 'This plugin has been revoked and disabled by the official registry'
         state.revoked_at = timestamp()
       } else {
         delete state.revoked

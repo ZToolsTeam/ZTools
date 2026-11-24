@@ -35,7 +35,7 @@ test('Windows 网卡名：允许空格/括号/中文，拒绝竖线、控制字�
   // Mac 规则不变：中文/空格名称与 utun 仍被排除
   assert.deepEqual(listLanInterfaces({ '以太网 2': [entry('192.0.2.100')], utun3: [entry('10.0.0.2')], en0: [entry('192.0.2.5')] }, 'darwin').map(v => v.name), ['en0'])
   for (const id of ['a|b|192.0.2.1|255.255.255.0', 'x\u0001|192.0.2.1|255.255.255.0', `${long}|192.0.2.1|255.255.255.0`, '以太网 2|192.0.2.1', '|192.0.2.1|255.255.255.0']) {
-    assert.throws(() => validateLanRequest({ action: 'wake', operationId: 'op', interfaceId: id, mac }), /网卡编号/)
+    assert.throws(() => validateLanRequest({ action: 'wake', operationId: 'op', interfaceId: id, mac }), /network interface ID/i)
   }
 })
 
@@ -62,9 +62,9 @@ test('Windows ping 解析：多语言回复、<1ms、网关代发不可达（退
   assert.equal(parseWindowsPing(`Request timed out.\r\nPing statistics for ${t}:`, 1, t), null)
   assert.equal(parseWindowsPing('', 0, t), null)
   assert.deepEqual(parseWindowsPing(`Reply from ${t}: bytes=32 TTL=64`, 0, t), { latencyMs: null })
-  assert.throws(() => parseWindowsPing('', 2, t), /退出码 2/)
-  assert.throws(() => parseWindowsPing('', null, t), /退出码 未知/)
-  assert.throws(() => parseWindowsPing('', 0, '192.0.2.256'), /目标地址/)
+  assert.throws(() => parseWindowsPing('', 2, t), /exit code 2/i)
+  assert.throws(() => parseWindowsPing('', null, t), /exit code unknown/i)
+  assert.throws(() => parseWindowsPing('', 0, '192.0.2.256'), /target address/i)
 })
 
 test('Windows ping 调用：系统目录 PING.EXE、绑定本机源地址；超时视为无回复，取消与启动失败抛错', async () => {
@@ -91,8 +91,8 @@ test('Windows ARP 解析：只取所选网卡段，跳过广播/组播/全零，
   assert.deepEqual([...parseWindowsArp(gbk('未找到 ARP 项。'), local)], [])
   assert.deepEqual([...parseWindowsArp(`Interface: 198.51.100.7 --- 0x12\r\n  198.51.100.1  02-aa-aa-aa-aa-aa  dynamic`, local)], [])
   assert.equal(parseWindowsArp(`Interface: ${local} --- 0xb\r\n  192.0.2.8  02-11-22-33-44-55  dynamic\r\n  192.0.2.8  02-11-22-33-44-55  static`, local).size, 1)
-  assert.throws(() => parseWindowsArp(`Interface: ${local} --- 0xb\r\n  192.0.2.8  02-11-22-33-44-55  dynamic\r\n  192.0.2.8  02-11-22-33-44-56  dynamic`, local), /多个 MAC/)
-  assert.throws(() => parseWindowsArp('  192.0.2.8  02-11-22-33-44-55  dynamic', local), /格式无法识别/)
+  assert.throws(() => parseWindowsArp(`Interface: ${local} --- 0xb\r\n  192.0.2.8  02-11-22-33-44-55  dynamic\r\n  192.0.2.8  02-11-22-33-44-56  dynamic`, local), /conflicting MAC/i)
+  assert.throws(() => parseWindowsArp('  192.0.2.8  02-11-22-33-44-55  dynamic', local), /Unrecognized system ARP output format/i)
   assert.equal(parseWindowsArp(`Interface: ${local} --- 0xb\r\n  999.0.2.8  02-11-22-33-44-55  dynamic`, local).size, 0)
 })
 
@@ -106,9 +106,9 @@ test('Windows ARP 调用：-a -N 本机地址；空表的非零退出按空表�
     reply = { stdout, exitCode: 1, timedOut: false }; assert.equal((await readWindowsNeighbors('192.0.2.100', signal(), run)).size, 0)
   }
   // 输出里有可解析的数据行却非零退出：结果可能不完整，仍报错
-  reply = { stdout: 'Interface: 192.0.2.100 --- 0xb\r\n  192.0.2.8  02-11-22-33-44-55  dynamic', exitCode: 1, timedOut: false }; await assert.rejects(readWindowsNeighbors('192.0.2.100', signal(), run), /退出码 1/)
-  reply = { stdout: '  192.0.2.8  02-11-22-33-44-55  dynamic', exitCode: 5, timedOut: false }; await assert.rejects(readWindowsNeighbors('192.0.2.100', signal(), run), /退出码 5/)
-  reply = { stdout: '', exitCode: null, timedOut: true }; await assert.rejects(readWindowsNeighbors('192.0.2.100', signal(), run), /超时/)
+  reply = { stdout: 'Interface: 192.0.2.100 --- 0xb\r\n  192.0.2.8  02-11-22-33-44-55  dynamic', exitCode: 1, timedOut: false }; await assert.rejects(readWindowsNeighbors('192.0.2.100', signal(), run), /exit code 1/i)
+  reply = { stdout: '  192.0.2.8  02-11-22-33-44-55  dynamic', exitCode: 5, timedOut: false }; await assert.rejects(readWindowsNeighbors('192.0.2.100', signal(), run), /exit code 5/i)
+  reply = { stdout: '', exitCode: null, timedOut: true }; await assert.rejects(readWindowsNeighbors('192.0.2.100', signal(), run), /Timed out/i)
 })
 
 test('真实子进程：runWindowsTool 区分正常、非零退出码、超时、找不到程序与取消', async () => {
@@ -156,7 +156,7 @@ test('Windows 集成：协议→服务→ping/TCP→ARP→结果；网关代发�
       { ip: '192.0.2.100', mac: null, openPorts: [], response: '本机', latencyMs: 1 }
     ])
     assert.equal(h.calls.filter(c => c[0] === 'PING.EXE').length, 254); assert.deepEqual(h.calls.filter(c => c[0] === 'ARP.EXE'), [['ARP.EXE', '-a', '-N', '192.0.2.100']])
-    await assert.rejects(h.service.handle({ action: 'wake', operationId: 'w', interfaceId: '以太网 2|192.0.2.100|255.255.0.0', mac }, caller, signal()), /断开/)
+    await assert.rejects(h.service.handle({ action: 'wake', operationId: 'w', interfaceId: '以太网 2|192.0.2.100|255.255.0.0', mac }, caller, signal()), /disconnected/i)
   } finally { await h.service.stop() }
 })
 
@@ -167,21 +167,21 @@ test('Windows 故障注入：ARP 失败/空表转提示（含空表非零退出�
   const request = { action: 'scan', operationId: 'scan_win', interfaceId: winIface().id, scanAddress: '192.0.2.100' }
   try {
     const result = await arpFail.service.handle(request, caller, signal()) as ScanResult
-    assert.deepEqual(result.warnings, ['MAC 地址读取失败：系统 ARP 表读取失败（退出码 5）']); assert.ok(result.devices.every(d => d.mac === null))
+    assert.deepEqual(result.warnings, ['Failed to read MAC addresses: Failed to read system ARP table (exit code 5)']); assert.ok(result.devices.every(d => d.mac === null))
   } finally { await arpFail.service.stop() }
   // 空 ARP 表：退出码 0 与非零退出（无数据行）都按空表提示，不再报“读取失败”
   for (const arp of [{ stdout: 'No ARP Entries Found.', exitCode: 0, timedOut: false }, { stdout: gbk('未找到 ARP 项。'), exitCode: 1, timedOut: false }]) {
     const empty = windowsHost({ arp, ping: reply8 })
-    try { assert.deepEqual((await empty.service.handle(request, caller, signal()) as ScanResult).warnings, ['系统未提供邻居 MAC 地址；仍可查看响应设备和端口，远程唤醒请手动输入设备 MAC']) } finally { await empty.service.stop() }
+    try { assert.deepEqual((await empty.service.handle(request, caller, signal()) as ScanResult).warnings, ['System did not provide neighbor MAC addresses; responding devices and ports are still listed, and you can enter the MAC address manually for Wake-on-LAN']) } finally { await empty.service.stop() }
   }
   const broken = windowsHost({ ping: { '192.0.2.50': { stdout: '', exitCode: 2, timedOut: false } } })
-  try { await assert.rejects(broken.service.handle(request, caller, signal()), /ping 异常退出（退出码 2）/) } finally { await broken.service.stop() }
+  try { await assert.rejects(broken.service.handle(request, caller, signal()), /ping exited abnormally \(exit code 2\)/i) } finally { await broken.service.stop() }
   // 系统 ping 全部失败（如源地址失效、General failure，退出码 1 与无回复无法区分）但有 TCP 响应：提示结果只含 TCP 设备
   const noIcmp = windowsHost()
   try {
     const result = await noIcmp.service.handle(request, caller, signal()) as ScanResult
     assert.deepEqual(result.devices.map(d => `${d.ip}|${d.response}`), ['192.0.2.9|TCP', '192.0.2.100|本机'])
-    assert.equal(result.warnings.length, 1); assert.match(result.warnings[0]!, /未收到任何 ping 回复：可能被防火墙拦截或系统 ping 失败，结果只包含 TCP 端口有响应的设备/)
+    assert.equal(result.warnings.length, 1); assert.match(result.warnings[0]!, /No ping replies were received: traffic may be blocked by a firewall or system ping failed; results only include devices with responding TCP ports/)
   } finally { await noIcmp.service.stop() }
   // 俄语系统：在线但延迟解析不到，扫描成功、latencyMs 为 null、不产生 ping 提示
   const russian = windowsHost({ ping: { '192.0.2.8': { stdout: cp866('Ответ от 192.0.2.8: число байт=32 время<1мс TTL=64'), exitCode: 0, timedOut: false } } })
@@ -194,9 +194,9 @@ test('Windows 故障注入：ARP 失败/空表转提示（含空表非零退出�
   const alone = await scanLan(winIface(), ['192.0.2.100', '192.0.2.101'], signal(), async ip => ip === '192.0.2.100' ? { latencyMs: 1 } : null, async () => { neighborCalls++; return new Map() },
     { tcp: async () => ({ open: false, responded: false, ms: 0 }) })
   assert.equal(neighborCalls, 1); assert.deepEqual(alone.devices.map(d => d.response), ['本机'])
-  assert.deepEqual(alone.warnings, ['除本机外未收到任何 ping 回复，也没有设备的 TCP 端口响应：可能网段内没有其他在线设备、被防火墙拦截或系统 ping 失败'])
+  assert.deepEqual(alone.warnings, ['No ping replies or TCP port responses were received from other hosts: there may be no other online devices on the subnet, traffic may be blocked by a firewall, or system ping failed'])
   const nothing = await scanLan(winIface(), ['192.0.2.101', '192.0.2.102'], signal(), async () => null, async () => new Map(), { tcp: async () => ({ open: false, responded: false, ms: 0 }) })
-  assert.deepEqual(nothing.devices, []); assert.equal(nothing.warnings.length, 1); assert.match(nothing.warnings[0]!, /TCP 端口响应/)
+  assert.deepEqual(nothing.devices, []); assert.equal(nothing.warnings.length, 1); assert.match(nothing.warnings[0]!, /TCP port responses/i)
   // 只扫描本机地址（/32）时不提示
   const self = await scanLan(winIface(), ['192.0.2.100'], signal(), async () => ({ latencyMs: 1 }), async () => new Map(), { tcp: async () => ({ open: false, responded: false, ms: 0 }) })
   assert.deepEqual(self.warnings, [])
@@ -211,7 +211,7 @@ test('macOS 回归：始终读取邻居表，本机行也填上邻居表里的�
   const withPeer = await scanLan(winIface(), ['192.0.2.100', '192.0.2.8'], signal(), async () => ({ latencyMs: 2 }), async () => neighbors, { tcp: async () => ({ open: false, responded: false, ms: 0 }) })
   assert.deepEqual(withPeer.devices.map(d => `${d.ip}|${d.mac}|${d.response}`), [`192.0.2.8|${mac.toUpperCase()}|ICMP`, '192.0.2.100|02:AA:AA:AA:AA:01|本机']); assert.deepEqual(withPeer.warnings, [])
   const failed = await scanLan(winIface(), ['192.0.2.100', '192.0.2.8'], signal(), async () => ({ latencyMs: 2 }), async () => { throw new Error('网络拓扑权限不足') }, { tcp: async () => ({ open: false, responded: false, ms: 0 }) })
-  assert.deepEqual(failed.warnings, ['MAC 地址读取失败：网络拓扑权限不足']); assert.ok(failed.devices.every(d => d.mac === null))
+  assert.deepEqual(failed.warnings, ['Failed to read MAC addresses: 网络拓扑权限不足']); assert.ok(failed.devices.every(d => d.mac === null))
   // 取消时不把取消误报成邻居表读取失败
   const abort = new AbortController()
   await assert.rejects(scanLan(winIface(), ['192.0.2.100'], abort.signal, async () => ({ latencyMs: 1 }), async () => { abort.abort(new Error('扫描已取消')); throw new Error('helper killed') }, { tcp: async () => ({ open: false, responded: false, ms: 0 }) }), /扫描已取消/)
@@ -220,11 +220,11 @@ test('macOS 回归：始终读取邻居表，本机行也填上邻居表里的�
 test('平台装配与唤醒：win32/darwin 选择对应实现，其他平台明确拒绝；点对点网段拒绝广播', async () => {
   assert.ok(createLanNetworkProvider('win32') instanceof WindowsLanNetworkProvider)
   assert.ok(createLanNetworkProvider('darwin') instanceof MacLanNetworkProvider)
-  assert.throws(() => createLanNetworkProvider('linux').interfaces(), /macOS 和 Windows/)
+  assert.throws(() => createLanNetworkProvider('linux').interfaces(), /macOS and Windows/i)
   const linux = new LanNetworkService('linux')
-  await assert.rejects(linux.handle({ action: 'interfaces' }, caller, signal()), /仅支持 macOS 和 Windows/)
-  assert.throws(() => wakeLan(mac, winIface({ prefix: 31, netmask: '255.255.255.254', broadcast: null }), signal()), /点对点/)
+  await assert.rejects(linux.handle({ action: 'interfaces' }, caller, signal()), /only supported on macOS and Windows/i)
+  assert.throws(() => wakeLan(mac, winIface({ prefix: 31, netmask: '255.255.255.254', broadcast: null }), signal()), /point-to-point/i)
   const p2p = winIface({ id: 'PPP|192.0.2.100|255.255.255.254', name: 'PPP', netmask: '255.255.255.254', prefix: 31, broadcast: null })
   const service = new LanNetworkService('win32', { interfaces: () => [p2p], scan: async () => ({ devices: [], warnings: [] }), wake: (m, i, s) => wakeLan(m, i, s) })
-  try { await assert.rejects(service.handle({ action: 'wake', operationId: 'w', interfaceId: p2p.id, mac }, caller, signal()), /点对点/) } finally { await service.stop() }
+  try { await assert.rejects(service.handle({ action: 'wake', operationId: 'w', interfaceId: p2p.id, mac }, caller, signal()), /point-to-point/i) } finally { await service.stop() }
 })

@@ -145,22 +145,33 @@ const DARWIN_BLACKLISTED_HOTKEYS = new Set<string>([
 ])
 
 /**
+ * 判断快捷键是否命中操作系统核心保留禁区，并返回对应的平台标识。
+ */
+export function getGlobalHotkeyBlacklistPlatform(
+  key: string,
+  platform: NodeJS.Platform = process.platform
+): 'darwin' | 'win32' | null {
+  const norm = normalizedAccelerator(key, platform)
+  if (!norm) return null
+  if (platform === 'darwin') {
+    return DARWIN_BLACKLISTED_HOTKEYS.has(norm) ? 'darwin' : null
+  }
+  return WINDOWS_BLACKLISTED_HOTKEYS.has(norm) ? 'win32' : null
+}
+
+/**
  * 校验快捷键是否属于操作系统核心保留禁区（全局注册后会破坏复制粘贴或系统关闭切换等基础交互）
  */
 export function getGlobalHotkeyBlacklistReason(
   key: string,
   platform: NodeJS.Platform = process.platform
 ): string | null {
-  const norm = normalizedAccelerator(key, platform)
-  if (!norm) return null
-  if (platform === 'darwin') {
-    if (DARWIN_BLACKLISTED_HOTKEYS.has(norm)) {
-      return `快捷键 ${key.trim()} 为 macOS 系统关键组合键，禁止注册为全局热键`
-    }
-    return null
+  const blockedPlatform = getGlobalHotkeyBlacklistPlatform(key, platform)
+  if (blockedPlatform === 'darwin') {
+    return `Shortcut ${key.trim()} is a reserved macOS system shortcut and cannot be registered globally`
   }
-  if (WINDOWS_BLACKLISTED_HOTKEYS.has(norm)) {
-    return `快捷键 ${key.trim()} 为 Windows 系统关键组合键，禁止注册为全局热键`
+  if (blockedPlatform === 'win32') {
+    return `Shortcut ${key.trim()} is a reserved Windows system shortcut and cannot be registered globally`
   }
   return null
 }

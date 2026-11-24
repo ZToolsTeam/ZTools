@@ -17,14 +17,16 @@ import { calculateCenteredBounds, calculateCursorRelativeBounds } from './displa
 import { FrameSyncManager } from '../services/frame-sync-manager.js'
 import { isShowingNativeDialog } from '../services/window-service.js'
 import { prewarmMacosApplicationCache } from '../platform/macos/file-indexer.js'
+import { t } from '../i18n/index.js'
 
 export const LAUNCHER_CALL_CHANNEL = 'ztools:launcher_call' as const
 const LAUNCHER_SIZE = { width: 750, height: 480 }
-const UNAUTHORIZED_LAUNCHER_ERROR = '无权调用悬浮条宿主接口'
 
 export interface LauncherShowOptions {
   trigger?: 'keyboard_hotkey' | 'mouse_hotkey'
   position?: 'center' | 'cursor'
+  /** 是否更新主进程记录的「最近活动窗口形态」（默认 true；独立悬浮条快捷键设为 false 避免影响主唤醒热键偏好） */
+  updateLastActiveSurface?: boolean
 }
 
 export interface LauncherPanelBridge {
@@ -86,11 +88,17 @@ export interface LauncherInputController {
 
 export function handleLauncherBeforeInputEvent(
   event: { preventDefault: () => void },
-  input: { alt?: boolean; code?: string; key?: string; type?: string },
+  input: { alt?: boolean; shift?: boolean; control?: boolean; meta?: boolean; code?: string; key?: string; type?: string },
   controller: LauncherInputController
 ): boolean {
-  // 对标 Raycast: 极客条内按下 Alt+Space 彻底阻止原生菜单并收起隐藏 (Toggle Hide)
-  if (input.alt && (input.key === ' ' || input.code === 'Space')) {
+  // 对标 Raycast: 极客条内按下纯 Alt+Space 彻底阻止原生菜单并收起隐藏 (Toggle Hide)，不误拦 Alt+Shift+Space 等其它组合键
+  if (
+    input.alt &&
+    !input.shift &&
+    !input.control &&
+    !input.meta &&
+    (input.key === ' ' || input.code === 'Space')
+  ) {
     event.preventDefault()
     if (input.type === 'keyDown') {
       controller.hide()
@@ -128,7 +136,7 @@ export function handleLauncherCall(
     if (payload !== undefined && payload !== null) {
       const rawRoute = typeof payload === 'object' ? (payload as { route?: unknown }).route : undefined
       route = normalizeDashboardRoute(rawRoute)
-      if (!route) return { success: false, error: '非法的目标页面' }
+      if (!route) return { success: false, error: t('launcher.error.invalidRoute') }
     }
     target.hide()
     target.showMainWindow()
@@ -147,7 +155,7 @@ export function handleLauncherCall(
     target.toggle()
     return { success: true }
   }
-  return { success: false, error: '未知动作' }
+  return { success: false, error: t('launcher.error.unknownAction') }
 }
 
 export class LauncherController {
@@ -193,13 +201,13 @@ export class LauncherController {
     }
     if (action === 'set_pin') {
       if (!bridge.setPin) {
-        return { handled: true, result: { success: false, error: '当前宿主不支持固定操作' } }
+        return { handled: true, result: { success: false, error: t('launcher.error.pinUnsupported') } }
       }
       return { handled: true, result: await bridge.setPin(body.entry, body.pinned, caller) }
     }
     if (action === 'reorder_pins') {
       if (!bridge.reorderPins) {
-        return { handled: true, result: { success: false, error: '当前宿主不支持排序操作' } }
+        return { handled: true, result: { success: false, error: t('launcher.error.reorderUnsupported') } }
       }
       return { handled: true, result: await bridge.reorderPins(body.order) }
     }
@@ -232,10 +240,10 @@ export class LauncherController {
     ipcMain.handle(LAUNCHER_CALL_CHANNEL, async (event, action: unknown, payload?: unknown) => {
       const caller = this.#authorizeCaller(event)
       if (!caller) {
-        return { success: false, error: UNAUTHORIZED_LAUNCHER_ERROR }
+        return { success: false, error: t('launcher.error.unauthorized') }
       }
       if (isRecord(payload) && ('attributedPlugin' in payload || 'stalePluginSession' in payload)) {
-        return { success: false, error: UNAUTHORIZED_LAUNCHER_ERROR }
+        return { success: false, error: t('launcher.error.unauthorized') }
       }
       const bridge = this.options.panelBridge
       if (bridge) {
@@ -281,7 +289,9 @@ export class LauncherController {
   }
 
   show(showOptions?: LauncherShowOptions): void {
-    this.options.onShow?.()
+    if (showOptions?.updateLastActiveSurface !== false) {
+      this.options.onShow?.()
+    }
     const window = this.#ensureWindow()
     this.#positionWindow(window, showOptions?.position)
     if (this.#frameSyncManager) {

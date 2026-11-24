@@ -14,14 +14,14 @@ export class AnchoredFileSystemService {
     const bytes = await this.grants.read(caller.webContentsId, params.grantId, params.relativePath, 16 * 1024 * 1024, signal)
     let content: string
     try { content = params.encoding === 'base64' ? bytes.toString('base64') : new TextDecoder('utf-8', { fatal: true }).decode(bytes) }
-    catch { throw new ZToolsError(errorCodes.fileError, '文件不是有效UTF-8文本；请使用二进制读取') }
+    catch { throw new ZToolsError(errorCodes.fileError, 'File is not valid UTF-8 text; use binary reading instead') }
     return { success: true as const, content, size: bytes.length }
   }
   async writeFile(value: unknown, caller: CallerIdentity, signal?: AbortSignal) {
     const params = parseReferenceWrite(value)
     const bytes = Buffer.from(params.content, params.encoding === 'base64' ? 'base64' : 'utf8')
-    if (params.encoding === 'base64' && bytes.toString('base64') !== params.content) throw new ZToolsError(errorCodes.invalidRequest, '文件二进制内容必须为规范base64')
-    if (bytes.length > 16 * 1024 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, '文件超过16MiB IPC上限')
+    if (params.encoding === 'base64' && bytes.toString('base64') !== params.content) throw new ZToolsError(errorCodes.invalidRequest, 'Binary file content must be canonical base64')
+    if (bytes.length > 16 * 1024 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, 'File exceeds 16 MiB IPC size limit')
     try {
       const result = await this.grants.saveWithReference(caller.webContentsId, params.saveGrantId, bytes, params.replace, signal)
       if (result.referenceState === 'unavailable') {
@@ -64,12 +64,12 @@ export class AnchoredFileSystemService {
   }
   async find(value: unknown, caller: CallerIdentity, directories: boolean, signal?: AbortSignal) {
     const params = parseReferenceFind(value)
-    if (signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '目录查找已取消')
+    if (signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Directory find cancelled')
     const files = await this.grants.list(caller.webContentsId, params.directoryGrantId, params.relativePath, signal)
     const matches = referenceNameMatcher(params.pattern, params.caseSensitive), result = []
     for (let index = 0; index < files.length; index++) {
       if (index % 64 === 0) await setImmediate()
-      if (signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '目录查找已取消')
+      if (signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Directory find cancelled')
       const file = files[index]!
       if (file.isDirectory === directories && matches(file.name)) result.push(file)
     }

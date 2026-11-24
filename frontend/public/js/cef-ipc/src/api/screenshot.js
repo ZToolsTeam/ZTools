@@ -1,4 +1,6 @@
+import { resolveSdkText } from '../core/environment.js'
 import { ensureRuntimeCapability } from './runtime-capability.js'
+
 
 /**
  * Screenshot API - 高层交互式截图能力
@@ -22,7 +24,7 @@ class ScreenshotAPI {
    * 标准化插件返回结果
    * @private
    */
-  _normalizeResult(result, defaultMessage = '截图失败') {
+  _normalizeResult(result, defaultMessage = resolveSdkText('截图失败', 'Screenshot failed')) {
     if (!result || typeof result !== 'object') {
       throw new Error(defaultMessage)
     }
@@ -47,14 +49,14 @@ class ScreenshotAPI {
       height: result.height || 0,
       rect: result.rect || null,
       screenCount: result.screenCount || 0,
-      message: result.message || '操作成功'
+      message: result.message || resolveSdkText('操作成功', 'Operation succeeded')
     }
   }
 
   _awaitCapture(promise, signal) {
     return new Promise((resolve, reject) => {
       const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason) }
-      if (signal.aborted) { Promise.resolve(promise).catch(() => {}); abort(); return }
+      if (signal.aborted) { Promise.resolve(promise).catch(() => undefined); abort(); return }
       signal.addEventListener('abort', abort, { once: true })
       Promise.resolve(promise).then(value => { signal.removeEventListener('abort', abort); resolve(value) }, error => { signal.removeEventListener('abort', abort); reject(error) })
     })
@@ -66,10 +68,20 @@ class ScreenshotAPI {
         signal.throwIfAborted()
         const status = await this._awaitCapture(this.dllplugin.queryTask(pluginName, taskId), signal)
         signal.throwIfAborted()
-        if (!status || typeof status !== 'object' || typeof status.completed !== 'boolean') throw new Error('截图任务状态无效')
+        if (!status || typeof status !== 'object' || typeof status.completed !== 'boolean') {
+          throw new Error(resolveSdkText('截图任务状态无效', 'Invalid screenshot task status'))
+        }
         if (status.completed) {
-          if (status.status === 'cancelled') return { success: false, cancelled: true, error: status.error || '截图已取消' }
-          if (status.status === 'error') throw new Error(status.error || '截图失败')
+          if (status.status === 'cancelled') {
+            return {
+              success: false,
+              cancelled: true,
+              error: status.error || resolveSdkText('截图已取消', 'Screenshot cancelled')
+            }
+          }
+          if (status.status === 'error') {
+            throw new Error(status.error || resolveSdkText('截图失败', 'Screenshot failed'))
+          }
           return status.data
         }
         await new Promise((resolve, reject) => {
@@ -80,7 +92,7 @@ class ScreenshotAPI {
         })
       }
     } catch (error) {
-      if (signal.aborted) void this.dllplugin.cancelTask(pluginName, taskId).catch(() => {})
+      if (signal.aborted) void this.dllplugin.cancelTask(pluginName, taskId).catch(() => undefined)
       throw error
     }
   }
@@ -111,14 +123,22 @@ class ScreenshotAPI {
   async captureRegion(options = {}) {
     const pollInterval = options.pollInterval ?? 200, timeout = options.timeout ?? 300000
     if (!Number.isInteger(pollInterval) || pollInterval < 10 || pollInterval > 5000 || !Number.isInteger(timeout) || timeout < 1 || timeout > 600000 ||
-        (options.signal !== undefined && (!options.signal || typeof options.signal.addEventListener !== 'function' || typeof options.signal.aborted !== 'boolean'))) throw new Error('截图取消/超时参数无效')
+        (options.signal !== undefined && (!options.signal || typeof options.signal.addEventListener !== 'function' || typeof options.signal.aborted !== 'boolean'))) {
+      throw new Error(resolveSdkText('截图取消/超时参数无效', 'Invalid screenshot cancellation/timeout parameters'))
+    }
     await ensureRuntimeCapability(this.sys, 'screen.capture', options)
     const controller = new AbortController()
-    const cancelError = Object.assign(new Error('截图已取消'), { name: 'AbortError', code: 'CALLER_DESTROYED' })
+    const cancelError = Object.assign(
+      new Error(resolveSdkText('截图已取消', 'Screenshot cancelled')),
+      { name: 'AbortError', code: 'CALLER_DESTROYED' }
+    )
     const abort = () => controller.abort(cancelError)
     if (options.signal?.aborted) abort()
     else options.signal?.addEventListener('abort', abort, { once: true })
-    const timer = setTimeout(() => controller.abort(Object.assign(new Error('截图等待超时'), { code: 'REQUEST_TIMEOUT' })), timeout)
+    const timer = setTimeout(
+      () => controller.abort(Object.assign(new Error(resolveSdkText('截图等待超时', 'Screenshot capture timed out')), { code: 'REQUEST_TIMEOUT' })),
+      timeout
+    )
     const pluginName = this._getPluginName()
     let taskId
     try {
@@ -129,10 +149,10 @@ class ScreenshotAPI {
         openFolder: options.openFolder === true, enableToolbar: options.enableToolbar === true,
         enablePinToScreen: options.enablePinToScreen === true, autoFinishOnSelect: options.autoFinishOnSelect === true
       })
-      void creation.then(id => { if (controller.signal.aborted) void this.dllplugin.cancelTask(pluginName, id).catch(() => {}) }, () => {})
+      void creation.then(id => { if (controller.signal.aborted) void this.dllplugin.cancelTask(pluginName, id).catch(() => undefined) }, () => undefined)
       taskId = await this._awaitCapture(creation, controller.signal)
       const result = await this._waitCaptureRegionTask(pluginName, taskId, pollInterval, controller.signal)
-      return this._normalizeResult(result, '区域截图失败')
+      return this._normalizeResult(result, resolveSdkText('区域截图失败', 'Region screenshot failed'))
     } finally {
       clearTimeout(timer)
       options.signal?.removeEventListener('abort', abort)
@@ -157,7 +177,7 @@ class ScreenshotAPI {
       screens: Array.isArray(options.screens) ? options.screens : undefined,
       openFolder: options.openFolder === true
     })
-    return this._normalizeResult(result, '全屏截图失败')
+    return this._normalizeResult(result, resolveSdkText('全屏截图失败', 'Fullscreen screenshot failed'))
   }
 
   /**
@@ -171,7 +191,7 @@ class ScreenshotAPI {
    */
   async captureWindow(options = {}) {
     if (!options.windowTitle) {
-      throw new Error('windowTitle 参数必填')
+      throw new Error(resolveSdkText('windowTitle 参数必填', 'windowTitle parameter is required'))
     }
 
     await ensureRuntimeCapability(this.sys, 'screen.capture')
@@ -183,7 +203,7 @@ class ScreenshotAPI {
       outputFormat: options.outputFormat || 'png',
       openFolder: options.openFolder === true
     })
-    return this._normalizeResult(result, '窗口截图失败')
+    return this._normalizeResult(result, resolveSdkText('窗口截图失败', 'Window screenshot failed'))
   }
 
   /**
@@ -194,7 +214,7 @@ class ScreenshotAPI {
     const pluginName = this._getPluginName()
     const result = await this.dllplugin.call(pluginName, 'GetWindowList', {})
     if (result?.success === false) {
-      throw new Error(result.error || result.message || '获取窗口列表失败')
+      throw new Error(result.error || result.message || resolveSdkText('获取窗口列表失败', 'Failed to get window list'))
     }
     return Array.isArray(result?.windows) ? result.windows : []
   }
@@ -207,7 +227,7 @@ class ScreenshotAPI {
     const pluginName = this._getPluginName()
     const result = await this.dllplugin.call(pluginName, 'GetScreenList', {})
     if (result?.success === false) {
-      throw new Error(result.error || result.message || '获取屏幕列表失败')
+      throw new Error(result.error || result.message || resolveSdkText('获取屏幕列表失败', 'Failed to get screen list'))
     }
     return Array.isArray(result?.screens) ? result.screens : []
   }

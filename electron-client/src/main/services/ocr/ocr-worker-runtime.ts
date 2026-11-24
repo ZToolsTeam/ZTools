@@ -24,7 +24,7 @@ export function workerChannel<Response>(label: string): WorkerChannel<Response> 
   if (parentPort) {
     return { send: message => parentPort.postMessage(message), onMessage: handler => parentPort.on('message', event => handler(event.data)) }
   }
-  if (!process.send) throw new Error(`${label}进程缺少通信通道`)
+  if (!process.send) throw new Error(`${label} worker is missing IPC channel`)
   return { send: message => process.send!(message), onMessage: handler => process.on('message', handler) }
 }
 

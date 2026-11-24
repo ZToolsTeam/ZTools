@@ -3,6 +3,7 @@ import { Document, Packer } from 'docx'
 import { htmlToContent } from 'docx/html'
 import { DOMParser, type Node, type Element } from '@xmldom/xmldom'
 import { validateMarkdownText, type MarkdownOptions } from '../../contracts/markdown-document.js'
+import { t } from '../i18n/index.js'
 
 const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 function safeLink(href: string): boolean {
@@ -24,9 +25,9 @@ ${o.preset === 'academic' ? 'table { border-top: 1.5pt solid black; border-botto
 function boundedTokens(tokens: Token[]) {
   let count = 0
   const visit = (items: Token[], depth: number) => {
-    if (depth > 48) throw new Error('Markdown 嵌套超过 48 层，请简化后转换')
+    if (depth > 48) throw new Error(t('markdown.error.nestingTooDeep'))
     for (const token of items) {
-      if (++count > 12000) throw new Error('Markdown 结构超过处理上限，请拆分文档')
+      if (++count > 12000) throw new Error(t('markdown.error.tooComplex'))
       if (token.type === 'list') for (const item of (token as Tokens.List).items) visit(item.tokens, depth + 1)
       else if (token.type === 'table') for (const row of [(token as Tokens.Table).header, ...(token as Tokens.Table).rows]) for (const cell of row) visit(cell.tokens, depth + 1)
       else if ('tokens' in token && Array.isArray(token.tokens)) visit(token.tokens as Token[], depth + 1)
@@ -63,25 +64,32 @@ export function renderMarkdown(markdown: string, options: MarkdownOptions) {
   validateMarkdownText(markdown)
   const warnings = new Set<string>(), engine = new Marked({ gfm: true, async: false })
   engine.use({ renderer: {
-    html({ text }) { warnings.add('原始 HTML 按文字保留，不执行其中内容'); return escape(text) },
-    image({ href, text }) { warnings.add('图片保留说明和地址，不会自动读取本机文件或下载远程图片'); return escape(`[图片：${text || '未命名'}] ${href}`) },
-    link({ href, tokens }) { const text = this.parser.parseInline(tokens); if (!safeLink(href)) { warnings.add('非 HTTP、HTTPS 或邮件链接保留为文字'); return `${text} (${escape(href)})` }; return `<a href="${escape(href)}">${text}</a>` },
+    html({ text }) { warnings.add(t('markdown.warning.rawHtmlEscaped')); return escape(text) },
+    image({ href, text }) {
+      warnings.add(t('markdown.warning.imageKeptAsText'))
+      const placeholder = t('markdown.imagePlaceholder', { alt: text || t('markdown.untitledImage') })
+      return escape(`${placeholder} ${href}`)
+    },
+    link({ href, tokens }) { const text = this.parser.parseInline(tokens); if (!safeLink(href)) { warnings.add(t('markdown.warning.unsafeLinkKeptAsText')); return `${text} (${escape(href)})` }; return `<a href="${escape(href)}">${text}</a>` },
     checkbox({ checked }) { return checked ? '[x] ' : '[ ] ' },
     br() { return '<br/>' }, hr() { return '<hr/>' }
   } })
   const tokens = engine.lexer(markdown), format = styles(options)
   boundedTokens(tokens)
   const fragment = engine.parser(tokens), text = plainText(fragment)
-  if (!text.trim()) throw new Error('Markdown 中没有可导出的正文')
+  if (!text.trim()) throw new Error(t('markdown.error.emptyContent'))
+  const defaultTitle = t('markdown.defaultTitle')
   const firstHeading = tokens.find((token): token is Tokens.Heading => token.type === 'heading')
-  const title = (firstHeading ? plainText(engine.parser([firstHeading])) : text.split('\n')[0] || 'Markdown 文档').trim().slice(0, 100) || 'Markdown 文档'
+  const title = (firstHeading ? plainText(engine.parser([firstHeading])) : text.split('\n')[0] || defaultTitle).trim().slice(0, 100) || defaultTitle
   const summary = { title, characters: text.length, blocks: tokens.filter(t => !['space', 'def'].includes(t.type)).length, warnings: [...warnings] }
   const html = `<html><head><meta charset="utf-8"/><style>${format.css}</style></head><body><!--StartFragment-->${fragment}<!--EndFragment--></body></html>`
   return { html, text, summary, async docx() {
     const conversionWarnings: string[] = []
     const children = htmlToContent(fragment, { stylesheet: format.css, onWarning: warning => conversionWarnings.push(warning.message) })
-    if (conversionWarnings.length) throw new Error(`文档转换存在未保留内容：${conversionWarnings.join('；')}`)
-    const document = new Document({ title, creator: 'ZTools', description: '由本地 Markdown 转换', styles: { default: { document: { run: { font: { ascii: 'Times New Roman', eastAsia: format.eastAsia }, size: format.size * 2 } } } }, sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } }, children }] })
+    if (conversionWarnings.length) {
+      throw new Error(t('markdown.error.conversionWarnings', { details: conversionWarnings.join(t('markdown.warningSeparator')) }))
+    }
+    const document = new Document({ title, creator: 'ZTools', description: t('markdown.documentDescription'), styles: { default: { document: { run: { font: { ascii: 'Times New Roman', eastAsia: format.eastAsia }, size: format.size * 2 } } } }, sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } }, children }] })
     return Packer.toBuffer(document)
   } }
 }

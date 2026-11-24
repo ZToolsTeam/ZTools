@@ -17,7 +17,7 @@ export function expandHomeDir(inputPath: string): string {
   return path.resolve(trimmed)
 }
 
-const PINYIN_BOUNDARY_CHARS = '阿八嚓哒妸发旮哈讥咔垃妈拿哦啪期然撒塌挖昔压匝'
+import { PINYIN_BOUNDARY_CHARS } from './file-indexer.zh-data.js'
 const PINYIN_INITIAL_LETTERS = 'abcdefghjklmnopqrstwxyz'
 const zhCollator = typeof Intl !== 'undefined' && typeof Intl.Collator === 'function'
   ? new Intl.Collator('zh-CN', { sensitivity: 'base' })
@@ -669,7 +669,7 @@ export async function scanDirectoryForSearch(
 
   if (!fs.existsSync(resolvedRoot)) {
     if (filesMap.size === 0 && subdirMap.size === 0) {
-      throw new Error(`目录不存在或无法访问: ${resolvedRoot}`)
+      throw new Error(`Directory does not exist or is inaccessible: ${resolvedRoot}`)
     }
     const fallbackMatched = Array.from(filesMap.values()).slice(0, safeLimit)
     const fallbackSubdirs = Array.from(subdirMap.values()).map(({ topFiles: _tf, ...rest }) => rest)
@@ -731,7 +731,7 @@ export async function scanDirectoryForSearch(
       entries = await fs.promises.readdir(current.dirPath, { withFileTypes: true })
     } catch (err) {
       if (!current.topSubdir && filesMap.size === 0 && subdirMap.size === 0) {
-        throw new Error(`无法读取目录 ${resolvedRoot}: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
+        throw new Error(`Failed to read directory ${resolvedRoot}: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
       }
       recordScanFailure(current.dirPath, current.topSubdir, err)
       continue
@@ -910,7 +910,7 @@ export async function scanDirectoryForSearch(
     total_indexed: totalBytes,
     truncated,
     approximate,
-    ...(scanErrors.length ? { scan_error: `部分路径读取失败：${scanErrors.join('；')}` } : {}),
+    ...(scanErrors.length ? { scan_error: `Failed to read some paths: ${scanErrors.join('; ')}` } : {}),
     visited_entries: visitedCount,
     max_entries: entryCap,
     source: 'macos-fs'

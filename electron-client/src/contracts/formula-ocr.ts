@@ -30,6 +30,6 @@ export function validateFormulaOcrRequest(value: unknown): asserts value is Form
       (input.action === 'recognizeImage' && !validImagePath(input.path)) ||
       (input.restoreWindow !== undefined && typeof input.restoreWindow !== 'boolean') ||
       (input.includePreview !== undefined && typeof input.includePreview !== 'boolean')) {
-    throw new ZToolsError(errorCodes.invalidRequest, '公式识别请求无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid formula OCR request')
   }
 }

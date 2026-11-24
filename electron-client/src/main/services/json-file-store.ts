@@ -58,7 +58,7 @@ export class JsonFileStore {
 
   #filePath(fileName: string): string {
     if (!this.allowedFiles.has(fileName)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '配置文件不在允许列表')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Configuration file is not in the allowlist')
     }
     return path.join(this.root, fileName)
   }
@@ -84,7 +84,7 @@ export class JsonFileStore {
       try {
         const info = await handle.stat()
         if (info.size > MAX_DOCUMENT_BYTES) {
-          throw new ZToolsError(errorCodes.dataCorrupt, '配置文件超过大小上限')
+          throw new ZToolsError(errorCodes.dataCorrupt, 'Configuration file exceeds size limit')
         }
         source = await handle.readFile('utf8')
       } finally {
@@ -94,16 +94,16 @@ export class JsonFileStore {
       if (normalizedSource.trim() === '') return {}
       const value: unknown = JSON.parse(normalizedSource)
       if (!isRecord(value)) {
-        throw new ZToolsError(errorCodes.dataCorrupt, '配置文件根节点必须是对象')
+        throw new ZToolsError(errorCodes.dataCorrupt, 'Configuration file root must be a JSON object')
       }
       return value
     } catch (error) {
       if (error instanceof ZToolsError) throw error
       if (errorCode(error) === 'ENOENT') return {}
       if (error instanceof SyntaxError) {
-        throw new ZToolsError(errorCodes.dataCorrupt, '配置文件 JSON 已损坏')
+        throw new ZToolsError(errorCodes.dataCorrupt, 'Configuration file JSON is corrupted')
       }
-      throw new ZToolsError(errorCodes.storageError, '读取配置文件失败')
+      throw new ZToolsError(errorCodes.storageError, 'Failed to read configuration file')
     }
   }
 
@@ -117,13 +117,13 @@ export class JsonFileStore {
       await fs.mkdir(this.root, { recursive: true })
       const encoded = `\uFEFF${JSON.stringify(document, null, 2)}\n`
       if (Buffer.byteLength(encoded, 'utf8') > MAX_DOCUMENT_BYTES) {
-        throw new ZToolsError(errorCodes.storageError, '配置文件超过大小上限')
+        throw new ZToolsError(errorCodes.storageError, 'Configuration file exceeds size limit')
       }
       await fs.writeFile(temporaryPath, encoded, { encoding: 'utf8', flag: 'wx' })
       await renameWithRetry(temporaryPath, filePath)
     } catch (error) {
       if (error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.storageError, '保存配置文件失败')
+      throw new ZToolsError(errorCodes.storageError, 'Failed to save configuration file')
     }
   }
 }

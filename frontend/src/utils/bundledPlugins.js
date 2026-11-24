@@ -7,7 +7,11 @@
  */
 // 清单在构建时打包进代码，读取插件列表不依赖网络请求，不会因为读取失败导致主页或插件市场为空
 import bundledConfig from '../config/bundledPlugins.generated.js'
-import { normalizeCategoryNames } from './pluginCategories'
+import { DEFAULT_CATEGORY_ID, getPluginCategoryIds, normalizeCategoryNames } from './pluginCategories'
+import { stripI18nScreenshots } from './pluginScreenshots'
+
+/** 官方插件徽章语义标识（UI 展示统一经 i18n 渲染，避免硬编码中文「官方」） */
+export const OFFICIAL_BADGE_CODE = 'official'
 
 export const BUNDLED_PLUGIN_IDS = Object.freeze([...bundledConfig.ids])
 const BUNDLED_ID_SET = new Set(BUNDLED_PLUGIN_IDS)
@@ -103,7 +107,10 @@ const STORE_OFFICIAL_META_MAP = new Map(
           category: normalizePluginCategory(p.category),
           ...(p.categoryId ? { categoryId: p.categoryId } : {}),
           ...(p.defaultLocale ? { defaultLocale: p.defaultLocale } : {}),
-          ...(p.i18n && typeof p.i18n === 'object' ? { i18n: p.i18n } : {})
+          ...(p.i18n && typeof p.i18n === 'object' ? (() => {
+            const sanitized = stripI18nScreenshots(p.i18n)
+            return sanitized ? { i18n: sanitized } : {}
+          })() : {})
         })
       ]
     })
@@ -122,12 +129,33 @@ export function getStoreOfficialPluginMeta(value) {
 }
 
 /**
+ * 兼容纯 Node ESM 环境（无 Vite 别名与 vue-i18n）的内置插件报错翻译器：
+ * 在前端渲染进程与 Vitest 环境中优先走公开 locales 词典，无宿主翻译器时回退英文模板（DEFAULT_LOCALE = 'en-US'）。
+ */
+function translateBundledError(key, params, fallbackEn) {
+  if (typeof globalThis !== 'undefined' && typeof globalThis.__ztoolsTranslate === 'function') {
+    const resolved = globalThis.__ztoolsTranslate(key, params)
+    if (typeof resolved === 'string' && resolved && resolved !== key) {
+      return resolved
+    }
+  }
+  return fallbackEn.replace(/\{([a-zA-Z0-9_]+)\}/g, (_, k) => String(params?.[k] ?? ''))
+}
+
+/**
  * 读取内置插件的文件，供 loadInstalledDeclarativePlugin 的 options.readFile 使用
  */
 export async function readBundledPluginFile(pluginId, relPath) {
   const id = normalizeId(pluginId)
   if (!BUNDLED_ID_SET.has(id)) {
-    const err = new Error(`不是内置插件: ${pluginId}`)
+    const safePluginId = String(pluginId ?? '')
+    const err = new Error(
+      translateBundledError(
+        'bundledPlugins.errors.notBundled',
+        { pluginId: safePluginId },
+        'Not a bundled plugin: {pluginId}'
+      )
+    )
     err.code = 'PLUGIN_RESOURCE_NOT_FOUND'
     throw err
   }
@@ -135,14 +163,27 @@ export async function readBundledPluginFile(pluginId, relPath) {
   // 只接受插件目录内的相对路径：拒绝绝对路径、反斜杠、盘符/协议、空段与 ..
   const clean = raw
   if (!clean || /^[\/\\]/.test(clean) || /[\\:]/.test(clean) || clean.split('/').some((seg) => seg === '..' || seg === '.' || seg === '')) {
-    const err = new Error(`非法的插件资源路径: ${relPath}`)
+    const safePath = String(relPath ?? '')
+    const err = new Error(
+      translateBundledError(
+        'bundledPlugins.errors.invalidResourcePath',
+        { path: safePath },
+        'Invalid plugin resource path: {path}'
+      )
+    )
     err.code = 'PATH_TRAVERSAL_BLOCKED'
     throw err
   }
   const url = `${baseUrl()}${encodeURIComponent(id)}/${clean.split('/').map(encodeURIComponent).join('/')}`
   const response = await fetch(url)
   if (!response.ok) {
-    const err = new Error(`无法加载内置插件资源 [${id}/${clean}]: HTTP ${response.status}`)
+    const err = new Error(
+      translateBundledError(
+        'bundledPlugins.errors.loadResourceFailed',
+        { pluginId: id, path: clean, status: response.status },
+        'Failed to load bundled plugin resource [{pluginId}/{path}]: HTTP {status}'
+      )
+    )
     err.status = response.status
     err.code = 'PLUGIN_RESOURCE_NOT_FOUND'
     throw err
@@ -157,26 +198,59 @@ export function getBundledPluginIconUrl(pluginId, iconRel = 'icon.svg') {
 
 /** 内置插件截图：同步脚本只复制 plugin.json 声明过的 screenshots/ 下的 PNG，这里再按同一格式过滤一次 */
 const BUNDLED_SCREENSHOT_PATH = /^screenshots\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.png$/
+const FORBIDDEN_I18N_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
-/**
- * 内置插件截图地址（指向随客户端分发的本地副本 bundled-plugins/<id>/screenshots/…）；没有截图时为空数组，不回退到网络
- * @returns {Array<{ url: string, title: string, width?: number, height?: number }>}
- */
-export function getBundledPluginScreenshots(p) {
-  const list = Array.isArray(p?.screenshots) ? p.screenshots : []
+function normalizeBundledScreenshotList(pluginId, rawList, pathField) {
+  const list = Array.isArray(rawList) ? rawList : []
   return list
-    .filter((shot) => shot && typeof shot.path === 'string' && BUNDLED_SCREENSHOT_PATH.test(shot.path))
+    .filter((shot) => shot && typeof shot === 'object' && typeof shot[pathField] === 'string' && BUNDLED_SCREENSHOT_PATH.test(shot[pathField]))
     .slice(0, 5)
     .map((shot) => ({
-      url: getBundledPluginIconUrl(p.id, shot.path),
+      url: getBundledPluginIconUrl(pluginId, shot[pathField]),
       title: typeof shot.title === 'string' ? shot.title : '',
       width: Number.isSafeInteger(shot.width) && shot.width > 0 ? shot.width : undefined,
       height: Number.isSafeInteger(shot.height) && shot.height > 0 ? shot.height : undefined
     }))
 }
 
+/**
+ * 内置插件截图地址（指向随客户端分发的本地副本 bundled-plugins/<id>/screenshots/…）；没有截图时为空数组，不回退到网络
+ * @returns {Array<{ url: string, title: string, width?: number, height?: number }>}
+ */
+export function getBundledPluginScreenshots(p) {
+  return normalizeBundledScreenshotList(p?.id, p?.screenshots, 'path')
+}
+
+/**
+ * 归一化内置插件的 i18n 元数据：将各语种的 `screenshots[].file` 转为与顶层 screenshots 同规范的本地静态资源 URL，
+ * 过滤非法路径与空项，防止未解析相对路径泄漏至渲染层。
+ * @param {object} p
+ * @returns {object | undefined}
+ */
+export function normalizeBundledPluginI18n(p) {
+  if (!p?.i18n || typeof p.i18n !== 'object' || Array.isArray(p.i18n)) return undefined
+  const out = {}
+  let hasAny = false
+  for (const [loc, entry] of Object.entries(p.i18n)) {
+    if (FORBIDDEN_I18N_KEYS.has(loc) || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+    hasAny = true
+    const nextEntry = { ...entry }
+    if (Object.hasOwn(entry, 'screenshots')) {
+      const normalizedShots = normalizeBundledScreenshotList(p.id, entry.screenshots, 'file')
+      if (normalizedShots.length > 0) {
+        nextEntry.screenshots = normalizedShots
+      } else {
+        delete nextEntry.screenshots
+      }
+    }
+    out[loc] = nextEntry
+  }
+  return hasAny ? out : undefined
+}
+
 function toEntry(p) {
   const icon = getBundledPluginIconUrl(p.id, p.icon || 'icon.svg')
+  const normalizedI18n = normalizeBundledPluginI18n(p)
   return {
     id: p.id,
     pluginId: p.id,
@@ -186,10 +260,10 @@ function toEntry(p) {
     version: p.version || '1.0.0',
     author: p.author || 'ZTools Team',
     // 页面按单一标准分类字符串展示，避免多分类用斜杠拼接成超长分类名
-    category: normalizePluginCategory(p.category, '其他工具'),
-    ...(p.categoryId ? { categoryId: p.categoryId } : {}),
+    category: normalizePluginCategory(p.category, DEFAULT_CATEGORY_ID),
+    categoryId: p.categoryId || getPluginCategoryIds(p.category),
     ...(p.defaultLocale ? { defaultLocale: p.defaultLocale } : {}),
-    ...(p.i18n && typeof p.i18n === 'object' ? { i18n: p.i18n } : {}),
+    ...(normalizedI18n ? { i18n: normalizedI18n } : {}),
     keywords: Array.isArray(p.keywords) ? p.keywords : [],
     alias: typeof p.alias === 'string' ? p.alias : '',
     features: Array.isArray(p.features) ? p.features : [],
@@ -209,8 +283,8 @@ function toEntry(p) {
     enabled: true,
     is_official: true,
     isOfficial: true,
-    official_badge: '官方',
-    officialBadge: '官方'
+    official_badge: OFFICIAL_BADGE_CODE,
+    officialBadge: OFFICIAL_BADGE_CODE
   }
 }
 

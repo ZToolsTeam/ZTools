@@ -2,7 +2,8 @@ import { List, ActionPanel, Action, Icon, showToast, Toast, Clipboard, useState,
 import { parseTimeInput } from "./logic.js";
 import { t } from "./i18n.js";
 import WorldClockCommand from "./world-clock.js";
-export { default as tzWorld } from "./world-clock.js";
+import { resolveErrorMessage } from './error-i18n.js';
+export { default as tzWorld, detectLocalTimeZone, getDayDiff, formatDayDiffLabel, searchWorldZones } from "./world-clock.js";
 export default function TimestampCommand() {
     useLocale();
     const { push } = useNavigation();
@@ -140,7 +141,7 @@ export default function TimestampCommand() {
             : List.Section({ title: t("sectionError") }, [
                 List.Item({
                     id: "item-error",
-                    title: parsed.error || t("parseErrorFallback"),
+                    title: resolveErrorMessage(parsed, t("parseErrorFallback")),
                     subtitle: searchText,
                     icon: Icon.ExclamationMark,
                     accessories: [{ text: t("formatErrorAcc") }],

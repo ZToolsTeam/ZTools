@@ -1,14 +1,15 @@
 import path from 'node:path'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
 import type { PathGrantRef } from '../../contracts/path-reference.js'
-import { errorCodes, toPublicError, ZToolsError } from '../../contracts/errors.js'
+import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import { toLocalizedPublicError } from '../ipc/error-localizer.js'
 import type { FileClipboardAdapter } from './clipboard-service.js'
 import type { PathGrantService } from './path-grant-service.js'
 import type { EventService } from './event-service.js'
 
 type ClipboardRef = PathGrantRef & { fileUrl?: string }
 type ClipboardGrants = Pick<PathGrantService, 'createSelected' | 'revoke' | 'resourceUrl'>
-const failed = () => new ZToolsError(errorCodes.clipboardError, '文件剪贴板引用获取未完成')
+const failed = () => new ZToolsError(errorCodes.clipboardError, 'Clipboard file reference acquisition did not complete')
 
 /** OS clipboard supplies selection names; classify and authorize each exact object in one native open. */
 export class ReferenceClipboardFilesService {
@@ -89,7 +90,7 @@ export class ReferenceClipboardFilesService {
             catch { throw failed() }
           }
           if (signal.aborted) throw failed()
-          errors.push({ index, ...toPublicError(error instanceof ZToolsError ? error : failed()) })
+          errors.push({ index, ...toLocalizedPublicError(error instanceof ZToolsError ? error : failed()) })
         }
       }
       if (signal.aborted) throw failed()

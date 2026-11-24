@@ -924,7 +924,7 @@ test('rejects targetless macOS installs instead of inferring compatibility', asy
 
   assert.equal(await fs.access(path.join(root, 'Plugins', 'plugin.test')).then(() => true, () => false), false)
   assert.equal(events.at(-1)?.payload.errorCode, errorCodes.notSupported)
-  assert.match(String(events.at(-1)?.payload.error), /未声明 targets/)
+  assert.match(String(events.at(-1)?.payload.error), /does not declare targets/)
 })
 
 test('enforces the host SDK contract version before install and plugin open', async (context) => {
@@ -965,7 +965,7 @@ test('enforces the host SDK contract version before install and plugin open', as
   await service.waitForIdle()
   assert.equal(await fs.access(path.join(root, 'Plugins', 'plugin.test')).then(() => true, () => false), false)
   assert.equal(events.at(-1)?.payload.errorCode, errorCodes.notSupported)
-  assert.match(String(events.at(-1)?.payload.error), /要求 SDK 契约版本 2/)
+  assert.match(String(events.at(-1)?.payload.error), /requires SDK contract version 2/)
 
   body = compatibleV1
   await service.startInstall(installParams(compatibleV1, '1.0.0'), false)
@@ -992,7 +992,7 @@ test('enforces the host SDK contract version before install and plugin open', as
       openActionCalled = true
       return manifest
     }),
-    (error: any) => error?.code === errorCodes.notSupported && /要求 SDK 契约版本 2/.test(error.message)
+    (error: any) => error?.code === errorCodes.notSupported && /requires SDK contract version 2/.test(error.message)
   )
   assert.equal(openActionCalled, false, 'an incompatible manifest must be rejected before the open action')
 })
@@ -1030,7 +1030,7 @@ test('rejects an incompatible update before switching the installed plugin direc
   const installedManifest = JSON.parse(await fs.readFile(path.join(root, 'Plugins', 'plugin.test', 'plugin.json'), 'utf8'))
   assert.equal(installedManifest.version, '1.0.0')
   assert.equal(events.at(-1)?.payload.errorCode, errorCodes.notSupported)
-  assert.match(String(events.at(-1)?.payload.error), /未声明适用于 macos Electron arm64/)
+  assert.match(String(events.at(-1)?.payload.error), /does not declare a runtime target for macos Electron arm64/)
 })
 
 test('rejects a Windows SDK v2 update and preserves the complete installed SDK v1 tree', async (context) => {
@@ -1083,7 +1083,7 @@ test('rejects a Windows SDK v2 update and preserves the complete installed SDK v
   assert.equal(terminal?.payload.success, false)
   assert.equal(terminal?.payload.isUpdate, true)
   assert.equal(terminal?.payload.errorCode, errorCodes.notSupported)
-  assert.match(String(terminal?.payload.error), /要求 SDK 契约版本 2，当前宿主版本为 1/)
+  assert.match(String(terminal?.payload.error), /requires SDK contract version 2, but current host version is 1/)
   assert.equal('version' in (terminal?.payload ?? {}), false, 'failed terminal events do not expose a version')
 
   const after = await pluginTreeSnapshot(pluginDirectory)
@@ -1132,7 +1132,7 @@ test('requires an attached reference runtime for SDK v2 admission while SDK v1 r
   assert.equal(rejectedTerminal?.payload.success, false)
   assert.equal(rejectedTerminal?.payload.isUpdate, true)
   assert.equal(rejectedTerminal?.payload.errorCode, errorCodes.notSupported)
-  assert.match(String(rejectedTerminal?.payload.error), /引用文件运行时已就绪/)
+  assert.match(String(rejectedTerminal?.payload.error), /reference file runtime to be ready/)
   assert.deepEqual(await pluginTreeSnapshot(pluginDirectory), beforeRejectedUpdate,
     'an unavailable runtime must leave the complete installed SDK v1 tree unchanged')
 
@@ -1149,7 +1149,7 @@ test('requires an attached reference runtime for SDK v2 admission while SDK v1 r
   await assert.rejects(
     service.withPluginManifest('plugin.test', async () => undefined),
     (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.notSupported &&
-      /引用文件运行时已就绪/.test(error.message),
+      /reference file runtime to be ready/.test(error.message),
     'an installed SDK v2 package must not open after the Main readiness provider turns false'
   )
 })
@@ -1181,7 +1181,7 @@ test('defaults SDK v2 runtime readiness to false for install and open admission'
     event.payload.operationId === rejectedInstall.operationId)
   assert.equal(rejectedTerminal?.payload.success, false)
   assert.equal(rejectedTerminal?.payload.errorCode, errorCodes.notSupported)
-  assert.match(String(rejectedTerminal?.payload.error), /引用文件运行时已就绪/)
+  assert.match(String(rejectedTerminal?.payload.error), /reference file runtime to be ready/)
   assert.equal(await fs.access(path.join(root, 'Plugins', 'plugin.test')).then(() => true, () => false), false)
 
   await unavailableService.stop()
@@ -1208,7 +1208,7 @@ test('defaults SDK v2 runtime readiness to false for install and open admission'
   await assert.rejects(
     reopenService.withPluginManifest('plugin.test', async () => undefined),
     (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.notSupported &&
-      /引用文件运行时已就绪/.test(error.message),
+      /reference file runtime to be ready/.test(error.message),
     'omitting the Main readiness provider must fail closed for an installed SDK v2 package'
   )
   assert.deepEqual(await pluginTreeSnapshot(pluginDirectory), installedTree,
@@ -1302,7 +1302,7 @@ test('rejects a selected native component with no real file before install commi
 
   assert.equal(await fs.access(path.join(root, 'Plugins', 'plugin.test')).then(() => true, () => false), false)
   assert.equal(events.at(-1)?.payload.errorCode, errorCodes.pluginPackageInvalid)
-  assert.match(String(events.at(-1)?.payload.error), /native component 文件不存在/)
+  assert.match(String(events.at(-1)?.payload.error), /Native component file .*does not exist/i)
 })
 
 test('withPluginManifest rejects a pre-existing targetless directory on macOS', async (context) => {
@@ -1327,7 +1327,7 @@ test('withPluginManifest rejects a pre-existing targetless directory on macOS', 
     service.withPluginManifest('plugin.test', async () => {
       actionCalled = true
     }),
-    (error: any) => error?.code === errorCodes.notSupported && /未声明 targets/.test(error.message)
+    (error: any) => error?.code === errorCodes.notSupported && /does not declare targets/.test(error.message)
   )
   assert.equal(actionCalled, false)
 })
@@ -1621,4 +1621,42 @@ test('plugin download and metadata requests include standard User-Agent with pla
   await macRosettaService.waitForIdle()
   assert.equal(headersList.length, 1)
   assert.equal(headersList[0]?.userAgent, 'ZTools-Electron/1.1.9.0 (macos; arm64)')
+})
+
+test('list() normalizes legacy Chinese category labels to canonical categoryId slugs while preferring explicit categoryId', async (context) => {
+  const root = runtimeRoot('plugin-category-id-normalization')
+  const pluginsDir = path.join(root, 'Plugins')
+  await fs.mkdir(path.join(pluginsDir, 'legacy.cat'), { recursive: true })
+  await fs.mkdir(path.join(pluginsDir, 'explicit.cat'), { recursive: true })
+  await fs.writeFile(path.join(pluginsDir, 'legacy.cat', 'index.html'), '<h1>legacy</h1>', 'utf8')
+  await fs.writeFile(path.join(pluginsDir, 'explicit.cat', 'index.html'), '<h1>explicit</h1>', 'utf8')
+  await fs.writeFile(path.join(pluginsDir, 'legacy.cat', 'plugin.json'), JSON.stringify({
+    id: 'legacy.cat',
+    name: 'Legacy Cat',
+    version: '1.0.0',
+    entry: 'index.html',
+    category: ['系统工具', '文件管理']
+  }), 'utf8')
+  await fs.writeFile(path.join(pluginsDir, 'explicit.cat', 'plugin.json'), JSON.stringify({
+    id: 'explicit.cat',
+    name: 'Explicit Cat',
+    version: '1.0.0',
+    entry: 'index.html',
+    categoryId: 'developer',
+    category: '办公效率'
+  }), 'utf8')
+
+  const service = new PluginInstallService(root, createPublisher([]), {
+    runtimeTarget: windowsX64Electron
+  })
+  context.after(async () => {
+    await service.stop()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  const listed = await service.list()
+  const legacyItem = listed.data.find((item) => item.id === 'legacy.cat')
+  const explicitItem = listed.data.find((item) => item.id === 'explicit.cat')
+  assert.deepEqual(legacyItem?.categoryId, ['system', 'files'])
+  assert.equal(explicitItem?.categoryId, 'developer')
 })

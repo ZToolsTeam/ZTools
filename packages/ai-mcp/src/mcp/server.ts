@@ -19,6 +19,7 @@ import {
 } from './protocol.js';
 import { McpToolRegistry } from './registry.js';
 import { McpTransport } from './transport/transport.js';
+import { tAiMcp } from '../i18n.js';
 
 export interface McpServerOptions {
   name?: string;
@@ -86,16 +87,17 @@ export class McpServer {
       if (this.transport && this.transport.isConnected) {
         await this.transport.send(response);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (this.transport && this.transport.isConnected) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         await this.transport.send(
-          createJsonRpcError(req.id, McpErrorCode.InternalError, err.message || String(err))
+          createJsonRpcError(req.id, McpErrorCode.InternalError, errMsg)
         );
       }
     }
   }
 
-  private async dispatchRequest(req: JsonRpcRequest): Promise<any> {
+  private async dispatchRequest(req: JsonRpcRequest): Promise<JsonRpcMessage> {
     switch (req.method) {
       case 'initialize': {
         const params = req.params as McpInitializeParams;
@@ -119,12 +121,12 @@ export class McpServer {
       case 'tools/call': {
         const { name, arguments: args } = req.params || {};
         if (!name || typeof name !== 'string') {
-          return createJsonRpcError(req.id, McpErrorCode.InvalidParams, 'Tool name is required in params');
+          return createJsonRpcError(req.id, McpErrorCode.InvalidParams, tAiMcp('mcp.server.toolNameRequired'));
         }
 
         const tool = this.registry.getTool(name);
         if (!tool) {
-          return createJsonRpcError(req.id, McpErrorCode.MethodNotFound, `Tool "${name}" not found on server`);
+          return createJsonRpcError(req.id, McpErrorCode.MethodNotFound, tAiMcp('mcp.server.toolNotFound', { name }));
         }
 
         const result = await this.registry.executeTool(name, args || {});
@@ -135,7 +137,7 @@ export class McpServer {
         return createJsonRpcError(
           req.id,
           McpErrorCode.MethodNotFound,
-          `Method "${req.method}" is not supported`
+          tAiMcp('mcp.server.methodNotSupported', { method: req.method })
         );
       }
     }

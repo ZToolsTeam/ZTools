@@ -15,6 +15,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { shell } from 'electron'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import { getResolvedLocale } from '../i18n/index.js'
+
+function _screenshotText(zh: string, en: string): string {
+  return getResolvedLocale() === 'zh-CN' ? zh : en
+}
 
 export interface ScreenshotRecord {
   readonly id: string
@@ -59,14 +64,23 @@ export interface ScreenshotScanReport {
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.webp', '.heic', '.tiff'])
 const MACOS_DESKTOP_SCREENSHOT_NAME_RE = /^(screen\s*shot|screenshot|截屏|屏幕截图|cleanshot|ishot|xnip|snipaste)/i
 
-function screenshotReadError(error: unknown, target: string, kind: '目录' | '文件'): ZToolsError {
+function screenshotReadError(error: unknown, target: string, kind: 'directory' | 'file'): ZToolsError {
   if (error instanceof ZToolsError) return error
   const hostCode = (error as NodeJS.ErrnoException)?.code
   const denied = hostCode === 'EACCES' || hostCode === 'EPERM'
-  const reason = denied ? '没有访问权限' : hostCode === 'ENOTDIR' ? '路径不是文件夹' : '读取失败，请重试'
+  const kindZh = kind === 'directory' ? _screenshotText('目录', 'directory') : _screenshotText('文件', 'file')
+  const reason = denied
+    ? _screenshotText('没有访问权限', 'permission denied')
+    : hostCode === 'ENOTDIR'
+      ? _screenshotText('路径不是文件夹', 'path is not a directory')
+      : _screenshotText('读取失败，请重试', 'read failed, please retry')
+  const name = path.basename(target)
   return new ZToolsError(
     denied ? errorCodes.permissionDenied : errorCodes.fileError,
-    `无法读取截图${kind}“${path.basename(target)}”：${reason}`,
+    _screenshotText(
+      `无法读取截图${kindZh}“${name}”：${reason}`,
+      `Failed to read screenshot ${kind} "${name}": ${reason}`
+    ),
     { ...(hostCode ? { hostCode } : {}), path: target }
   )
 }
@@ -239,7 +253,7 @@ export class ScreenshotsService {
         // 扫描期间被移走的文件可以跳过；其余读取失败记到所在目录的失败原因里，不能冒充不存在，也不拖垮其它目录。
         if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return
         const dir = path.dirname(fullPath)
-        recordFailure(screenshotReadError(error, dir, '目录'), dir)
+        recordFailure(screenshotReadError(error, dir, 'directory'), dir)
       }
     }
 
@@ -264,7 +278,7 @@ export class ScreenshotsService {
         // 尚未创建或已移除的可选目录不含截图；其余失败（无权限、不是文件夹等）跳过该目录并记下原因交给界面显示。
         if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
           unreadableDirs += 1
-          recordFailure(screenshotReadError(error, dir, '目录'), dir)
+          recordFailure(screenshotReadError(error, dir, 'directory'), dir)
         }
       }
     }
@@ -300,7 +314,12 @@ export class ScreenshotsService {
       const allDenied = failures.every((failure) => failure.code === errorCodes.permissionDenied)
       throw new ZToolsError(
         allDenied ? errorCodes.permissionDenied : errorCodes.fileError,
-        failures.length === 1 ? failures[0]!.message : `所有截图目录都无法读取：${failures.map((failure) => failure.message).join('；')}`
+        failures.length === 1
+          ? failures[0]!.message
+          : _screenshotText(
+              `所有截图目录都无法读取：${failures.map((failure) => failure.message).join('；')}`,
+              `Failed to read all screenshot directories: ${failures.map((failure) => failure.message).join('; ')}`
+            )
       )
     }
 
@@ -359,7 +378,7 @@ export class ScreenshotsService {
    */
   public async resolveScannedScreenshot(filePath: unknown): Promise<ScreenshotRecord> {
     if (typeof filePath !== 'string' || !filePath || filePath.includes('\0') || !path.isAbsolute(filePath)) {
-      throw new ZToolsError(errorCodes.invalidRequest, '截图路径无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid screenshot path')
     }
     const candidates = new Set<string>([path.resolve(filePath)])
     try {
@@ -371,17 +390,17 @@ export class ScreenshotsService {
       records.find((item) => candidates.has(path.resolve(item.path)))
     const target = find(this.cache) ?? find(this.scanScreenshots(true))
     if (!target) {
-      throw new ZToolsError(errorCodes.permissionDenied, '只能操作截图列表中的文件')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Only files from the scanned screenshots list can be accessed')
     }
     let isRegularFile = false
     try {
       isRegularFile = (await fs.promises.lstat(target.path)).isFile()
     } catch {
       this.cache = this.cache.filter((item) => item.path !== target.path)
-      throw new ZToolsError(errorCodes.fileError, `文件不存在: ${target.path}`)
+      throw new ZToolsError(errorCodes.fileError, `File does not exist: ${target.path}`)
     }
     if (!isRegularFile) {
-      throw new ZToolsError(errorCodes.permissionDenied, '只能操作截图列表中的普通文件')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Only regular files from the scanned screenshots list can be accessed')
     }
     return target
   }
@@ -418,10 +437,17 @@ export class ScreenshotsService {
    */
   public async deleteScreenshot(filePath: string): Promise<boolean> {
     if (!filePath || !fs.existsSync(filePath)) {
-      throw new ZToolsError(errorCodes.fileError, `截图文件不存在：${filePath ? path.basename(filePath) : '（空路径）'}`, { path: filePath })
+      const displayTarget = filePath ? path.basename(filePath) : _screenshotText('（空路径）', '(empty path)')
+      throw new ZToolsError(
+        errorCodes.fileError,
+        _screenshotText(`截图文件不存在：${displayTarget}`, `Screenshot file does not exist: ${displayTarget}`),
+        { path: filePath }
+      )
     }
     const name = path.basename(filePath)
-    const trashName = process.platform === 'darwin' ? '废纸篓' : '回收站'
+    const trashName = process.platform === 'darwin'
+      ? _screenshotText('废纸篓', 'Trash')
+      : _screenshotText('回收站', 'Recycle Bin')
     const trash = this.trashItemImpl
       ?? (shell && typeof shell.trashItem === 'function' ? (target: string) => shell.trashItem(target) : undefined)
 
@@ -435,10 +461,16 @@ export class ScreenshotsService {
       const hostCode = (err as NodeJS.ErrnoException)?.code
       const denied = hostCode === 'EACCES' || hostCode === 'EPERM'
       const detail = err instanceof Error && err.message ? err.message : String(err)
-      const reason = denied ? '没有访问权限' : hostCode === 'EBUSY' ? '文件正被其它程序占用' : detail
+      const reason = denied
+        ? _screenshotText('没有访问权限', 'permission denied')
+        : hostCode === 'EBUSY'
+          ? _screenshotText('文件正被其它程序占用', 'file is in use by another process')
+          : detail
       throw new ZToolsError(
         denied ? errorCodes.permissionDenied : errorCodes.fileError,
-        trash ? `无法将截图“${name}”移到${trashName}：${reason}` : `无法删除截图“${name}”：${reason}`,
+        trash
+          ? _screenshotText(`无法将截图“${name}”移到${trashName}：${reason}`, `Failed to move screenshot "${name}" to ${trashName}: ${reason}`)
+          : _screenshotText(`无法删除截图“${name}”：${reason}`, `Failed to delete screenshot "${name}": ${reason}`),
         { path: filePath, ...(typeof hostCode === 'string' ? { hostCode } : {}) }
       )
     }
@@ -457,24 +489,34 @@ export class ScreenshotsService {
   ): Promise<PasteLatestResult> {
     const latest = this.getLatestScreenshot()
     if (!latest) {
-      return { success: false, code: 'NO_SCREENSHOTS', message: '未找到近期截图' }
+      return {
+        success: false,
+        code: 'NO_SCREENSHOTS',
+        message: _screenshotText('未找到近期截图', 'No recent screenshots found')
+      }
     }
 
     if (!pasteCallback) {
-      return { success: false, code: errorCodes.notSupported, screenshot: latest, message: '当前环境不支持回贴截图' }
+      return {
+        success: false,
+        code: errorCodes.notSupported,
+        screenshot: latest,
+        message: _screenshotText('当前环境不支持回贴截图', 'Pasting screenshots is not supported in this environment')
+      }
     }
 
     let pasted = false
     try {
       pasted = Boolean((await pasteCallback(latest.path))?.pasted)
     } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
       return {
         success: false,
         code: err instanceof ZToolsError ? err.code : errorCodes.clipboardError,
         screenshot: latest,
         copied: false,
         pasted: false,
-        message: `复制截图失败: ${err instanceof Error ? err.message : String(err)}`
+        message: _screenshotText(`复制截图失败: ${detail}`, `Failed to copy screenshot: ${detail}`)
       }
     }
 
@@ -485,8 +527,11 @@ export class ScreenshotsService {
       copied: true,
       pasted,
       message: pasted
-        ? `已粘贴最新截图: ${latest.filename}`
-        : `已复制最新截图: ${latest.filename}，请按 ${pasteKey} 粘贴`
+        ? _screenshotText(`已粘贴最新截图: ${latest.filename}`, `Pasted latest screenshot: ${latest.filename}`)
+        : _screenshotText(
+            `已复制最新截图: ${latest.filename}，请按 ${pasteKey} 粘贴`,
+            `Copied latest screenshot: ${latest.filename}. Press ${pasteKey} to paste`
+          )
     }
   }
 }

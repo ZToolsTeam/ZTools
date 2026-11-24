@@ -41,7 +41,7 @@ if ($payload.mode -eq 'write') {
 
 export function clipboardFailure(error: unknown): ZToolsError {
   if (error instanceof ZToolsError) return error
-  return new ZToolsError(errorCodes.clipboardError, '剪贴板操作失败')
+  return new ZToolsError(errorCodes.clipboardError, 'Clipboard operation failed')
 }
 
 function powershellPath(): string {
@@ -56,7 +56,7 @@ export class WindowsFileClipboardAdapter implements FileClipboardAdapter {
     const output = await this.#execute({ mode: 'read' }, signal)
     const value: unknown = JSON.parse(output)
     if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
-      throw new ZToolsError(errorCodes.clipboardError, '文件剪贴板返回了无效数据')
+      throw new ZToolsError(errorCodes.clipboardError, 'File clipboard returned invalid data')
     }
     return value
   }
@@ -67,7 +67,7 @@ export class WindowsFileClipboardAdapter implements FileClipboardAdapter {
 
   #execute(payload: { mode: 'read' } | { mode: 'write'; paths: string[] }, signal?: AbortSignal): Promise<string> {
     if (process.platform !== 'win32') {
-      throw new ZToolsError(errorCodes.notSupported, '文件剪贴板仅支持 Windows')
+      throw new ZToolsError(errorCodes.notSupported, 'File clipboard is only supported on Windows')
     }
     return new Promise((resolve, reject) => {
       const command = Buffer.from(FILE_CLIPBOARD_SCRIPT, 'utf16le').toString('base64')
@@ -98,18 +98,18 @@ export class WindowsFileClipboardAdapter implements FileClipboardAdapter {
       }
       const onAbort = (): void => {
         child.kill()
-        finish(new ZToolsError(errorCodes.callerDestroyed, '文件剪贴板操作已取消'))
+        finish(new ZToolsError(errorCodes.callerDestroyed, 'File clipboard operation was cancelled'))
       }
       const timeout = setTimeout(() => {
         child.kill()
-        finish(new ZToolsError(errorCodes.requestTimeout, '文件剪贴板操作超时'))
+        finish(new ZToolsError(errorCodes.requestTimeout, 'File clipboard operation timed out'))
       }, FILE_CLIPBOARD_TIMEOUT_MS)
 
       child.stdout.on('data', (chunk: Buffer) => {
         outputBytes += chunk.byteLength
         if (outputBytes > MAX_FILE_CLIPBOARD_OUTPUT_BYTES) {
           child.kill()
-          finish(new ZToolsError(errorCodes.responseTooLarge, '文件剪贴板输出超过上限'))
+          finish(new ZToolsError(errorCodes.responseTooLarge, 'File clipboard output exceeded size limit'))
           return
         }
         output.push(chunk)
@@ -122,7 +122,7 @@ export class WindowsFileClipboardAdapter implements FileClipboardAdapter {
       child.once('close', (code) => {
         if (code !== 0) {
           const detail = Buffer.concat(errors).toString('utf8').trim().slice(0, 512)
-          finish(new Error(detail || `Windows PowerShell 退出码 ${String(code)}`))
+          finish(new Error(detail || `Windows PowerShell exited with code ${String(code)}`))
           return
         }
         finish()

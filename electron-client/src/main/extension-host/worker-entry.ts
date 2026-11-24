@@ -63,6 +63,7 @@ export interface WorkerNativeCallbackPayload {
 interface DeclarativeRootHandle {
   getLatest?: () => unknown
   updateLocale?: (locale: string) => void
+  forceRender?: () => void
   rerender?: () => void
   refresh?: () => void
   unmount?: () => void
@@ -221,7 +222,7 @@ export class WorkerSession {
 
   public async initialize(payload: WorkerInitializePayload): Promise<unknown> {
     if (!payload?.entryPath) {
-      throw new Error('initialize payload 必须提供 entryPath')
+      throw new Error('initialize payload must provide entryPath')
     }
     if (typeof payload.locale === 'string' && payload.locale.trim().length > 0) {
       this.currentLocale = payload.locale.trim()
@@ -242,7 +243,7 @@ export class WorkerSession {
       const exportName = payload.exportName || 'default'
       const fn = (exportName && mod[exportName]) || mod.default || mod
       if (typeof fn !== 'function') {
-        throw new Error(`命令 "${payload.commandName || exportName}" 未导出有效的可执行函数`)
+        throw new Error(`Command "${payload.commandName || exportName}" does not export a valid executable function`)
       }
       const result = await (fn as (args: Record<string, unknown>) => unknown)(payload.arguments || {})
       return result !== undefined ? result : { success: true }
@@ -252,20 +253,21 @@ export class WorkerSession {
     const exportName = payload.exportName || 'default'
     const Component = (exportName && mod[exportName]) || mod.default
     if (!Component) {
-      throw new Error(`命令 "${payload.commandName || exportName}" 未导出有效的 React 视图组件`)
+      throw new Error(`Command "${payload.commandName || exportName}" does not export a valid React view component`)
     }
 
-    // 尝试引入 @raycast/api 运行时的 renderDeclarativeRoot
+    // 优先引入 @ztools/declarative-ui 运行时的 renderDeclarativeRoot，兼容历史别名回退
     let renderDeclarativeRoot: RenderDeclarativeRootFn | null = null
-    try {
-      const raycastModuleName = '@raycast/api'
-      const raycastApi = (await import(raycastModuleName)) as Record<string, unknown>
-      if (typeof raycastApi.renderDeclarativeRoot === 'function') {
-        renderDeclarativeRoot = raycastApi.renderDeclarativeRoot as RenderDeclarativeRootFn
+    for (const runtimeModuleName of ['@ztools/declarative-ui', '@raycast/api']) {
+      try {
+        const runtimeApi = (await import(runtimeModuleName)) as Record<string, unknown>
+        if (typeof runtimeApi.renderDeclarativeRoot === 'function') {
+          renderDeclarativeRoot = runtimeApi.renderDeclarativeRoot as RenderDeclarativeRootFn
+          break
+        }
+      } catch {
+        // 当前模块在 Worker 环境不可解析时尝试下一个候选
       }
-    } catch {
-      // 容错降级
-      renderDeclarativeRoot = null
     }
 
     if (typeof renderDeclarativeRoot === 'function') {
@@ -346,6 +348,8 @@ export class WorkerSession {
     if (this.activeRoot) {
       if (typeof this.activeRoot.updateLocale === 'function') {
         this.activeRoot.updateLocale(nextLocale)
+      } else if (typeof this.activeRoot.forceRender === 'function') {
+        this.activeRoot.forceRender()
       } else if (typeof this.activeRoot.rerender === 'function') {
         this.activeRoot.rerender()
       } else if (typeof this.activeRoot.refresh === 'function') {

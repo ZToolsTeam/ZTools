@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { getLocaleSetting, setLocale } from '../../src/main/i18n/index.js'
 import { SuperPanelDataService } from '../../src/main/super-panel/data-service.js'
 
 test('persists plugin pins via togglePin and ignores residual local_apps.json on disk', async (context) => {
@@ -133,6 +134,9 @@ test('最近使用插件固定最多 10 条，忽略旧配置中的 maxRecentCou
 })
 
 test('adds validated legacy system tools with searchable category aliases', async (context) => {
+  const previousLocale = getLocaleSetting()
+  context.after(() => { setLocale(previousLocale) })
+  setLocale('zh-CN')
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-system-tools-'))
   context.after(() => fs.rm(root, { recursive: true, force: true }))
   const service = new SuperPanelDataService(

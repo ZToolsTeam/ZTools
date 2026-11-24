@@ -216,6 +216,11 @@ import ActionPanelModal from "./components/ActionPanelModal.vue";
 import ToastOverlay from "./components/ToastOverlay.vue";
 import { getHostMethods } from "./hostMethods.js";
 import { cleanUiText, isDestructiveAction, resolveActionTitle } from "./uiText.js";
+import {
+  DETAIL_TOGGLE_LEGACY_TITLES,
+  DETAIL_TOGGLE_TITLE_PATTERN,
+  QUICK_LOOK_LEGACY_TITLE_TOKENS
+} from "./legacyActionTitles.zh-data.js";
 import { resolveActionKeyBindings, normalizeEventShortcutKey } from "@/utils/actionKeyBindings.js";
 import { filterIncomingFiles } from "./fileInputFilter.js";
 import { useDeclarativeStack, assertClipboardText, hasOpenConfirm } from "./composables/useDeclarativeStack.js";
@@ -231,8 +236,9 @@ import {
 import { isMacOS } from "@/utils/platform.js";
 import { useUIStore } from "@/stores/ui.js";
 import { useAppI18n } from "@/i18n";
+import { resolveErrorMessage } from "@/utils/errorMessage";
 
-const { t } = useAppI18n();
+const { t, locale } = useAppI18n();
 
 const props = defineProps({
   rootComponent: {
@@ -447,7 +453,7 @@ function handleHostFilesDropped(envelopeOrPayload) {
         style: "FAILURE"
       });
     } else if (hostErrors.length > 0) {
-      const firstErr = hostErrors[0]?.message || t("declarative.drop.fileInputFailedDefault");
+      const firstErr = resolveErrorMessage(hostErrors[0], "declarative.drop.fileInputFailedDefault");
       showToast?.({
         title: t("declarative.drop.fileInputFailedTitle"),
         message: String(firstErr),
@@ -459,7 +465,10 @@ function handleHostFilesDropped(envelopeOrPayload) {
 
   if (totalRejected > 0) {
     showToast?.({
-      title: t("declarative.drop.partialAccepted", { accepted: acceptedFiles.length, rejected: totalRejected }),
+      title: t("declarative.drop.partialAccepted", {
+        accepted: t("declarative.drop.acceptedCount", { count: acceptedFiles.length }, acceptedFiles.length),
+        rejected: t("declarative.drop.rejectedCount", { count: totalRejected }, totalRejected)
+      }),
       style: "SUCCESS"
     });
   }
@@ -768,15 +777,7 @@ const panelTargetTitle = computed(() => {
 
 // 详情分栏切换动作：只在列表视图、且插件为它声明了未冲突非保留快捷键时放到底栏左侧；
 // 按键由通用的动作快捷键处理（handleActionShortcut）负责，不再写死 Ctrl+D；
-// 优先识别结构化语义字段（role / actionId），并向后兼容历史中/英文标题。
-const DETAIL_TOGGLE_LEGACY_TITLES = Object.freeze([
-  "显示详情",
-  "隐藏详情",
-  "Show Details",
-  "Hide Details"
-]);
-const DETAIL_TOGGLE_TITLE = /详情预览分栏|预览分栏|详情分栏|Toggle Details?/i;
-
+// 优先识别结构化语义字段（role / actionId），并向后兼容历史中/英文标题（维护在 legacyActionTitles.zh-data.js）。
 function isToggleDetailSemantic(act) {
   const props = act?.props;
   return Boolean(props && (props.role === "toggle-detail" || props.actionId === "toggle-detail"));
@@ -789,7 +790,7 @@ function isToggleDetailLegacyTitle(act) {
   if (DETAIL_TOGGLE_LEGACY_TITLES.some((candidate) => lower === candidate.toLowerCase())) {
     return true;
   }
-  return DETAIL_TOGGLE_TITLE.test(title);
+  return DETAIL_TOGGLE_TITLE_PATTERN.test(title);
 }
 
 const toggleDetailAction = computed(() => {
@@ -897,8 +898,7 @@ function onActionError(err) {
 }
 
 function failureMessage(err) {
-  const message = err && typeof err.message === "string" ? err.message.trim() : "";
-  return message || t("common.unknownError");
+  return resolveErrorMessage(err, "common.unknownError");
 }
 
 // 执行指定 Action
@@ -1304,7 +1304,7 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
     const isQuickLookLegacyTitle = (act) => {
       const title = String(act?.props?.title || "").trim().toLowerCase();
       if (!title) return false;
-      return title.includes("quick look") || title.includes("即时预览");
+      return QUICK_LOOK_LEGACY_TITLE_TOKENS.some((token) => title.includes(token));
     };
     const quickLookAction =
       activeActions.value.find(isQuickLookSemantic) ||
@@ -1317,10 +1317,10 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
   }
 });
 
-// 动态联动主界面底栏首要动作
+// 动态联动主界面底栏首要动作（订阅 locale 变化，避免语言热切换时标题冻结）
 watch(
-  primaryAction,
-  (act) => {
+  [primaryAction, locale],
+  ([act]) => {
     if (!uiStore) return;
     if (act) {
       uiStore.setDeclarativePrimaryAction({

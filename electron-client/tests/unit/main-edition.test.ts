@@ -84,7 +84,7 @@ test('loader rejects malformed exports instead of trusting them', () => {
     ['storeFiles 非字符串', { mainEdition: { ...validCommercial, storeFiles: [42] } }]
   ]
   for (const [name, exported] of cases) {
-    assert.throws(() => loadMainEdition(loaderIo(true, () => exported)), /导出无效/, name)
+    assert.throws(() => loadMainEdition(loaderIo(true, () => exported)), /Invalid main process edition entry export/, name)
   }
 })
 

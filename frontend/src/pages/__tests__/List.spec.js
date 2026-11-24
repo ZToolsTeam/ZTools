@@ -366,12 +366,12 @@ describe('List page', () => {
       sourceType: 'all', page: 1, per_page: 1
     })
     expect(apiMocks.getMarketPlugins).toHaveBeenCalledWith({
-      category: '系统工具',
+      category: 'system',
       page: 1,
       per_page: 8
     })
     expect(apiMocks.getMarketPlugins).toHaveBeenCalledWith({
-      category: '办公效率',
+      category: 'productivity',
       page: 1,
       per_page: 8
     })
@@ -388,7 +388,7 @@ describe('List page', () => {
 
     await wrapper.findAll('.category-view-all-btn')[1].trigger('click')
     await flushPromises()
-    expect(router.currentRoute.value.params.category).toBe('系统工具')
+    expect(router.currentRoute.value.params.category).toBe('system')
   })
 
   it('分类概览下键盘焦点按页面展示顺序移动，Enter 打开焦点插件不报错', async () => {
@@ -397,13 +397,13 @@ describe('List page', () => {
       { id: 2, name: '办公效率', slug: 'office', pluginsCount: 2 }
     ])
     apiMocks.getMarketPlugins.mockImplementation(({ category }) => {
-      if (category === '系统工具') {
+      if (category === 'system' || category === '系统工具') {
         return Promise.resolve({
           list: Array.from({ length: 3 }, (_, i) => ({ pluginId: `system-${i + 1}`, name: `系统插件 ${i + 1}`, category })),
           total: 3
         })
       }
-      if (category === '办公效率') {
+      if (category === 'productivity' || category === '办公效率') {
         return Promise.resolve({
           list: [
             { pluginId: 'office-1', name: '办公插件 1', category },
@@ -449,6 +449,21 @@ describe('List page', () => {
     expect(wrapper.findAll('.is-list-card-focused')).toHaveLength(0)
     expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('isOverviewMode'), expect.anything())
     errorSpy.mockRestore()
+  })
+
+  it('搜索无结果只保留一个开发者链接，清空后返回完整目录', async () => {
+    pluginsStore.setSourceFilter('community')
+    wrapper = mount(List, { global: { plugins: [router], stubs: { APagination: true } } })
+    await flushPromises()
+    expect(wrapper.vm.hasCardActions).toBe(false)
+    expect(wrapper.find('.market-submit').exists()).toBe(false)
+    expect(wrapper.find('.market-repo-banner').exists()).toBe(false)
+    const actions = wrapper.get('.rc-empty').findAll('button')
+    expect(actions.map(button => button.text())).toEqual(['清除搜索，浏览全部插件', '开发入门指南'])
+    await actions[0].trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/list')
+    expect(pluginsStore.sourceFilter).toBe('all')
   })
 
   it('全部插件搜索结果保持相关性顺序并使用普通分页', async () => {
@@ -583,7 +598,7 @@ describe('List page', () => {
 
     expect(wrapper.vm.pageSize).toBe(20)
     expect(apiMocks.getMarketPlugins).toHaveBeenLastCalledWith({
-      category: '系统工具',
+      category: 'system',
       page: 1,
       per_page: 20,
       sourceType: 'all',
@@ -650,7 +665,7 @@ describe('List page', () => {
     const wrapper = mount(List, { global: { plugins: [router], stubs: { PluginCard3D: true, SkeletonCard: true, APagination: true, AButton: true } } })
     try {
       await flushPromises()
-      expect(pluginsStore.countPluginsBySource).toHaveBeenLastCalledWith({ category: '系统工具', keyword: '' })
+      expect(pluginsStore.countPluginsBySource).toHaveBeenLastCalledWith({ category: 'system', keyword: '' })
       expect(wrapper.vm.sourceCounts).toEqual({ all: 5, official: 4, community: 1 })
       expect(wrapper.find('[aria-label="来源"]').exists()).toBe(false)
     } finally { wrapper.unmount() }

@@ -97,10 +97,19 @@ test('DNS 旧接口：网卡列表来自注入的 PowerShell 结果，模拟网�
   })
 })
 
-test('DNS 旧接口：修改 DNS 的结果只取决于 netsh 退出码（中英文拒绝访问、超时），模拟权限参数无效', async () => {
+test('DNS 旧接口：修改 DNS 的结果只取决于 netsh 退出码与结构化/通用权限错误（退出码 5/740、Access is denied、中文拒绝访问、超时），模拟权限参数无效', async () => {
   await asWindows(async () => {
     const params = { adapterName: '以太网', primary: '223.5.5.5', secondary: '119.29.29.29', executeSystemModify: true, simulatePermissionDenied: true }
-    for (const [res, code] of [[fail(1, '请求的操作需要提升。'), 'ADMIN_PRIVILEGE_REQUIRED'], [fail(1, 'Access is denied.'), 'ADMIN_PRIVILEGE_REQUIRED'], [fail(124, '命令执行超时'), 'TIMEOUT'], [fail(1, ''), 'NETSH_FAILED']] as const) {
+    for (const [res, code] of [
+      [fail(5, 'ERROR_ACCESS_DENIED'), 'ADMIN_PRIVILEGE_REQUIRED'],
+      [fail(740, 'The requested operation requires elevation.'), 'ADMIN_PRIVILEGE_REQUIRED'],
+      [fail(1, 'Access is denied.'), 'ADMIN_PRIVILEGE_REQUIRED'],
+      [fail(1, 'HRESULT 0x80070005'), 'ADMIN_PRIVILEGE_REQUIRED'],
+      [fail(1, '错误: 拒绝访问。'), 'ADMIN_PRIVILEGE_REQUIRED'],
+      [fail(1, '请求的操作需要提升(作为管理员运行)。'), 'ADMIN_PRIVILEGE_REQUIRED'],
+      [fail(124, 'Command timed out'), 'TIMEOUT'],
+      [fail(1, ''), 'NETSH_FAILED']
+    ] as const) {
       const result = await new NetworkHostPluginHandler({} as HostPluginContext, fakeSystem({ netsh: res }).deps).handleDnsBenchmark('applyDns', params) as Result
       assert.equal(result.success, false); assert.equal(result.errorCode, code)
     }
@@ -112,7 +121,7 @@ test('DNS 旧接口：修改 DNS 的结果只取决于 netsh 退出码（中英�
     const done = await new NetworkHostPluginHandler({} as HostPluginContext, sys.deps).handleDnsBenchmark('applyDns', params) as Result
     assert.equal(done.success, true); assert.deepEqual(done.currentDns, ['223.5.5.5']); assert.equal(done.flushed, false); assert.match(String(done.flushError), /刷新 DNS 缓存失败/)
     assert.deepEqual(sys.calls, ['netsh interface ip set dns name=以太网 static 223.5.5.5 validate=no', 'netsh interface ip add dns name=以太网 119.29.29.29 index=2 validate=no', 'ipconfig /flushdns', 'powershell'])
-    const reset = await new NetworkHostPluginHandler({} as HostPluginContext, fakeSystem({ netsh: fail(1, '拒绝访问。') }).deps).handleDnsBenchmark('resetDhcp', { adapterName: '以太网', executeSystemModify: true, simulatePermissionDenied: true }) as Result
+    const reset = await new NetworkHostPluginHandler({} as HostPluginContext, fakeSystem({ netsh: fail(5, 'Permission denied') }).deps).handleDnsBenchmark('resetDhcp', { adapterName: '以太网', executeSystemModify: true, simulatePermissionDenied: true }) as Result
     assert.equal(reset.errorCode, 'ADMIN_PRIVILEGE_REQUIRED')
     // 未显式开启执行时不调用任何命令
     const idle = fakeSystem({})

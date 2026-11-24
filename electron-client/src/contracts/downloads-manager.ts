@@ -20,6 +20,6 @@ export function validateDownloadsManagerRequest(value: unknown): asserts value i
       (discover
         ? !Array.isArray(input.customDirs) || input.customDirs.length > 256 || !input.customDirs.every(validDirectory)
         : input.action !== 'validate' || !validDirectory(input.dirPath))) {
-    throw new ZToolsError(errorCodes.invalidRequest, '下载目录请求无效：请选择有效的绝对目录路径')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid downloads directory request: select a valid absolute directory path')
   }
 }

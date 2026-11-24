@@ -8,12 +8,17 @@ import os from 'node:os'
 import path from 'node:path'
 import tls from 'node:tls'
 import type { CallerIdentity } from '../../../contracts/capabilities.js'
+import { errorCodes } from '../../../contracts/errors.js'
+import { DEFAULT_LOCALE, getResolvedLocale, t, type SupportedLocale } from '../../i18n/index.js'
 import {
   calculateDirectorySize,
   escapeHtml,
   fileUrlToLocalPath,
   formatBytes,
   guessMimeType,
+  hostPluginError,
+  isAccessDeniedCommandResult,
+  resolveHostErrorMessage,
   resolveHostSystemCommands,
   type HostPluginContext,
   type HostSystemCommands,
@@ -22,6 +27,85 @@ import {
 
 /** TCP 连通探测结果：ok 为能否建立连接，latencyMs 为建立连接（或放弃）所用毫秒数 */
 type TcpProbe = (host: string, port: number, timeoutMs: number) => Promise<{ ok: boolean; latencyMs: number }>
+
+/**
+ * 按 HTTP Accept-Language 协商局域网共享页面语言；
+ * 请求头缺失、为空或仅包含通配符 `*` 时回退到主进程当前已解析的 locale。
+ */
+export function resolveLanShareLocale(acceptLanguage?: string | readonly string[]): SupportedLocale {
+  const raw = typeof acceptLanguage === 'string'
+    ? acceptLanguage
+    : Array.isArray(acceptLanguage)
+      ? acceptLanguage.join(',')
+      : ''
+  const trimmed = raw.trim()
+  if (!trimmed) return getResolvedLocale()
+
+  const candidates: Array<{ tag: string; q: number; order: number }> = []
+  const parts = trimmed.split(',')
+  for (let index = 0; index < parts.length; index += 1) {
+    const segment = parts[index]?.trim()
+    if (!segment) continue
+    const [rawTag, ...params] = segment.split(';')
+    const tag = rawTag?.trim().toLowerCase().replaceAll('_', '-') ?? ''
+    if (!tag || tag === '*') continue
+    let q = 1
+    let invalidWeight = false
+    for (const param of params) {
+      const [key, val] = param.split('=').map((item: string) => item.trim().toLowerCase())
+      if (key === 'q') {
+        const parsed = Number(val)
+        if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) {
+          invalidWeight = true
+          break
+        }
+        q = parsed
+      }
+    }
+    if (invalidWeight) continue
+    candidates.push({ tag, q, order: index })
+  }
+
+  if (candidates.length === 0) return getResolvedLocale()
+  candidates.sort((a, b) => (b.q - a.q) || (a.order - b.order))
+
+  for (const candidate of candidates) {
+    if (candidate.tag === 'zh' || candidate.tag.startsWith('zh-')) {
+      return 'zh-CN'
+    }
+    if (candidate.tag === 'en' || candidate.tag.startsWith('en-')) {
+      return 'en-US'
+    }
+  }
+  return DEFAULT_LOCALE
+}
+
+export function renderLanShareHtml(
+  files: ReadonlyArray<{ id: string; name: string; size: number; shared?: boolean }>,
+  locale: SupportedLocale
+): string {
+  const visibleFiles = files.filter((file) => file.shared !== false)
+  const pageTitle = escapeHtml(t('lanShare.pageTitle', undefined, locale))
+  const heading = escapeHtml(t('lanShare.heading', undefined, locale))
+  const colName = escapeHtml(t('lanShare.colName', undefined, locale))
+  const colSize = escapeHtml(t('lanShare.colSize', undefined, locale))
+  const colAction = escapeHtml(t('lanShare.colAction', undefined, locale))
+  const downloadLabel = escapeHtml(t('lanShare.download', undefined, locale))
+  const emptyText = escapeHtml(t('lanShare.empty', undefined, locale))
+
+  const rows = visibleFiles
+    .map((file) => {
+      const href = `/download/${encodeURIComponent(file.id)}/${encodeURIComponent(file.name)}`
+      return `<tr><td><a href="${href}">${escapeHtml(file.name)}</a></td><td>${escapeHtml(formatBytes(file.size))}</td><td><a class="dl" href="${href}">${downloadLabel}</a></td></tr>`
+    })
+    .join('')
+
+  const bodyContent = rows
+    ? `<table><thead><tr><th>${colName}</th><th>${colSize}</th><th>${colAction}</th></tr></thead><tbody>${rows}</tbody></table>`
+    : `<p class="empty">${emptyText}</p>`
+
+  return `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${pageTitle}</title><style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;padding:24px;max-width:760px;margin:0 auto}a{color:#60a5fa;text-decoration:none}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #27272a}th{font-weight:600;opacity:.75}.dl{font-weight:500}.empty{padding:24px 0;opacity:.7}</style></head><body><h2>${heading}</h2>${bodyContent}</body></html>`
+}
 
 /** 网络处理器的系统依赖：生产用真实实现，测试经构造参数注入替身（插件调用参数无法切换） */
 export interface NetworkHostDeps extends HostSystemCommands {
@@ -195,7 +279,7 @@ export class NetworkHostPluginHandler {
         return {
           ok: false,
           success: false,
-          error: `未找到待切换共享状态的文件: ${targetId || targetPath || 'unknown'}`
+          errorCode: 'FILE_NOT_FOUND', error: t('hostPlugin.network.shareFileNotFound', { target: targetId || targetPath || 'unknown' })
         }
       }
       const existing = this.#lanShare.sharedFiles.get(matchedKey)!
@@ -314,12 +398,13 @@ export class NetworkHostPluginHandler {
       const server = http.createServer(async (req, res) => {
         this.#lanShare.totalClientRequests = (this.#lanShare.totalClientRequests ?? 0) + 1
         try {
+          const locale = resolveLanShareLocale(req.headers['accept-language'])
           const reqUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
           if (this.#lanShare.requirePin) {
             const pinParam = reqUrl.searchParams.get('pin') ?? req.headers['x-ztools-pin']
             if (pinParam !== this.#lanShare.pin) {
               res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' })
-              res.end('需要有效的 PIN 验证码 (?pin=XXXX)')
+              res.end(t('lanShare.pinRequired', undefined, locale))
               return
             }
           }
@@ -360,13 +445,13 @@ export class NetworkHostPluginHandler {
 
             if (descriptor && descriptor.shared === false) {
               res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
-              res.end('403 Forbidden: File sharing is disabled')
+              res.end(t('lanShare.fileDisabled', undefined, locale))
               return
             }
 
             if (!descriptor || descriptor.isDirectory || !fsSync.existsSync(descriptor.path)) {
               res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
-              res.end('File not found or is a directory')
+              res.end(t('lanShare.fileNotFound', undefined, locale))
               return
             }
             const stat = await fs.stat(descriptor.path)
@@ -399,14 +484,7 @@ export class NetworkHostPluginHandler {
             return
           }
 
-          const fileRows = Array.from(this.#lanShare.sharedFiles.values())
-            .filter((f) => f.shared !== false)
-            .map(
-              (f) =>
-                `<li><a href="/download/${encodeURIComponent(f.id)}/${encodeURIComponent(f.name)}">${escapeHtml(f.name)}</a> (${formatBytes(f.size)})</li>`
-            )
-            .join('')
-          const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZTools 局域网快传</title><style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;padding:24px;max-width:720px;margin:0 auto}a{color:#60a5fa;text-decoration:none}li{padding:10px 0;border-bottom:1px solid #27272a}</style></head><body><h2>ZTools 局域网文件共享</h2><ul>${fileRows || '<li>暂无共享文件</li>'}</ul></body></html>`
+          const html = renderLanShareHtml(Array.from(this.#lanShare.sharedFiles.values()), locale)
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
           res.end(html)
         } catch (err) {
@@ -510,20 +588,20 @@ export class NetworkHostPluginHandler {
               dnsServers = $dnsList
             }
           })
-          # 已禁用或没有 IP 配置的网卡会让 Get-NetIPConfiguration 写非终止错误（属正常情况）；结果存进变量后单独输出，
-          # 最后一条语句不再是带非终止错误的管道，退出码不会因此变成 1
+          # Disabled adapters or adapters without IP config emit non-terminating errors in Get-NetIPConfiguration;
+          # capture into $list and output separately so the exit code remains 0.
           ConvertTo-Json -InputObject $list -Compress -Depth 4
         `
         let raw: string
         try {
           raw = await this.#sys.runPowerShell(psScript, 10_000, signal)
         } catch (error) {
-          return { ok: false, success: false, errorCode: 'ADAPTER_LIST_FAILED', error: `读取网卡列表失败：${error instanceof Error ? error.message : String(error)}` }
+          return { ok: false, success: false, errorCode: 'ADAPTER_LIST_FAILED', error: t('hostPlugin.network.adapterListFailed', { detail: error instanceof Error ? error.message : String(error) }) }
         }
         {
           let parsed: unknown
           try { parsed = JSON.parse(raw.trim() || '[]') } catch {
-            return { ok: false, success: false, errorCode: 'ADAPTER_LIST_FAILED', error: '读取网卡列表失败：系统返回的数据无法解析' }
+            return { ok: false, success: false, errorCode: 'ADAPTER_LIST_FAILED', error: t('hostPlugin.network.adapterListParseFailed') }
           }
           {
             const list = Array.isArray(parsed) ? parsed : [parsed]
@@ -550,7 +628,7 @@ export class NetworkHostPluginHandler {
         for (const [name, addrs] of Object.entries(osNets)) {
           const ipv4 = (addrs ?? []).find((a) => a.family === 'IPv4')
           if (!ipv4) continue
-          const linkSpeed = '未知'
+          const linkSpeed = t('hostPlugin.network.linkSpeedUnknown')
           adapters.push({
             id: name,
             name,
@@ -580,14 +658,14 @@ export class NetworkHostPluginHandler {
         const res = await this.#sys.runCommand('dscacheutil', ['-flushcache'], 10_000, signal)
         return { ok: res.exitCode === 0, success: res.exitCode === 0, output: res.stdout || res.stderr || 'DNS cache flushed' }
       }
-      return { ok: false, success: false, error: '当前平台不支持刷新 DNS 缓存' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.network.flushDnsUnsupported') }
     }
 
     if (lowerFn === 'setdns' || lowerFn === 'applypreset') {
       const adapterName = String(params.adapterName ?? params.name ?? '').replace(/["']/g, '')
       const primaryDns = String(params.primaryDns ?? params.dns1 ?? '').trim()
       if (!adapterName) {
-        return { ok: false, success: false, error: '未指定网卡名称' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.network.adapterNameMissing') }
       }
       if (process.platform === 'win32') {
         const args = primaryDns
@@ -598,10 +676,10 @@ export class NetworkHostPluginHandler {
           ok: res.exitCode === 0,
           success: res.exitCode === 0,
           output: res.stdout || res.stderr,
-          ...(res.exitCode !== 0 ? { error: res.stderr || res.stdout || '修改 DNS 失败' } : {})
+          ...(res.exitCode !== 0 ? { error: res.stderr || res.stdout || t('hostPlugin.network.setDnsFailed') } : {})
         }
       }
-      return { ok: false, success: false, error: '当前系统不支持通过 netsh 修改 DNS' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.network.netshDnsUnsupported') }
     }
 
     return this.handleNetworkAdapter('getAdapters', params, signal)
@@ -630,7 +708,7 @@ export class NetworkHostPluginHandler {
   }
 
   async #readWindowsNetworkStatus(signal?: AbortSignal): Promise<Record<string, unknown>> {
-    if (process.platform !== 'win32') return { error: '当前平台无法读取 Windows 网络服务和防火墙配置' }
+    if (process.platform !== 'win32') return { error: t('hostPlugin.network.winNetConfigUnsupported') }
     try {
       const raw = await this.#sys.runPowerShell(String.raw`
         $result = @{}
@@ -646,7 +724,7 @@ export class NetworkHostPluginHandler {
         ConvertTo-Json -InputObject $result -Compress -Depth 4
       `, 10000, signal)
       const parsed: unknown = JSON.parse(raw)
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('系统返回的网络配置格式无效')
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw hostPluginError(errorCodes.dataCorrupt, 'hostPlugin.network.winNetConfigInvalid', { hostCode: 'WIN_NET_CONFIG_INVALID' })
       return parsed as Record<string, unknown>
     } catch (err) {
       signal?.throwIfAborted()
@@ -676,10 +754,12 @@ export class NetworkHostPluginHandler {
       // 1. renew-dhcp (网卡与内网 DHCP 分配)
       checks.push({
         id: 'renew-dhcp',
-        name: '本地网卡与 DHCP IPv4 分配',
-        category: '物理网卡',
+        nameKey: 'hostPlugin.network.diag.dhcp.name',
+        categoryKey: 'hostPlugin.network.diag.dhcp.category',
+        name: t('hostPlugin.network.diag.dhcp.name'),
+        category: t('hostPlugin.network.diag.dhcp.category'),
         status: activeIps.length > 0 ? 'healthy' : 'error',
-        detail: activeIps.length > 0 ? `本机 IPv4 地址: ${activeIps.join(', ')}（不代表 DHCP 租约已验证）` : '未检测到有效的非回环 IPv4 地址'
+        detail: activeIps.length > 0 ? t('hostPlugin.network.diag.dhcp.active', { ips: activeIps.join(', ') }) : t('hostPlugin.network.diag.dhcp.none')
       })
 
       // 2. flush-dns (DNS 解析与缓存)
@@ -688,8 +768,10 @@ export class NetworkHostPluginHandler {
         const resolved = await this.#lookupDns('www.baidu.com')
         checks.push({
           id: 'flush-dns',
-          name: '公网域名解析与 DNS 缓存',
-          category: 'DNS 解析',
+          nameKey: 'hostPlugin.network.diag.dns.name',
+          categoryKey: 'hostPlugin.network.diag.dns.category',
+          name: t('hostPlugin.network.diag.dns.name'),
+          category: t('hostPlugin.network.diag.dns.category'),
           status: 'healthy',
           detail: `www.baidu.com -> ${resolved.address}`,
           latencyMs: Math.max(1, Date.now() - dnsStart)
@@ -697,10 +779,12 @@ export class NetworkHostPluginHandler {
       } catch (err) {
         checks.push({
           id: 'flush-dns',
-          name: '公网域名解析与 DNS 缓存',
-          category: 'DNS 解析',
+          nameKey: 'hostPlugin.network.diag.dns.name',
+          categoryKey: 'hostPlugin.network.diag.dns.category',
+          name: t('hostPlugin.network.diag.dns.name'),
+          category: t('hostPlugin.network.diag.dns.category'),
           status: 'error',
-          detail: err instanceof Error ? err.message : 'DNS 解析超时或失败',
+          detail: resolveHostErrorMessage(err, 'hostPlugin.network.diag.dns.failed'),
           latencyMs: Math.max(1, Date.now() - dnsStart)
         })
       }
@@ -709,10 +793,12 @@ export class NetworkHostPluginHandler {
       const tcpProbe = await this.#probeTcp('223.5.5.5', 53, 3000)
       checks.push({
         id: 'ping-gateway-dns',
-        name: '网关与公共 DNS 连通性 (223.5.5.5:53)',
-        category: '外网连通',
+        nameKey: 'hostPlugin.network.diag.gateway.name',
+        categoryKey: 'hostPlugin.network.diag.gateway.category',
+        name: t('hostPlugin.network.diag.gateway.name'),
+        category: t('hostPlugin.network.diag.gateway.category'),
         status: tcpProbe.ok ? 'healthy' : 'warning',
-        detail: tcpProbe.ok ? '公网 TCP 53 端口握手正常' : '连接公共 DNS 53 端口超时',
+        detail: tcpProbe.ok ? t('hostPlugin.network.diag.gateway.ok') : t('hostPlugin.network.diag.gateway.timeout'),
         latencyMs: tcpProbe.latencyMs
       })
 
@@ -720,13 +806,15 @@ export class NetworkHostPluginHandler {
       const envProxy = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.ALL_PROXY || ''
       checks.push({
         id: 'clear-proxy',
-        name: '系统代理与环境变量劫持检测',
-        category: '系统代理',
+        nameKey: 'hostPlugin.network.diag.proxy.name',
+        categoryKey: 'hostPlugin.network.diag.proxy.category',
+        name: t('hostPlugin.network.diag.proxy.name'),
+        category: t('hostPlugin.network.diag.proxy.category'),
         status: envProxy || windowsStatus.proxyEnabled === true ? 'warning' : windowsStatus.proxyEnabled === false ? 'healthy' : 'unknown',
-        detail: envProxy ? '检测到代理环境变量，请确认是否为你主动配置'
-          : windowsStatus.proxyEnabled === true ? `系统代理已启用：${String(windowsStatus.proxyServer || '地址未提供')}，请确认是否仍需使用`
-          : windowsStatus.proxyEnabled === false ? '系统手动代理未启用；自动代理脚本未检测'
-          : `未能读取系统代理配置：${String(windowsStatus.proxyError || windowsStatus.error || '无有效结果')}`
+        detail: envProxy ? t('hostPlugin.network.diag.proxy.envDetected')
+          : windowsStatus.proxyEnabled === true ? t('hostPlugin.network.diag.proxy.enabled', { server: String(windowsStatus.proxyServer || t('hostPlugin.network.diag.proxy.addrMissing')) })
+          : windowsStatus.proxyEnabled === false ? t('hostPlugin.network.diag.proxy.disabled')
+          : t('hostPlugin.network.diag.proxy.unreadable', { detail: String(windowsStatus.proxyError || windowsStatus.error || t('hostPlugin.network.diag.noValidResult')) })
       })
 
       // 5. check-hosts (Hosts 规则文件审计)
@@ -749,42 +837,50 @@ export class NetworkHostPluginHandler {
       }
       checks.push({
         id: 'check-hosts',
-        name: '系统 Hosts 域名映射文件审计',
-        category: 'DNS 解析',
+        nameKey: 'hostPlugin.network.diag.hosts.name',
+        categoryKey: 'hostPlugin.network.diag.dns.category',
+        name: t('hostPlugin.network.diag.hosts.name'),
+        category: t('hostPlugin.network.diag.dns.category'),
         status: hostsReadable ? (hostsRuleCount > 50 ? 'warning' : 'healthy') : 'warning',
-        detail: hostsReadable ? `Hosts 可读，含 ${hostsRuleCount} 条自定义映射规则` : '无法读取系统 Hosts 文件',
+        detail: hostsReadable ? t('hostPlugin.network.diag.hosts.readable', { count: hostsRuleCount }) : t('hostPlugin.network.diag.hosts.unreadable'),
         latencyMs: Math.max(1, Date.now() - hostsStart)
       })
 
       // 6. reset-winsock (Winsock 传输层目录状态)
       checks.push({
         id: 'reset-winsock',
-        name: 'Winsock 套接字目录与传输栈',
-        category: '协议栈',
+        nameKey: 'hostPlugin.network.diag.winsock.name',
+        categoryKey: 'hostPlugin.network.diag.winsock.category',
+        name: t('hostPlugin.network.diag.winsock.name'),
+        category: t('hostPlugin.network.diag.winsock.category'),
         status: 'unknown',
-        detail: '尚未验证 Winsock 目录完整性；拥有 IPv4 地址不能证明协议栈健康'
+        detail: t('hostPlugin.network.diag.winsock.detail')
       })
 
       // 7. reset-firewall (系统防火墙策略状态)
       checks.push({
         id: 'reset-firewall',
-        name: 'Windows Defender 防火墙策略检查',
-        category: '安全策略',
+        nameKey: 'hostPlugin.network.diag.firewall.name',
+        categoryKey: 'hostPlugin.network.diag.firewall.category',
+        name: t('hostPlugin.network.diag.firewall.name'),
+        category: t('hostPlugin.network.diag.firewall.category'),
         status: 'unknown',
         detail: Array.isArray(windowsStatus.firewallProfiles) && windowsStatus.firewallProfiles.length > 0
-          ? `已读取 ${windowsStatus.firewallProfiles.length} 个防火墙配置文件；尚未验证具体连接是否被规则阻断`
-          : `未能读取防火墙配置：${String(windowsStatus.firewallError || windowsStatus.error || '无有效结果')}`
+          ? t('hostPlugin.network.diag.firewall.profilesRead', { count: windowsStatus.firewallProfiles.length })
+          : t('hostPlugin.network.diag.firewall.unreadable', { detail: String(windowsStatus.firewallError || windowsStatus.error || t('hostPlugin.network.diag.noValidResult')) })
       })
 
       // 8. restart-nla (NLA 网络位置感知服务)
       checks.push({
         id: 'restart-nla',
-        name: 'NLA 网络位置感知服务 (NlaSvc)',
-        category: '系统服务',
+        nameKey: 'hostPlugin.network.diag.nla.name',
+        categoryKey: 'hostPlugin.network.diag.nla.category',
+        name: t('hostPlugin.network.diag.nla.name'),
+        category: t('hostPlugin.network.diag.nla.category'),
         status: windowsStatus.nlaStatus === 'Running' ? 'healthy' : typeof windowsStatus.nlaStatus === 'string' && windowsStatus.nlaStatus ? 'warning' : 'unknown',
         detail: typeof windowsStatus.nlaStatus === 'string' && windowsStatus.nlaStatus
-          ? `NlaSvc 服务状态：${windowsStatus.nlaStatus}（不代表外网连通）`
-          : `未能读取 NlaSvc 服务：${String(windowsStatus.nlaError || windowsStatus.error || '无有效结果')}`
+          ? t('hostPlugin.network.diag.nla.status', { status: windowsStatus.nlaStatus })
+          : t('hostPlugin.network.diag.nla.unreadable', { detail: String(windowsStatus.nlaError || windowsStatus.error || t('hostPlugin.network.diag.noValidResult')) })
       })
 
       signal?.throwIfAborted()
@@ -794,7 +890,7 @@ export class NetworkHostPluginHandler {
     if (lowerFn === 'repair' || lowerFn === 'executerepair') {
       const targetId = String(params.checkId ?? params.itemId ?? params.id ?? '').toLowerCase().trim()
       if (!targetId) {
-        return { ok: false, success: false, error: '未指定要执行的网络修复项 ID (checkId)' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.network.repair.missingCheckId') }
       }
 
       if (targetId === 'flush-dns') {
@@ -806,8 +902,8 @@ export class NetworkHostPluginHandler {
             success: ok,
             checkId: targetId,
             output: res.stdout || res.stderr,
-            message: ok ? res.stdout || '已刷新 DNS 缓存' : undefined,
-            ...(ok ? {} : { error: res.stderr || res.stdout || '执行 ipconfig /flushdns 失败' })
+            message: ok ? res.stdout || t('hostPlugin.network.repair.dnsFlushed') : undefined,
+            ...(ok ? {} : { error: res.stderr || res.stdout || t('hostPlugin.network.repair.flushDnsWinFailed') })
           }
         }
         if (process.platform === 'darwin') {
@@ -818,11 +914,11 @@ export class NetworkHostPluginHandler {
             success: ok,
             checkId: targetId,
             output: res.stdout || res.stderr,
-            message: ok ? '已通过 dscacheutil 刷新 DNS 缓存' : undefined,
-            ...(ok ? {} : { error: res.stderr || res.stdout || '执行 dscacheutil -flushcache 失败' })
+            message: ok ? t('hostPlugin.network.repair.dnsFlushedMac') : undefined,
+            ...(ok ? {} : { error: res.stderr || res.stdout || t('hostPlugin.network.repair.flushDnsMacFailed') })
           }
         }
-        return { ok: false, success: false, checkId: targetId, error: '当前系统平台不支持自动刷新 DNS 缓存' }
+        return { ok: false, success: false, checkId: targetId, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.network.repair.flushDnsUnsupported') }
       }
 
       if (targetId === 'clear-proxy') {
@@ -849,8 +945,8 @@ export class NetworkHostPluginHandler {
             success: ok,
             checkId: targetId,
             output: regRes.stdout || regRes.stderr,
-            message: ok ? '已关闭注册表 ProxyEnable 系统代理开关' : undefined,
-            ...(ok ? {} : { error: regRes.stderr || regRes.stdout || '清理系统代理注册表项失败' })
+            message: ok ? t('hostPlugin.network.repair.proxyDisabledWin') : undefined,
+            ...(ok ? {} : { error: regRes.stderr || regRes.stdout || t('hostPlugin.network.repair.proxyClearWinFailed') })
           }
         }
         if (process.platform === 'darwin') {
@@ -862,11 +958,11 @@ export class NetworkHostPluginHandler {
             success: ok,
             checkId: targetId,
             output: `${webRes.stdout || webRes.stderr}\n${secRes.stdout || secRes.stderr}`.trim(),
-            message: ok ? '已关闭 Wi-Fi 系统代理开关' : undefined,
-            ...(ok ? {} : { error: webRes.stderr || secRes.stderr || '关闭 macOS 系统代理失败' })
+            message: ok ? t('hostPlugin.network.repair.proxyDisabledMac') : undefined,
+            ...(ok ? {} : { error: webRes.stderr || secRes.stderr || t('hostPlugin.network.repair.proxyClearMacFailed') })
           }
         }
-        return { ok: false, success: false, checkId: targetId, error: '当前系统平台不支持自动重置系统代理' }
+        return { ok: false, success: false, checkId: targetId, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.network.repair.proxyUnsupported') }
       }
 
       if (targetId === 'reset-winsock') {
@@ -878,11 +974,11 @@ export class NetworkHostPluginHandler {
             success: ok,
             checkId: targetId,
             output: res.stdout || res.stderr,
-            message: ok ? res.stdout || 'Winsock 目录已重置' : undefined,
-            ...(ok ? {} : { error: res.stderr || res.stdout || '重置 Winsock 需要管理员权限或执行失败' })
+            message: ok ? res.stdout || t('hostPlugin.network.repair.winsockReset') : undefined,
+            ...(ok ? {} : { error: res.stderr || res.stdout || t('hostPlugin.network.repair.winsockFailed') })
           }
         }
-        return { ok: false, success: false, checkId: targetId, error: '仅 Windows 支持 Winsock 重置' }
+        return { ok: false, success: false, checkId: targetId, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.network.repair.winsockWinOnly') }
       }
 
       if (targetId === 'check-hosts') {
@@ -902,15 +998,15 @@ export class NetworkHostPluginHandler {
             checkId: targetId,
             hostsPath,
             activeRulesCount: activeLines.length,
-            output: `Hosts 文件校验完成，有效规则 ${activeLines.length} 条`,
-            message: `Hosts 文件校验完成，有效规则 ${activeLines.length} 条`
+            output: t('hostPlugin.network.repair.hostsChecked', { count: activeLines.length }),
+            message: t('hostPlugin.network.repair.hostsChecked', { count: activeLines.length })
           }
         } catch (err) {
           return {
             ok: false,
             success: false,
             checkId: targetId,
-            error: err instanceof Error ? err.message : '读取系统 Hosts 文件失败'
+            error: resolveHostErrorMessage(err, 'hostPlugin.network.repair.hostsReadFailed')
           }
         }
       }
@@ -924,11 +1020,11 @@ export class NetworkHostPluginHandler {
             success: ok,
             checkId: targetId,
             output: res.stdout || res.stderr,
-            message: ok ? res.stdout || '已重新获取 DHCP 租约' : undefined,
-            ...(ok ? {} : { error: res.stderr || res.stdout || '执行 ipconfig /renew 失败' })
+            message: ok ? res.stdout || t('hostPlugin.network.repair.dhcpRenewed') : undefined,
+            ...(ok ? {} : { error: res.stderr || res.stdout || t('hostPlugin.network.repair.dhcpFailed') })
           }
         }
-        return { ok: false, success: false, checkId: targetId, error: '当前系统不支持 ipconfig /renew' }
+        return { ok: false, success: false, checkId: targetId, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.network.repair.dhcpUnsupported') }
       }
 
       if (targetId === 'ping-gateway-dns') {
@@ -939,8 +1035,8 @@ export class NetworkHostPluginHandler {
             success: true,
             checkId: targetId,
             latencyMs: probe.latencyMs,
-            output: `连接 223.5.5.5:53 成功 (${probe.latencyMs}ms)`,
-            message: `连接 223.5.5.5:53 成功 (${probe.latencyMs}ms)`
+            output: t('hostPlugin.network.repair.gatewayOk', { latencyMs: probe.latencyMs }),
+            message: t('hostPlugin.network.repair.gatewayOk', { latencyMs: probe.latencyMs })
           }
         }
         try {
@@ -952,15 +1048,15 @@ export class NetworkHostPluginHandler {
             success: true,
             checkId: targetId,
             latencyMs,
-            output: `DNS 连通正常: ${resolved.address} (${latencyMs}ms)`,
-            message: `DNS 连通正常: ${resolved.address} (${latencyMs}ms)`
+            output: t('hostPlugin.network.repair.dnsConnectivityOk', { address: resolved.address, latencyMs }),
+            message: t('hostPlugin.network.repair.dnsConnectivityOk', { address: resolved.address, latencyMs })
           }
         } catch (err) {
           return {
             ok: false,
             success: false,
             checkId: targetId,
-            error: err instanceof Error ? err.message : '网关与公网 DNS 连通性探测失败'
+            error: resolveHostErrorMessage(err, 'hostPlugin.network.repair.gatewayProbeFailed')
           }
         }
       }
@@ -974,11 +1070,11 @@ export class NetworkHostPluginHandler {
             success: ok,
             checkId: targetId,
             output: res.stdout || res.stderr,
-            message: ok ? '已恢复 Windows 防火墙默认策略' : undefined,
-            ...(ok ? {} : { error: res.stderr || res.stdout || '恢复防火墙默认策略失败（通常需要管理员权限）' })
+            message: ok ? t('hostPlugin.network.repair.firewallReset') : undefined,
+            ...(ok ? {} : { error: res.stderr || res.stdout || t('hostPlugin.network.repair.firewallFailed') })
           }
         }
-        return { ok: false, success: false, checkId: targetId, error: '仅 Windows 支持 netsh advfirewall' }
+        return { ok: false, success: false, checkId: targetId, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.network.repair.firewallWinOnly') }
       }
 
       if (targetId === 'restart-nla') {
@@ -995,18 +1091,18 @@ export class NetworkHostPluginHandler {
             success: ok,
             checkId: targetId,
             output: res.stdout || res.stderr,
-            message: ok ? '已重启 NlaSvc 网络位置感知服务' : undefined,
-            ...(ok ? {} : { error: res.stderr || res.stdout || '重启 NlaSvc 服务失败（通常需要管理员权限）' })
+            message: ok ? t('hostPlugin.network.repair.nlaRestarted') : undefined,
+            ...(ok ? {} : { error: res.stderr || res.stdout || t('hostPlugin.network.repair.nlaFailed') })
           }
         }
-        return { ok: false, success: false, checkId: targetId, error: '仅 Windows 支持重启 NlaSvc 服务' }
+        return { ok: false, success: false, checkId: targetId, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.network.repair.nlaWinOnly') }
       }
 
       return {
         ok: false,
         success: false,
         checkId: targetId,
-        error: `未知的网络修复项: ${targetId}`
+        errorCode: 'INVALID_REQUEST', error: t('hostPlugin.network.repair.unknownCheckId', { checkId: targetId })
       }
     }
 
@@ -1044,7 +1140,7 @@ export class NetworkHostPluginHandler {
     ) {
       const url = String(params.url ?? '').trim()
       if (!url) {
-        return { ok: false, success: false, error: '未提供有效的下载 URL' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.network.download.invalidUrl') }
       }
       try {
         const rawOutputDir = String(params.outputDir ?? params.saveDir ?? path.join(os.homedir(), 'Downloads'))
@@ -1064,7 +1160,7 @@ export class NetworkHostPluginHandler {
         const candidateSavePath = path.resolve(outputDir, fileName)
         const relCheck = path.relative(outputDir, candidateSavePath)
         if (!relCheck || relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
-          return { ok: false, success: false, error: '非法下载文件名，拒绝路径越界' }
+          return { ok: false, success: false, errorCode: 'PERMISSION_DENIED', error: t('hostPlugin.network.download.invalidFileName') }
         }
         const savePath = await this.#ctx.authorizeOutputPath(candidateSavePath, caller)
         const id = String(params.id ?? params.taskId ?? `dl-${Date.now()}`)
@@ -1075,12 +1171,12 @@ export class NetworkHostPluginHandler {
         } else if (url.startsWith('http://') || url.startsWith('https://')) {
           const resp = await fetch(url, signal ? { signal } : undefined)
           if (!resp.ok) {
-            return { ok: false, success: false, error: `HTTP 下载失败: ${resp.status}` }
+            return { ok: false, success: false, errorCode: 'NETWORK_ERROR', error: t('hostPlugin.network.download.httpFailed', { status: resp.status }) }
           }
           const arrayBuf = await resp.arrayBuffer()
           await fs.writeFile(savePath, Buffer.from(arrayBuf))
         } else {
-          return { ok: false, success: false, error: `不支持的下载协议: ${url}` }
+          return { ok: false, success: false, errorCode: 'NOT_SUPPORTED', error: t('hostPlugin.network.download.unsupportedProtocol', { url }) }
         }
         const stat = await fs.stat(savePath)
         const task = {
@@ -1124,7 +1220,7 @@ export class NetworkHostPluginHandler {
     if (lowerFn === 'parseurl' || lowerFn === 'extractinfo' || lowerFn === 'getvideoinfo') {
       const url = String(params.url ?? '').trim()
       if (!url) {
-        return { ok: false, success: false, error: '请输入有效的视频链接' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.network.video.invalidUrl') }
       }
       const parsed = new URL(url, 'https://localhost')
       return {
@@ -1134,8 +1230,8 @@ export class NetworkHostPluginHandler {
         title: parsed.pathname.split('/').filter(Boolean).pop() || 'Online Video Stream',
         site: parsed.hostname,
         formats: [
-          { id: 'best', label: '最佳画质 (MP4)', ext: 'mp4' },
-          { id: 'audio', label: '仅音频 (MP3)', ext: 'mp3' }
+          { id: 'best', labelKey: 'hostPlugin.network.video.formatBest', label: t('hostPlugin.network.video.formatBest'), ext: 'mp4' },
+          { id: 'audio', labelKey: 'hostPlugin.network.video.formatAudio', label: t('hostPlugin.network.video.formatAudio'), ext: 'mp3' }
         ]
       }
     }
@@ -1168,7 +1264,7 @@ export class NetworkHostPluginHandler {
       ok: false,
       success: false,
       errorCode: 'UNSUPPORTED_ACTION',
-      error: '请更新 Wi-Fi 密码查看插件，通过新版接口读取已保存网络，并在需要时单独读取密码'
+      error: t('hostPlugin.network.wifi.upgradeRequired')
     })
 
     if (
@@ -1187,7 +1283,7 @@ export class NetworkHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_SSID',
-          error: 'INVALID_SSID: Wi-Fi 名称无效'
+          error: t('hostPlugin.network.wifi.invalidSsid')
         }
       }
 
@@ -1206,8 +1302,19 @@ export class NetworkHostPluginHandler {
   /** netsh / ipconfig 失败：区分需要管理员权限、超时与其他失败，并带上命令输出 */
   static #netshFailure(action: string, res: { stdout: string; stderr: string; exitCode: number }) {
     const output = `${res.stderr} ${res.stdout}`.trim()
-    const errorCode = res.exitCode === 124 ? 'TIMEOUT' : /管理员|提升|elevat|administrator|拒绝访问|Access is denied/i.test(output) ? 'ADMIN_PRIVILEGE_REQUIRED' : 'NETSH_FAILED'
-    return { ok: false as const, success: false as const, errorCode, error: `${errorCode}: ${action}失败${output ? `：${output.slice(0, 300)}` : `（退出码 ${res.exitCode}）`}` }
+    const errorCode = res.exitCode === 124
+      ? 'TIMEOUT'
+      : isAccessDeniedCommandResult(res)
+        ? 'ADMIN_PRIVILEGE_REQUIRED'
+        : 'NETSH_FAILED'
+    return {
+      ok: false as const,
+      success: false as const,
+      errorCode,
+      error: output
+        ? t('hostPlugin.network.netsh.failedWithOutput', { errorCode, action, output: output.slice(0, 300) })
+        : t('hostPlugin.network.netsh.failedWithExitCode', { errorCode, action, exitCode: res.exitCode })
+    }
   }
 
   /** 读取 Windows 每块已连接网卡的 IPv4、DNS 与是否由 DHCP 下发 */
@@ -1235,7 +1342,7 @@ export class NetworkHostPluginHandler {
       @{ adapters = $list } | ConvertTo-Json -Compress -Depth 5
     `
     const parsed = JSON.parse(await this.#sys.runPowerShell(ps, 15_000, signal)) as { adapters?: unknown }
-    if (!parsed || !Array.isArray(parsed.adapters)) throw new Error('网卡信息格式无效')
+    if (!parsed || !Array.isArray(parsed.adapters)) throw hostPluginError(errorCodes.dataCorrupt, 'hostPlugin.network.dns.adapterFormatInvalid', { hostCode: 'ADAPTER_FORMAT_INVALID' })
     return (parsed.adapters as Array<Record<string, unknown>>).map(item => ({
       name: String(item.name ?? ''),
       description: String(item.description ?? item.name ?? ''),
@@ -1256,7 +1363,7 @@ export class NetworkHostPluginHandler {
       adapterName,
       ...(adapter ? { currentDns: adapter.currentDns, isDhcp: adapter.isDhcp } : { currentDnsUnknown: true }),
       flushed: flush.exitCode === 0,
-      ...(flush.exitCode === 0 ? {} : { flushError: NetworkHostPluginHandler.#netshFailure('刷新 DNS 缓存', flush).error })
+      ...(flush.exitCode === 0 ? {} : { flushError: NetworkHostPluginHandler.#netshFailure(t('hostPlugin.network.netsh.actionFlushDns'), flush).error })
     }
   }
 
@@ -1303,7 +1410,7 @@ export class NetworkHostPluginHandler {
         try {
           for (const item of await this.#readWindowsDnsAdapters(signal)) adapters.push(item)
         } catch (err) {
-          return { ok: false, success: false, errorCode: 'ADAPTER_READ_FAILED', error: `ADAPTER_READ_FAILED: 读取网卡 DNS 配置失败：${err instanceof Error ? err.message : String(err)}` }
+          return { ok: false, success: false, errorCode: 'ADAPTER_READ_FAILED', error: t('hostPlugin.network.dns.adapterReadFailed', { detail: err instanceof Error ? err.message : String(err) }) }
         }
       } else {
         const sysDns = dns
@@ -1322,7 +1429,7 @@ export class NetworkHostPluginHandler {
         ok: true,
         success: true,
         adapters,
-        ...(adapters.length === 0 ? { message: '未找到已连接且可修改 DNS 的网卡' } : {})
+        ...(adapters.length === 0 ? { message: t('hostPlugin.network.dns.noEditableAdapters') } : {})
       }
     }
 
@@ -1391,7 +1498,7 @@ export class NetworkHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_ADAPTER_NAME',
-          error: 'INVALID_ADAPTER_NAME: 网卡名称不合法或包含危险字符'
+          error: t('hostPlugin.network.dns.invalidAdapterNameChars')
         }
       }
 
@@ -1403,23 +1510,23 @@ export class NetworkHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_DNS_IP',
-          error: `INVALID_DNS_IP: 非法的 IPv4 DNS 地址 (${primary}${secondary ? `, ${secondary}` : ''})`
+          error: t('hostPlugin.network.dns.invalidDnsIp', { addresses: `${primary}${secondary ? `, ${secondary}` : ''}` })
         }
       }
 
       if (params.executeSystemModify !== true) {
-        return { ok: false, success: false, errorCode: 'NOT_EXECUTED', error: 'NOT_EXECUTED: 未执行系统修改（executeSystemModify 未开启），DNS 未改变' }
+        return { ok: false, success: false, errorCode: 'NOT_EXECUTED', error: t('hostPlugin.network.dns.notExecuted') }
       }
       if (process.platform !== 'win32') {
-        return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: '此入口仅用于 Windows；macOS 请使用新版 DNS 测速插件' }
+        return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: t('hostPlugin.network.dns.windowsOnlyLegacy') }
       }
       const setPrimary = await this.#sys.runCommand('netsh', ['interface', 'ip', 'set', 'dns', `name=${adapterName}`, 'static', primary, 'validate=no'], 10_000, signal)
-      if (setPrimary.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure('修改主 DNS', setPrimary)
+      if (setPrimary.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure(t('hostPlugin.network.netsh.actionSetPrimaryDns'), setPrimary)
       if (secondary) {
         const addSecondary = await this.#sys.runCommand('netsh', ['interface', 'ip', 'add', 'dns', `name=${adapterName}`, secondary, 'index=2', 'validate=no'], 10_000, signal)
         if (addSecondary.exitCode !== 0) {
-          const failure = NetworkHostPluginHandler.#netshFailure('添加备用 DNS', addSecondary)
-          return { ...failure, errorCode: 'SECONDARY_DNS_FAILED', error: `SECONDARY_DNS_FAILED: 主 DNS 已改为 ${primary}，但${failure.error}` }
+          const failure = NetworkHostPluginHandler.#netshFailure(t('hostPlugin.network.netsh.actionAddSecondaryDns'), addSecondary)
+          return { ...failure, errorCode: 'SECONDARY_DNS_FAILED', error: t('hostPlugin.network.dns.secondaryFailed', { primary, detail: failure.error }) }
         }
       }
       return this.#dnsChangeResult(adapterName, signal)
@@ -1432,36 +1539,36 @@ export class NetworkHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_ADAPTER_NAME',
-          error: 'INVALID_ADAPTER_NAME: 网卡名称不合法'
+          error: t('hostPlugin.network.dns.invalidAdapterName')
         }
       }
       if (params.executeSystemModify !== true) {
-        return { ok: false, success: false, errorCode: 'NOT_EXECUTED', error: 'NOT_EXECUTED: 未执行系统修改（executeSystemModify 未开启），DNS 未改变' }
+        return { ok: false, success: false, errorCode: 'NOT_EXECUTED', error: t('hostPlugin.network.dns.notExecuted') }
       }
       if (process.platform !== 'win32') {
-        return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: '此入口仅用于 Windows；macOS 请使用新版 DNS 测速插件' }
+        return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: t('hostPlugin.network.dns.windowsOnlyLegacy') }
       }
       const reset = await this.#sys.runCommand('netsh', ['interface', 'ip', 'set', 'dns', `name=${adapterName}`, 'dhcp'], 10_000, signal)
-      if (reset.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure('恢复自动获取 DNS', reset)
+      if (reset.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure(t('hostPlugin.network.netsh.actionResetAutoDns'), reset)
       return this.#dnsChangeResult(adapterName, signal)
     }
 
     if (lowerFn === 'flushcache' || lowerFn === 'flushdns') {
       if (params.skipSystemExec === true) {
-        return { ok: false, success: false, errorCode: 'NOT_EXECUTED', error: 'NOT_EXECUTED: 未执行刷新' }
+        return { ok: false, success: false, errorCode: 'NOT_EXECUTED', error: t('hostPlugin.network.dns.flushNotExecuted') }
       }
       const res = process.platform === 'win32'
         ? await this.#sys.runCommand('ipconfig', ['/flushdns'], 10_000, signal)
         : process.platform === 'darwin'
           ? await this.#sys.runCommand('dscacheutil', ['-flushcache'], 10_000, signal)
           : null
-      if (!res) return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: '当前平台不支持刷新 DNS 缓存' }
-      if (res.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure('刷新 DNS 缓存', res)
+      if (!res) return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: t('hostPlugin.network.flushDnsUnsupported') }
+      if (res.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure(t('hostPlugin.network.netsh.actionFlushDns'), res)
       return {
         ok: true,
         success: true,
         flushed: true,
-        message: '已清空并刷新本机 DNS 解析缓存'
+        message: t('hostPlugin.network.dns.flushCompleted')
       }
     }
 
@@ -1491,7 +1598,7 @@ export class NetworkHostPluginHandler {
         ok: false,
         success: false,
         errorCode: 'UNSUPPORTED_ACTION',
-        error: '请更新网络测速插件，通过新版接口测量带宽与检测节点（新版接口目前仅支持 macOS）'
+        error: t('hostPlugin.network.speedtest.upgradeRequired')
       }
     }
 
@@ -1511,7 +1618,7 @@ export class NetworkHostPluginHandler {
   ): Promise<unknown> {
     const lowerFn = (fn ?? '').trim().toLowerCase()
     if (process.platform === 'darwin' && (!['read', 'readsystemhosts'].includes(lowerFn) || Object.keys(params).length)) {
-      return { ok: false, success: false, errorCode: 'UPGRADE_REQUIRED', error: '请更新域名映射插件，使用带备份和系统授权的 Hosts 安全管理入口' }
+      return { ok: false, success: false, errorCode: 'UPGRADE_REQUIRED', error: t('hostPlugin.network.hosts.upgradeRequired') }
     }
     const defaultHostsPath =
       process.platform === 'win32'
@@ -1529,7 +1636,7 @@ export class NetworkHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'READ_FAILED',
-          error: err instanceof Error ? err.message : '无法读取系统 hosts 文件'
+          error: resolveHostErrorMessage(err, 'hostPlugin.network.hosts.readFailed')
         }
       }
     }
@@ -1541,19 +1648,19 @@ export class NetworkHostPluginHandler {
         ok: false,
         success: false,
         errorCode: 'UNSUPPORTED_ACTION',
-        error: process.platform === 'win32' ? 'Windows 版域名映射正在重做，暂不支持写入系统 hosts' : '当前系统不支持通过旧接口写入系统 hosts'
+        error: process.platform === 'win32' ? t('hostPlugin.network.hosts.writeWinReworking') : t('hostPlugin.network.hosts.writeUnsupported')
       }
     }
 
     if (lowerFn === 'flushdns') {
-      if (params.dryRun === true) return { ok: true, success: true, dryRun: true, output: '预览：将执行 ipconfig /flushdns，未实际刷新' }
+      if (params.dryRun === true) return { ok: true, success: true, dryRun: true, output: t('hostPlugin.network.hosts.flushDryRun') }
       if (process.platform !== 'win32') {
-        return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: '此入口仅用于 Windows，未刷新 DNS 缓存' }
+        return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: t('hostPlugin.network.hosts.flushWinOnly') }
       }
       // 超时（124）、取消（130）或其他非零退出都如实报错，不能报告“已刷新”
       const res = await this.#sys.runCommand('ipconfig', ['/flushdns'], 3000, signal)
-      if (res.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure('刷新 DNS 缓存', res)
-      return { ok: true, success: true, output: res.stdout || '已刷新本地 DNS 缓存' }
+      if (res.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure(t('hostPlugin.network.netsh.actionFlushDns'), res)
+      return { ok: true, success: true, output: res.stdout || t('hostPlugin.network.hosts.flushDone') }
     }
 
     return { ok: false, success: false, error: `Unsupported HostsSwitcherPlugin function: ${fn}` }
@@ -1581,7 +1688,7 @@ export class NetworkHostPluginHandler {
         success: online,
         online,
         version: res.stdout.trim(),
-        ...(online ? {} : { errorCode: 'DAEMON_OFFLINE', error: 'Docker 引擎未运行' })
+        ...(online ? {} : { errorCode: 'DAEMON_OFFLINE', error: t('hostPlugin.network.docker.daemonOffline') })
       }
     }
 
@@ -1592,7 +1699,7 @@ export class NetworkHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'DAEMON_OFFLINE',
-          error: 'DAEMON_OFFLINE: 无法连接本地 Docker 守护进程'
+          error: t('hostPlugin.network.docker.daemonUnreachable')
         }
       }
       const containers = res.stdout
@@ -1614,10 +1721,10 @@ export class NetworkHostPluginHandler {
       const id = String(params.id ?? '').trim()
       const action = String(params.action ?? '').trim().toLowerCase()
       if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(id)) {
-        return { ok: false, success: false, errorCode: 'INVALID_CONTAINER_ID', error: '容器 ID 非法' }
+        return { ok: false, success: false, errorCode: 'INVALID_CONTAINER_ID', error: t('hostPlugin.network.docker.invalidContainerId') }
       }
       if (!['start', 'stop', 'restart', 'rm', 'remove'].includes(action)) {
-        return { ok: false, success: false, errorCode: 'INVALID_ACTION', error: `不支持的容器操作: ${action}` }
+        return { ok: false, success: false, errorCode: 'INVALID_ACTION', error: t('hostPlugin.network.docker.unsupportedAction', { action }) }
       }
       const dockerSub = action === 'remove' ? 'rm' : action
       if (params.dryRun === true) {
@@ -1637,7 +1744,7 @@ export class NetworkHostPluginHandler {
       const id = String(params.id ?? '').trim()
       const lines = Math.max(1, Math.min(500, Number(params.lines) || 100))
       if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(id)) {
-        return { ok: false, success: false, errorCode: 'INVALID_CONTAINER_ID', error: '容器 ID 非法' }
+        return { ok: false, success: false, errorCode: 'INVALID_CONTAINER_ID', error: t('hostPlugin.network.docker.invalidContainerId') }
       }
       const res = await this.#sys.runCommand('docker', ['logs', '--tail', String(lines), id], 5000, signal)
       return {
@@ -1654,7 +1761,7 @@ export class NetworkHostPluginHandler {
   static buildWolMagicPacket(mac: string): Buffer {
     const clean = (mac ?? '').trim().replace(/[:-]/g, '')
     if (!/^[0-9a-fA-F]{12}$/.test(clean)) {
-      throw new Error('INVALID_MAC_ADDRESS: MAC 地址格式无效，必须为 6 组十六进制字符 (如 00:11:22:33:44:55)')
+      throw hostPluginError(errorCodes.invalidRequest, 'hostPlugin.network.lan.invalidMacFormat', { hostCode: 'INVALID_MAC_ADDRESS' })
     }
     const macBytes = Buffer.from(clean, 'hex')
     const packet = Buffer.alloc(102)
@@ -1670,14 +1777,14 @@ export class NetworkHostPluginHandler {
     params: Record<string, unknown>,
     _signal?: AbortSignal
   ): Promise<unknown> {
-    if (process.platform === 'darwin') return { success: false, error: 'Mac 局域网扫描旧接口不支持，请升级插件与客户端' }
+    if (process.platform === 'darwin') return { success: false, errorCode: 'UPGRADE_REQUIRED', error: t('hostPlugin.network.lan.macLegacyUnsupported') }
     const lowerFn = (fn ?? '').trim().toLowerCase()
     // 旧接口的真实分支把非 /24 网段一律当 /24、只回原始 arp 文本、唤醒不核对网卡；真实扫描与唤醒改由 lan_network 新接口完成
     const lanPluginOutdated = () => ({
       ok: false,
       success: false,
       errorCode: 'UNSUPPORTED_ACTION',
-      error: '请更新局域网扫描插件，通过新版接口扫描与唤醒'
+      error: t('hostPlugin.network.lan.upgradeRequired')
     })
 
     if (lowerFn === 'interfaces' || lowerFn === 'detectactiveinterfaces' || lowerFn === 'scan' || lowerFn === 'scansubnet') {
@@ -1694,7 +1801,7 @@ export class NetworkHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'INVALID_MAC_ADDRESS',
-          error: err instanceof Error ? err.message : '非法 MAC 地址'
+          error: resolveHostErrorMessage(err, 'hostPlugin.network.lan.invalidMac')
         }
       }
 
@@ -1732,7 +1839,7 @@ export class NetworkHostPluginHandler {
         ok: false,
         success: false,
         errorCode: 'UNSUPPORTED_ACTION',
-        error: '请更新主机与代理插件，通过新版接口读取 SSH 主机并管理 Git、NPM 代理'
+        error: t('hostPlugin.network.ssh.upgradeRequired')
       }
     }
 
@@ -1754,7 +1861,7 @@ export class NetworkHostPluginHandler {
     ) {
       const rawDomain = String(params.domain ?? params.host ?? '').trim()
       if (!rawDomain) {
-        return { ok: false, success: false, errorCode: 'EMPTY_DOMAIN', error: '域名不能为空' }
+        return { ok: false, success: false, errorCode: 'EMPTY_DOMAIN', error: t('hostPlugin.network.tls.emptyDomain') }
       }
       const host = rawDomain
         .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
@@ -1792,7 +1899,7 @@ export class NetworkHostPluginHandler {
                   ok: false,
                   success: false,
                   errorCode: 'NO_PEER_CERT',
-                  error: `目标主机 ${host}:${port} 未返回 TLS 证书`
+                  error: t('hostPlugin.network.tls.noCertificate', { host, port })
                 })
                 return
               }
@@ -1839,7 +1946,7 @@ export class NetworkHostPluginHandler {
 
         const onAbort = (): void => {
           socket.destroy()
-          finish({ ok: false, success: false, errorCode: 'ABORTED', error: 'TLS 证书探测已取消' })
+          finish({ ok: false, success: false, errorCode: 'ABORTED', error: t('hostPlugin.network.tls.aborted') })
         }
         if (signal) {
           if (signal.aborted) {
@@ -1855,7 +1962,7 @@ export class NetworkHostPluginHandler {
             ok: false,
             success: false,
             errorCode: 'TLS_TIMEOUT',
-            error: `连接 ${host}:${port} TLS 握手超时 (${timeoutMs}ms)`
+            error: t('hostPlugin.network.tls.timeout', { host, port, timeoutMs })
           })
         })
 

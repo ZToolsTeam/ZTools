@@ -64,11 +64,11 @@ function createAdapters(): ScreenClipboardAdapters {
 test('Windows PowerShell adapters do not expose stderr or spawn error details', () => {
   const clipboardError = windowsClipboardFailure(new Error('PowerShell failed for C:\\Users\\alice\\private.txt'))
   assert.equal(clipboardError.code, errorCodes.clipboardError)
-  assert.equal(clipboardError.message, '剪贴板操作失败')
+  assert.equal(clipboardError.message, 'Clipboard operation failed')
 
   const screenError = windowsScreenFailure(new Error('GDI failed for display capture at C:\\Users\\alice'))
   assert.equal(screenError.code, errorCodes.screenError)
-  assert.equal(screenError.message, '屏幕操作失败')
+  assert.equal(screenError.message, 'Screen operation failed')
 })
 
 test('platform factory selects an explicit implementation and does not fall back on macOS', () => {

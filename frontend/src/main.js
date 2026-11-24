@@ -20,10 +20,6 @@ import { useNavStore } from './stores/nav'
 import { useToast } from '@/composables/useToast'
 import { syncGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
 import { openSettings } from '@/utils/internalPlugins'
-import { applyTranslationServiceConfig } from '@/config/translation'
-
-// 内置翻译命令的在线翻译服务地址（构建时注入；未配置时只用内置词典）
-applyTranslationServiceConfig()
 
 // 创建应用
 const app = createApp(App)

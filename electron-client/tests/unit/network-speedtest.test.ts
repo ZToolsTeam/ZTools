@@ -67,12 +67,12 @@ test('操作互斥、调用者隔离、取消等待底层退出、关闭窗口/�
   const service = new NetworkSpeedtestService(provider, 'darwin'), call = (r: unknown, who = caller) => service.handle(r, who, signal()), request = { action: 'bandwidth', operationId: 'first' }
   try {
     const pending = call(request), rejected = assert.rejects(pending)
-    await assert.rejects(call({ ...request, operationId: 'second' }), /正在进行/)
-    await assert.rejects(call({ action: 'cancel', operationId: 'first' }, { ...caller, pluginInstanceId: 'other' }), /其他窗口/)
+    await assert.rejects(call({ ...request, operationId: 'second' }), /already in progress/)
+    await assert.rejects(call({ action: 'cancel', operationId: 'first' }, { ...caller, pluginInstanceId: 'other' }), /another window/)
     await call({ action: 'cancel', operationId: 'first' }); await rejected; assert.equal(ended, 1)
     const next = call(request), nextRejected = assert.rejects(next); service.closeOwner(caller.webContentsId); await nextRejected; assert.equal(ended, 2)
     await assert.rejects(call({ action: 'diagnose', operationId: 'failure' }), /检测失败/)
     provider.bandwidth = async () => bandwidth(); assert.equal((await call(request) as { success: boolean }).success, true)
-    await service.stop(); await assert.rejects(call(request), /停止/)
+    await service.stop(); await assert.rejects(call(request), /stopped/)
   } finally { await service.stop() }
 })

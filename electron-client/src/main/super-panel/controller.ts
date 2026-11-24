@@ -3,6 +3,7 @@ import {
   shell
 } from 'electron'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
+import { t } from '../i18n/index.js'
 import { readMacosApplicationIconCached } from '../platform/macos/application-icon.js'
 import type { ConfigService } from '../services/config-service.js'
 import type { PluginStateProvider } from '../services/plugin-state-service.js'
@@ -13,9 +14,9 @@ import { SuperPanelDataService } from './data-service.js'
 const ITEM_ID_PATTERN = PLUGIN_ID_PATTERN
 const SYSTEM_TOOL_ITEM_ID_PATTERN = /^system-tool:[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
-function requireText(value: unknown, label: string, maximum: number): string {
+function requireText(value: unknown, errorKey: string, maximum: number): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || value.includes('\0')) {
-    throw new Error(`${label} 无效`)
+    throw new Error(t(errorKey))
   }
   return value
 }
@@ -59,24 +60,24 @@ export class SuperPanelController {
   }
 
   getData(): ReturnType<SuperPanelDataService['getData']> {
-    if (this.#stopping) return Promise.reject(new Error('应用正在退出'))
+    if (this.#stopping) return Promise.reject(new Error(t('superPanel.error.appStopping')))
     return this.#data.getData()
   }
 
   setPin(entry: unknown, pinned: unknown, caller?: CallerIdentity): ReturnType<SuperPanelDataService['setPin']> {
-    if (this.#stopping) return Promise.reject(new Error('应用正在退出'))
+    if (this.#stopping) return Promise.reject(new Error(t('superPanel.error.appStopping')))
     return this.#data.setPin(entry, pinned, caller)
   }
 
   reorderPins(order: unknown): ReturnType<SuperPanelDataService['reorderPins']> {
-    if (this.#stopping) return Promise.reject(new Error('应用正在退出'))
+    if (this.#stopping) return Promise.reject(new Error(t('superPanel.error.appStopping')))
     return this.#data.reorderPins(order)
   }
 
   async togglePin(id: string, itemType: string): Promise<{ success: true; pinned: boolean }> {
-    if (this.#stopping) throw new Error('应用正在退出')
-    const validId = requireText(id, '项目 ID', 128)
-    const validType = requireText(itemType, '项目类型', 32)
+    if (this.#stopping) throw new Error(t('superPanel.error.appStopping'))
+    const validId = requireText(id, 'superPanel.error.invalidItemId', 128)
+    const validType = requireText(itemType, 'superPanel.error.invalidItemType', 32)
     return { success: true, pinned: await this.#data.togglePin(validId, validType) }
   }
 
@@ -86,29 +87,29 @@ export class SuperPanelController {
     query?: string,
     action?: unknown
   ): Promise<{ success: true }> {
-    if (this.#stopping) throw new Error('应用正在退出')
-    const validType = requireText(itemType, '项目类型', 32)
+    if (this.#stopping) throw new Error(t('superPanel.error.appStopping'))
+    const validType = requireText(itemType, 'superPanel.error.invalidItemType', 32)
     if (query !== undefined && (typeof query !== 'string' || query.length > 512)) {
-      throw new Error('搜索文本无效')
+      throw new Error(t('superPanel.error.invalidQuery'))
     }
     if (validType === 'pinned') {
-      const pinKey = requireText(id, '固定项 Key', 32_800)
+      const pinKey = requireText(id, 'superPanel.error.invalidPinKey', 32_800)
       const resolvedAction = action === undefined ? 'open' : action
       if (resolvedAction !== 'open' && resolvedAction !== 'reveal') {
-        throw new Error('固定项打开动作无效')
+        throw new Error(t('superPanel.error.invalidOpenAction'))
       }
       await this.#data.openPinnedFile(pinKey, resolvedAction)
       return { success: true }
     }
-    const validId = requireText(id, '项目 ID', 128)
+    const validId = requireText(id, 'superPanel.error.invalidItemId', 128)
     const isValid = validType === 'system_tool'
       ? SYSTEM_TOOL_ITEM_ID_PATTERN.test(validId)
       : ITEM_ID_PATTERN.test(validId)
     if (!isValid || !['plugin', 'system_tool'].includes(validType)) {
-      throw new Error('悬浮条项目无效')
+      throw new Error(t('superPanel.error.invalidItem'))
     }
     if (validType === 'system_tool') {
-      if (!this.options.systemTools) throw new Error('系统工具不可用')
+      if (!this.options.systemTools) throw new Error(t('superPanel.error.systemToolsUnavailable'))
       await this.options.systemTools.openTarget(validId.slice('system-tool:'.length))
     } else {
       await this.#data.markPluginUsed(validId)

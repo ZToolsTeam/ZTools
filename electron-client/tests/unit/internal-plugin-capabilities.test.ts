@@ -294,7 +294,7 @@ test('blocks spoofed pluginId parameter attack scenarios with PERMISSION_DENIED'
     (error: unknown) => {
       assert.ok(error instanceof ZToolsError)
       assert.equal(error.code, errorCodes.permissionDenied)
-      assert.ok(error.message.includes('pluginId 与注册身份不匹配'))
+      assert.ok(error.message.includes('Caller pluginId does not match registered identity'))
       return true
     }
   )
@@ -328,7 +328,7 @@ test('blocks spoofed pluginId parameter attack scenarios with PERMISSION_DENIED'
     (error: unknown) => {
       assert.ok(error instanceof ZToolsError)
       assert.equal(error.code, errorCodes.permissionDenied)
-      assert.ok(error.message.includes('pluginId 与注册身份不匹配'))
+      assert.ok(error.message.includes('Caller pluginId does not match registered identity'))
       return true
     }
   )
@@ -371,7 +371,7 @@ test('blocks spoofed WebContents origin URL tampering with PERMISSION_DENIED', (
     (error: unknown) => {
       assert.ok(error instanceof ZToolsError)
       assert.equal(error.code, errorCodes.permissionDenied)
-      assert.ok(error.message.includes('来源 URL 与注册插件身份不匹配'))
+      assert.ok(error.message.includes('WebContents origin URL does not match registered plugin identity'))
       return true
     }
   )
@@ -385,7 +385,7 @@ test('blocks spoofed WebContents origin URL tampering with PERMISSION_DENIED', (
     (error: unknown) => {
       assert.ok(error instanceof ZToolsError)
       assert.equal(error.code, errorCodes.permissionDenied)
-      assert.ok(error.message.includes('主程序 WebContents 来源无效'))
+      assert.ok(error.message.includes('Invalid main application WebContents origin'))
       return true
     }
   )

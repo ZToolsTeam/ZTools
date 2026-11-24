@@ -11,13 +11,13 @@ export const runDockerCommand: DockerCommand = (file, args, signal, env, timeout
   const child = spawn(file, [...args], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env })
   const stdout: Buffer[] = [], stderr: Buffer[] = []
   let size = 0, failure: Error | undefined
-  const abort = () => { failure ??= new Error('Docker 请求已取消，操作结果请刷新确认'); child.kill('SIGKILL') }
-  const timer = setTimeout(() => { failure ??= new Error('Docker 请求超时，操作结果请刷新确认'); child.kill('SIGKILL') }, timeoutMs)
+  const abort = () => { failure ??= new Error('Docker request was cancelled; please refresh to verify the operation result'); child.kill('SIGKILL') }
+  const timer = setTimeout(() => { failure ??= new Error('Docker request timed out; please refresh to verify the operation result'); child.kill('SIGKILL') }, timeoutMs)
   signal.addEventListener('abort', abort, { once: true })
   if (signal.aborted) abort()
   const receive = (chunks: Buffer[], chunk: Buffer) => {
     size += chunk.length
-    if (size > 4 * 1024 * 1024) { failure ??= new Error('Docker 输出超过 4 MiB，请缩小操作范围'); child.kill('SIGKILL'); return }
+    if (size > 4 * 1024 * 1024) { failure ??= new Error('Docker output exceeded 4 MiB; please narrow the operation scope'); child.kill('SIGKILL'); return }
     chunks.push(chunk)
   }
   child.stdout.on('data', chunk => receive(stdout, chunk)); child.stderr.on('data', chunk => receive(stderr, chunk))
@@ -29,7 +29,7 @@ export const runDockerCommand: DockerCommand = (file, args, signal, env, timeout
     else if (code !== 0 || exitSignal) {
       const reason = result.stderr.trim()
       reject(new Error(/cannot connect to the docker daemon|failed to connect to the docker API/i.test(reason) ?
-        '无法连接本机 Docker 引擎。请启动 Docker Desktop、Colima 或 OrbStack，再点击刷新' : `Docker 执行失败：${reason.slice(0, 1500) || exitSignal || code}`))
+        'Unable to connect to local Docker daemon. Please start Docker Desktop, Colima, or OrbStack and click Refresh' : `Docker command failed: ${reason.slice(0, 1500) || exitSignal || code}`))
     }
     else resolve(result)
   })
@@ -46,7 +46,7 @@ export async function findDockerExecutable(env = process.env, platform = process
     try { await fs.access(file, constants.X_OK); if ((await fs.stat(file)).isFile()) return file }
     catch (error) { if (!['ENOENT', 'ENOTDIR', 'EACCES'].includes(String((error as NodeJS.ErrnoException).code))) throw error }
   }
-  throw new Error('未找到 Docker 命令行。请安装并启动 Docker Desktop，或配置已有的 Colima / OrbStack Docker 环境后重试')
+  throw new Error('Docker CLI not found. Please install and start Docker Desktop, or configure an existing Colima / OrbStack Docker environment and retry')
 }
 export interface DockerConnection { executable: string; endpoint: string; context: string }
 export class DockerCli {
@@ -61,14 +61,14 @@ export class DockerCli {
     let endpoint = env.DOCKER_HOST, context = 'DOCKER_HOST'
     if (!endpoint || env.DOCKER_CONTEXT) {
       context = (await this.command(executable, ['context', 'show'], signal, env)).stdout.trim()
-      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/.test(context)) throw new Error('Docker 当前上下文无效')
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$/.test(context)) throw new Error('Current Docker context is invalid')
       const raw: unknown = JSON.parse((await this.command(executable, ['context', 'inspect', context], signal, env)).stdout)
-      if (!Array.isArray(raw) || raw.length !== 1 || !dockerRecord(raw[0]) || !dockerRecord(raw[0].Endpoints) || !dockerRecord(raw[0].Endpoints.docker) || typeof raw[0].Endpoints.docker.Host !== 'string') throw new Error('无法读取 Docker 上下文连接地址')
+      if (!Array.isArray(raw) || raw.length !== 1 || !dockerRecord(raw[0]) || !dockerRecord(raw[0].Endpoints) || !dockerRecord(raw[0].Endpoints.docker) || typeof raw[0].Endpoints.docker.Host !== 'string') throw new Error('Unable to read Docker context endpoint')
       endpoint = raw[0].Endpoints.docker.Host
     }
     const localUnix = endpoint.startsWith('unix:///') && !/[\r\n\0]/.test(endpoint) && path.posix.isAbsolute(endpoint.slice(7))
     const localPipe = this.platform === 'win32' && /^npipe:\/\/\/\/\.\/pipe\/[a-zA-Z0-9_.-]+$/.test(endpoint)
-    if (!localUnix && !localPipe) throw new Error(`当前 Docker 上下文 ${context} 不是本机连接；请在 Docker 中切换到本机上下文后刷新`)
+    if (!localUnix && !localPipe) throw new Error(`Current Docker context ${context} is not a local connection; please switch to a local context in Docker and refresh`)
     return { executable, endpoint, context }
   }
   run(connection: DockerConnection, args: readonly string[], signal: AbortSignal, timeoutMs?: number) {

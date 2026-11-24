@@ -357,10 +357,10 @@ export function teardownKeymapListener() {
  */
 export function registerKeyHandler(scope, handler, options = {}) {
   if (!SCOPE_ORDER.includes(scope)) {
-    throw new Error(`[Keymap] 无效的作用域: "${scope}"，可用作用域为: ${SCOPE_ORDER.join(', ')}`)
+    throw new Error(`[Keymap] Invalid scope: "${scope}". Available scopes: ${SCOPE_ORDER.join(', ')}`)
   }
   if (!handler || (typeof handler !== 'function' && typeof handler !== 'object')) {
-    throw new Error('[Keymap] 处理器必须为函数或按键映射对象')
+    throw new Error('[Keymap] Handler must be a function or key binding map')
   }
 
   ensureKeymapListener()

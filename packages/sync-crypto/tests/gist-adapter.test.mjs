@@ -9,7 +9,7 @@ import {
 test('GistSyncAdapter: throws error if PAT token is missing', () => {
   assert.throws(
     () => new GistSyncAdapter({ token: '  ' }),
-    /需要有效的 Personal Access Token/
+    /requires a valid Personal Access Token/
   )
 })
 

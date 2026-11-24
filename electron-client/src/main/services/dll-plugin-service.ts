@@ -30,6 +30,7 @@ import {
   findCommonPlugin,
   type CommonPluginDefinition
 } from './common-plugin-registry.js'
+import { getResolvedLocale, syncProcessLocaleEnv, t, type SupportedLocale } from '../i18n/index.js'
 
 interface PluginManifestSource {
   list(): Promise<{ success: true; data: Record<string, unknown>[] }>
@@ -119,6 +120,7 @@ type CallbackResultStatus = 'progress' | 'completed' | 'cancelled' | 'error' | '
 interface CallbackResultDetails {
   status: CallbackResultStatus
   value: unknown
+  serializedResult?: string
   progress?: number
   current?: number
   total?: number
@@ -152,6 +154,302 @@ function dllIdFromLoader(loader: string): string {
   return fileName.slice(0, -4)
 }
 
+const DLL_ERROR_CODE_PATTERN = /^[A-Z0-9_]{1,64}$/
+const DLL_PARAM_CJK_PATTERN = /[\u4e00-\u9fa5]/
+const MAX_DLL_PARAM_STRING_LENGTH = 512
+
+/** 有常驻原生界面、需在热切换语言时接收 __setLocale 推送的三款 DLL（键为小写 dllId） */
+const RESIDENT_UI_DLL_IDS: ReadonlySet<string> = new Set([
+  'screencaptureplugin',
+  'recordplugin',
+  'screencolorpickerplugin'
+])
+
+function isResidentUiDll(dllId: string): boolean {
+  return RESIDENT_UI_DLL_IDS.has(dllId.toLowerCase())
+}
+
+/**
+ * 清洗原生 DLL 返回的 errorParams（遵循 R9 防中文绕过与安全脱敏规范）：
+ * - 清洗控制字符并限制单字段最大长度；
+ * - 在 en-US 模式下将含 CJK 字符或空白的 detail/stderr 替换为本地化占位词 common.detailUnavailable，
+ *   避免原生中文透出或模板残留裸 {detail}/{stderr} 占位符。
+ */
+export function sanitizeDllErrorParams(
+  raw: unknown,
+  locale?: SupportedLocale
+): Record<string, string | number> | undefined {
+  if (!isRecord(raw)) return undefined
+  const targetLocale = locale ?? getResolvedLocale()
+  const params: Record<string, string | number> = {}
+  let hasEntry = false
+  for (const [key, value] of Object.entries(raw)) {
+    if (!Object.hasOwn(raw, key) || !/^[A-Za-z0-9_]{1,64}$/.test(key)) continue
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      params[key] = value
+      hasEntry = true
+    } else if (typeof value === 'string') {
+      const cleaned = value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim()
+      const isDetailKey = key === 'detail' || key === 'stderr'
+      if (!cleaned) {
+        if (isDetailKey) {
+          params[key] = t('common.detailUnavailable', undefined, targetLocale)
+          hasEntry = true
+        }
+        continue
+      }
+      if (targetLocale === 'en-US' && isDetailKey && DLL_PARAM_CJK_PATTERN.test(cleaned)) {
+        params[key] = t('common.detailUnavailable', undefined, targetLocale)
+        hasEntry = true
+        continue
+      }
+      params[key] = cleaned.length > MAX_DLL_PARAM_STRING_LENGTH
+        ? `${cleaned.slice(0, MAX_DLL_PARAM_STRING_LENGTH)}...`
+        : cleaned
+      hasEntry = true
+    }
+  }
+  return hasEntry ? params : undefined
+}
+
+function resolveNativeErrorMessage(
+  raw: unknown,
+  fallbackKey: string,
+  params?: Readonly<Record<string, string | number>>
+): string {
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  if (text && !(getResolvedLocale() === 'en-US' && DLL_PARAM_CJK_PATTERN.test(text))) {
+    return text
+  }
+  return t(fallbackKey, params)
+}
+
+function appendStructuredDllContext(
+  localized: string,
+  templateKey: string,
+  safeParams: Record<string, string | number> | undefined,
+  locale: SupportedLocale
+): string {
+  if (!safeParams) return localized
+  const rawTemplate = t(templateKey, undefined, locale)
+  const supplements: string[] = []
+  const hasPlaceholder = (name: string): boolean => rawTemplate.includes(`{${name}}`)
+
+  if (typeof safeParams.path === 'string' && !hasPlaceholder('path')) {
+    supplements.push(safeParams.path)
+  }
+  if (safeParams.exitCode !== undefined && !hasPlaceholder('exitCode')) {
+    supplements.push(t('dll.exitCodeLabel', { exitCode: safeParams.exitCode }, locale))
+  }
+  const detailUnavailable = t('common.detailUnavailable', undefined, locale)
+  if (typeof safeParams.detail === 'string' && !hasPlaceholder('detail') && safeParams.detail !== detailUnavailable) {
+    supplements.push(safeParams.detail)
+  }
+  if (supplements.length === 0) return localized
+  const base = localized.replace(/[。.]$/, '')
+  return locale === 'zh-CN'
+    ? `${base}（${supplements.join('；')}）`
+    : `${base} (${supplements.join('; ')})`
+}
+
+/**
+ * 安全向传给原生 DLL 的 params 对象注入当前生效的 __locale，
+ * 始终返回新对象，绝不原地污染调用方入参（遵循 R4 零 ABI 破坏协议）。
+ */
+export function withDllLocale(
+  params: Record<string, unknown>,
+  locale?: SupportedLocale
+): Record<string, unknown> {
+  return { ...params, __locale: locale ?? getResolvedLocale() }
+}
+
+function translateDllTemplate(
+  key: string,
+  safeParams: Readonly<Record<string, string | number>> | undefined,
+  locale: SupportedLocale
+): string {
+  const rawTemplate = t(key, undefined, locale)
+  if (rawTemplate === key) return key
+  const needsDetail = rawTemplate.includes('{detail}') && (!safeParams || !Object.hasOwn(safeParams, 'detail'))
+  const needsStderr = rawTemplate.includes('{stderr}') && (!safeParams || !Object.hasOwn(safeParams, 'stderr'))
+  if (!needsDetail && !needsStderr) {
+    return t(key, safeParams, locale)
+  }
+  const unavailable = t('common.detailUnavailable', undefined, locale)
+  return t(
+    key,
+    {
+      ...(safeParams ?? {}),
+      ...(needsDetail ? { detail: unavailable } : {}),
+      ...(needsStderr ? { stderr: unavailable } : {})
+    },
+    locale
+  )
+}
+
+/**
+ * 翻译原生 DLL 进度消息：
+ * - 若为合法 JSON 对象且包含规范 progressCode，则优先查主进程词典 dllProgress.<progressCode>
+ *   并插值经 R9 清洗的 progressParams；缺失词条时回退 fallback；
+ * - 否则原样兼容旧版纯文本进度消息。
+ */
+export function localizeDllProgressMessage(
+  rawMessage: string,
+  locale?: SupportedLocale
+): string {
+  if (typeof rawMessage !== 'string') return ''
+  const trimmed = rawMessage.trim()
+  if (!trimmed.startsWith('{')) return rawMessage
+  const parsed = parseDllResult(trimmed)
+  if (!isRecord(parsed)) return rawMessage
+  const rawCode = typeof parsed.progressCode === 'string' ? parsed.progressCode.trim() : ''
+  if (!rawCode || !DLL_ERROR_CODE_PATTERN.test(rawCode)) return rawMessage
+  const targetLocale = locale ?? getResolvedLocale()
+  const key = `dllProgress.${rawCode}`
+  const safeParams = sanitizeDllErrorParams(parsed.progressParams, targetLocale)
+  const translated = translateDllTemplate(key, safeParams, targetLocale)
+  if (translated !== key) return translated
+  if (typeof parsed.fallback === 'string' && parsed.fallback.trim().length > 0) {
+    return parsed.fallback
+  }
+  return rawMessage
+}
+
+function tryLocalizeDllMessageCode(
+  rawCode: unknown,
+  rawParams: unknown,
+  locale: SupportedLocale
+): string | undefined {
+  if (typeof rawCode !== 'string') return undefined
+  const code = rawCode.trim()
+  if (!code || !DLL_ERROR_CODE_PATTERN.test(code)) return undefined
+  const safeParams = sanitizeDllErrorParams(rawParams, locale)
+  for (const prefix of ['dllMessages', 'dllProgress'] as const) {
+    const key = `${prefix}.${code}`
+    const translated = translateDllTemplate(key, safeParams, locale)
+    if (translated !== key) return translated
+  }
+  return undefined
+}
+
+/**
+ * 将原生 DLL 返回载荷中的结构化 errorCode / progressCode / messageCode 本地化为当前语言文案，
+ * 同时完整保留原始结构化字段；未命中已知码或畸形载荷时原样返回。
+ */
+export function localizeDllErrorPayload(
+  payload: unknown,
+  options?: { forceError?: boolean; locale?: SupportedLocale }
+): unknown {
+  if (!isRecord(payload)) return payload
+  const targetLocale = options?.locale ?? getResolvedLocale()
+  const isErrorEnvelope =
+    options?.forceError === true ||
+    payload.success === false ||
+    callbackStatus(payload.type) === 'error' ||
+    callbackStatus(payload.status) === 'error'
+
+  let next: Record<string, unknown> | null = null
+  const ensureMutable = (): Record<string, unknown> => {
+    if (!next) next = { ...payload }
+    return next
+  }
+
+  const rawCode = typeof payload.errorCode === 'string' ? payload.errorCode.trim() : ''
+  if (isErrorEnvelope && rawCode && DLL_ERROR_CODE_PATTERN.test(rawCode)) {
+    const i18nKey = `dllErrors.${rawCode}`
+    const safeParams = sanitizeDllErrorParams(payload.errorParams, targetLocale)
+    const rawLocalized = translateDllTemplate(i18nKey, safeParams, targetLocale)
+    if (rawLocalized !== i18nKey) {
+      const localized = appendStructuredDllContext(rawLocalized, i18nKey, safeParams, targetLocale)
+      const draft = ensureMutable()
+      draft.error = localized
+      if (
+        typeof payload.message === 'string' &&
+        (payload.error === undefined ||
+          payload.message === payload.error ||
+          payload.message === payload.errorMessage)
+      ) {
+        draft.message = localized
+      }
+      if (
+        typeof payload.errorMessage === 'string' &&
+        (payload.error === undefined || payload.errorMessage === payload.error)
+      ) {
+        draft.errorMessage = localized
+      }
+    }
+  } else if (!isErrorEnvelope) {
+    // 1) 结构化进度码（progressCode + progressParams + fallback）
+    const rawProgressCode = typeof payload.progressCode === 'string' ? payload.progressCode.trim() : ''
+    if (rawProgressCode && DLL_ERROR_CODE_PATTERN.test(rawProgressCode)) {
+      const progressKey = `dllProgress.${rawProgressCode}`
+      const safeParams = sanitizeDllErrorParams(payload.progressParams, targetLocale)
+      const translated = translateDllTemplate(progressKey, safeParams, targetLocale)
+      if (translated !== progressKey) {
+        ensureMutable().message = translated
+      } else if (typeof payload.fallback === 'string' && payload.fallback.trim().length > 0 && !payload.message) {
+        ensureMutable().message = payload.fallback
+      }
+    } else if (typeof payload.message === 'string' && payload.message.trim().startsWith('{')) {
+      const translatedMsg = localizeDllProgressMessage(payload.message, targetLocale)
+      if (translatedMsg !== payload.message) {
+        ensureMutable().message = translatedMsg
+      }
+    }
+
+    // 2) 成功路径结构化消息码（messageCode + messageParams）
+    const localizedMessage = tryLocalizeDllMessageCode(payload.messageCode, payload.messageParams, targetLocale)
+    if (localizedMessage !== undefined) {
+      ensureMutable().message = localizedMessage
+    }
+  }
+
+  // 处理嵌套在 data 字段中的结构化错误、进度或成功消息（如 callback 信封）
+  if (isRecord(payload.data)) {
+    const localizedData = localizeDllErrorPayload(payload.data, {
+      forceError: isErrorEnvelope,
+      ...(options?.locale ? { locale: options.locale } : {})
+    })
+    if (localizedData !== payload.data && isRecord(localizedData)) {
+      const draft = ensureMutable()
+      draft.data = localizedData
+      if (typeof localizedData.error === 'string') {
+        const originalDataError = payload.data.error
+        if (payload.error === undefined || payload.error === originalDataError) {
+          draft.error = localizedData.error
+        }
+        if (
+          typeof payload.message === 'string' &&
+          (payload.message === payload.error ||
+            payload.message === originalDataError ||
+            payload.message === payload.data.message)
+        ) {
+          draft.message = localizedData.error
+        }
+      } else if (typeof localizedData.message === 'string' && localizedData.message !== payload.data.message) {
+        if (payload.message === undefined || payload.message === payload.data.message) {
+          draft.message = localizedData.message
+        }
+      }
+    }
+  }
+
+  return next ?? payload
+}
+
+function localizeDllErrorString(rawError: string, locale?: SupportedLocale): string {
+  const parsed = parseDllResult(rawError)
+  if (!isRecord(parsed)) return rawError
+  const localized = localizeDllErrorPayload(parsed, {
+    forceError: true,
+    ...(locale ? { locale } : {})
+  })
+  if (localized !== parsed && isRecord(localized) && typeof localized.error === 'string') {
+    return localized.error
+  }
+  return rawError
+}
+
 function parseDllResult(result: string | null): unknown {
   if (result === null) return null
   try {
@@ -162,12 +460,22 @@ function parseDllResult(result: string | null): unknown {
 }
 
 function callResponse(call: NativeDllCallResult): Record<string, unknown> {
-  if (call.code === 0) return { success: true, data: parseDllResult(call.result) }
-  const parsed = parseDllResult(call.result)
-  const message = typeof parsed === 'string'
+  if (call.code === 0) {
+    return { success: true, data: localizeDllErrorPayload(parseDllResult(call.result)) }
+  }
+  const parsed = localizeDllErrorPayload(parseDllResult(call.result), { forceError: true })
+  const errorRecord = isRecord(parsed) ? parsed : undefined
+  const candidateError = typeof parsed === 'string' && parsed.length > 0
     ? parsed
-    : `DLL 插件调用失败，错误码: ${call.code}`
-  return { success: false, error: message, code: call.code }
+    : errorRecord?.error
+  const message = resolveNativeErrorMessage(candidateError, 'dll.callFailedWithCode', { code: call.code })
+  return {
+    success: false,
+    error: message,
+    code: call.code,
+    ...(typeof errorRecord?.errorCode === 'string' ? { errorCode: errorRecord.errorCode } : {}),
+    ...(isRecord(errorRecord?.errorParams) ? { errorParams: errorRecord.errorParams } : {})
+  }
 }
 
 function finalTaskStatus(status: NativeDllTaskStatus['status']): status is 'completed' | 'cancelled' | 'error' {
@@ -187,7 +495,7 @@ function requireNotAborted(signal?: AbortSignal): void {
     : signal.reason === errorCodes.appStopping
       ? errorCodes.appStopping
       : errorCodes.callerDestroyed
-  throw new ZToolsError(code, 'DLL 调用已取消')
+  throw new ZToolsError(code, t('dll.error.cancelled'), { i18nKey: 'dll.error.cancelled' })
 }
 
 function sameIdentity(left: string, right: string): boolean {
@@ -215,7 +523,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function copyTaskOwner(caller: CallerIdentity): CallerIdentity {
   if (caller.type === 'plugin' && (!caller.pluginId || !caller.pluginInstanceId)) {
-    throw new ZToolsError(errorCodes.permissionDenied, '插件 DLL 任务缺少已注册的窗口实例身份')
+    throw new ZToolsError(errorCodes.permissionDenied, t('dll.error.missingWindowIdentity'), {
+      i18nKey: 'dll.error.missingWindowIdentity'
+    })
   }
   return { ...caller }
 }
@@ -279,8 +589,18 @@ function numberField(value: unknown, ...keys: string[]): number | undefined {
 }
 
 function parseCallbackResult(result: string): CallbackResultDetails {
-  const value = parseDllResult(result)
+  const rawValue = parseDllResult(result)
+  const value = localizeDllErrorPayload(rawValue)
   if (!isRecord(value)) return { status: 'completed', value }
+
+  let serializedResult: string | undefined
+  if (value !== rawValue) {
+    try {
+      serializedResult = JSON.stringify(value)
+    } catch {
+      serializedResult = undefined
+    }
+  }
 
   const data = isRecord(value.data) ? value.data : undefined
   const hasExplicitType = Object.hasOwn(value, 'type')
@@ -326,6 +646,7 @@ function parseCallbackResult(result: string): CallbackResultDetails {
   return {
     status,
     value,
+    ...(serializedResult !== undefined ? { serializedResult } : {}),
     ...(percent !== undefined ? { progress: percent } : {}),
     ...(current !== undefined ? { current } : {}),
     ...(total !== undefined ? { total } : {}),
@@ -346,6 +667,7 @@ export class DllPluginService {
   readonly #nativeOwners = new Map<string, { owner: CallerIdentity; context: NativeDllInvocationContext }>()
   readonly #quiescingPlugins = new Set<string>()
   readonly #pluginUnloads = new Map<string, Promise<void>>()
+  readonly #activeResidentDlls = new Map<string, { pluginId: string; dllId: string; context?: NativeDllInvocationContext }>()
   #nativeGeneration = 0n
   readonly #removeNativeListener: (() => void) | null
   readonly #removeServiceListener: (() => void) | null
@@ -420,6 +742,78 @@ export class DllPluginService {
     this.#removeNativeListener = removeNativeListener
     this.#removeServiceListener = removeServiceListener
     this.#removeWindowListener = removeWindowListener
+    syncProcessLocaleEnv()
+  }
+
+  /**
+   * 将当前生效的规范 locale 同步写入进程环境 ZTOOLS_LOCALE，
+   * 并仅向 3 款常驻原生界面 DLL（screenshot / record / screen-color-picker）中当前已加载/活跃的实例派发 __setLocale。
+   * 单款失败仅记录告警日志，不中断其他派发也不抛错。
+   */
+  syncLocale(locale?: SupportedLocale): SupportedLocale {
+    const resolved = syncProcessLocaleEnv(locale ?? getResolvedLocale())
+    if (this.#stopped || !this.nativeHost || this.runtimePlatform === 'darwin') {
+      return resolved
+    }
+    const targets = new Map<string, { pluginId: string; dllId: string; context?: NativeDllInvocationContext }>()
+    for (const [key, entry] of this.#activeResidentDlls.entries()) {
+      targets.set(key, entry)
+    }
+    for (const task of this.#tasks.values()) {
+      if (task.backend !== 'native' || finalTaskStatus(task.status) || !isResidentUiDll(task.dllId)) {
+        continue
+      }
+      const key = `${task.pluginId.toLowerCase()}::${task.dllId.toLowerCase()}`
+      if (!targets.has(key)) {
+        targets.set(key, {
+          pluginId: task.pluginId,
+          dllId: task.dllId,
+          ...(task.nativeContext ? { context: task.nativeContext } : {})
+        })
+      }
+    }
+    for (const target of targets.values()) {
+      if (this.#quiescingPlugins.has(target.pluginId.toLowerCase())) continue
+      void Promise.resolve()
+        .then(() => this.nativeHost?.callDll(
+          target.pluginId,
+          target.dllId,
+          '__setLocale',
+          { locale: resolved },
+          target.context
+        ))
+        .catch((error: unknown) => {
+          console.warn(
+            `向常驻界面 DLL 派发 __setLocale 失败: pluginId=${target.pluginId}, dllId=${target.dllId}`,
+            error
+          )
+        })
+    }
+    return resolved
+  }
+
+  #rememberActiveResidentDll(
+    target: ResolvedDll,
+    context?: NativeDllInvocationContext
+  ): void {
+    if (this.runtimePlatform === 'darwin' || target.requireAdmin || !isResidentUiDll(target.dllId)) {
+      return
+    }
+    const key = `${target.pluginId.toLowerCase()}::${target.dllId.toLowerCase()}`
+    this.#activeResidentDlls.set(key, {
+      pluginId: target.pluginId,
+      dllId: target.dllId,
+      ...(context ? { context } : {})
+    })
+  }
+
+  #forgetActiveResidentDllsForPlugin(pluginId: string): void {
+    const normalized = pluginId.toLowerCase()
+    for (const [key, entry] of this.#activeResidentDlls.entries()) {
+      if (entry.pluginId.toLowerCase() === normalized) {
+        this.#activeResidentDlls.delete(key)
+      }
+    }
   }
 
   list(caller: CallerIdentity): Promise<{ success: true; plugins: Record<string, unknown>[]; count: number }> {
@@ -513,12 +907,14 @@ export class DllPluginService {
           capabilityLease?.assertCurrent()
           return result.success === true
             ? { success: true, data: result }
-            : { success: false, error: String(result.error ?? '水印设置操作失败'), data: result }
+            : { success: false, error: resolveNativeErrorMessage(result.error, 'dll.error.watermarkOperationFailed'), data: result }
         }
         const { params: callParams, settingsToSave } = this.#prepareNativeMediaCall(target, params.func, nativeParams)
+        const currentLocale = syncProcessLocaleEnv()
+        const localizedCallParams = withDllLocale(callParams, currentLocale)
         if (target.requireAdmin) {
           const service = this.#requireService()
-          const data = await service.callDll(target.pluginId, target.dllId, params.func, callParams)
+          const data = localizeDllErrorPayload(await service.callDll(target.pluginId, target.dllId, params.func, localizedCallParams))
           requireNotAborted(operationSignal)
           capabilityLease?.assertCurrent()
           const response = { success: true, data }
@@ -530,14 +926,17 @@ export class DllPluginService {
           return response
         }
         const native = this.#requireNativeHost()
-        const response = callResponse(await native.callDll(
+        const nativeContext = this.#nativeContext(owner)
+        const nativeResult = await native.callDll(
           target.pluginId,
           target.dllId,
           params.func,
-          callParams,
-          this.#nativeContext(owner),
+          localizedCallParams,
+          nativeContext,
           ...(operationSignal ? [operationSignal] : [])
-        ))
+        )
+        this.#rememberActiveResidentDll(target, nativeContext)
+        const response = callResponse(nativeResult)
         requireNotAborted(operationSignal)
         capabilityLease?.assertCurrent()
         if (settingsToSave && response.success === true) {
@@ -553,22 +952,47 @@ export class DllPluginService {
     })
   }
 
+  async #prepareTaskInvocation(
+    params: DllPluginCallParams,
+    owner: CallerIdentity,
+    onLease: (lease: RuntimeCapabilityLease | undefined) => void
+  ): Promise<{
+    target: ResolvedDll
+    localizedCallParams: Record<string, unknown>
+    settingsToSave?: Record<string, unknown>
+  }> {
+    const target = await this.#resolve(params.plugin, owner)
+    this.#assertPluginAvailable(target.pluginId)
+    const capabilityLease = this.#beginScreenCaptureOperation(target, params.func, owner)
+    onLease(capabilityLease)
+    capabilityLease?.assertCurrent()
+    const nativeParams = await this.#authorizeMediaParams(target, params.func, params.params, owner)
+    capabilityLease?.assertCurrent()
+    this.#requireTaskStartCaller(owner)
+    if (this.#isWatermarkSettingsMethod(target, params.func)) {
+      throw new ZToolsError(errorCodes.notSupported, t('dll.error.watermarkSyncOnly'), {
+        i18nKey: 'dll.error.watermarkSyncOnly'
+      })
+    }
+    const { params: callParams, settingsToSave } = this.#prepareNativeMediaCall(target, params.func, nativeParams)
+    const currentLocale = syncProcessLocaleEnv()
+    return {
+      target,
+      localizedCallParams: withDllLocale(callParams, currentLocale),
+      ...(settingsToSave ? { settingsToSave } : {})
+    }
+  }
+
   async callAsync(params: DllPluginCallParams, caller: CallerIdentity): Promise<Record<string, unknown>> {
     const owner = copyTaskOwner(caller)
     let capabilityLease: RuntimeCapabilityLease | undefined
     try {
       return await this.#trackTaskStart(owner, async () => {
-      const target = await this.#resolve(params.plugin, owner)
-      this.#assertPluginAvailable(target.pluginId)
-      capabilityLease = this.#beginScreenCaptureOperation(target, params.func, owner)
-      capabilityLease?.assertCurrent()
-      const nativeParams = await this.#authorizeMediaParams(target, params.func, params.params, owner)
-      capabilityLease?.assertCurrent()
-      this.#requireTaskStartCaller(owner)
-      if (this.#isWatermarkSettingsMethod(target, params.func)) {
-        throw new ZToolsError(errorCodes.notSupported, '水印设置仅支持同步接口')
-      }
-      const { params: callParams, settingsToSave } = this.#prepareNativeMediaCall(target, params.func, nativeParams)
+      const { target, localizedCallParams, settingsToSave } = await this.#prepareTaskInvocation(
+        params,
+        owner,
+        (lease) => { capabilityLease = lease }
+      )
       if (target.requireAdmin) {
         const service = this.#requireServiceTasks()
         const taskId = `task_${randomUUID()}`
@@ -592,7 +1016,7 @@ export class DllPluginService {
         capabilityLease = undefined
         this.#rememberTask(task)
         try {
-          await service.callDllAsync(target.pluginId, target.dllId, params.func, taskId, callParams)
+          await service.callDllAsync(target.pluginId, target.dllId, params.func, taskId, localizedCallParams)
           task.startState = 'started'
           task.status = 'running'
           if (task.cancelRequested) void this.#sendTaskCancellation(task).catch(() => undefined)
@@ -635,7 +1059,7 @@ export class DllPluginService {
       let attempt: NativeDllTaskStartAttempt
       try {
         attempt = this.#requireNativeHost().beginDllAsyncTask(
-          target.pluginId, target.dllId, params.func, callParams, nativeContext, undefined, nativeTaskId
+          target.pluginId, target.dllId, params.func, localizedCallParams, nativeContext, undefined, nativeTaskId
         )
       } catch (error) {
         // begin throws only before a frame is sent; there is no native task to clear.
@@ -652,12 +1076,13 @@ export class DllPluginService {
       } else if (outcome.kind === 'not-started') {
         this.#forgetTask(task)
         const code = (outcome.error as Error & { code?: unknown }).code
-        return { success: false, error: outcome.error.message, taskStartResolved: 'not-started',
+        return { success: false, error: resolveNativeErrorMessage(outcome.error.message, 'dll.error.nativeHostNotStarted'), taskStartResolved: 'not-started',
           workNotStarted: true, ...(typeof code === 'string' ? { code } : {}) }
       } else if (outcome.kind === 'host-exited') {
-        return { success: false, taskId: nativeTaskId, error: outcome.error.message,
+        return { success: false, taskId: nativeTaskId, error: resolveNativeErrorMessage(outcome.error.message, 'dll.error.nativeHostStartUnconfirmed'),
           workOutcome: 'unknown', noReplay: true }
       }
+      this.#rememberActiveResidentDll(target, nativeContext)
       if (settingsToSave) {
         task.settingsSavePromise ??= this.#persistWatermarkSettings(target, settingsToSave, owner)
         task.settingsSaved = await task.settingsSavePromise
@@ -675,29 +1100,27 @@ export class DllPluginService {
   ): Promise<Record<string, unknown>> {
     const requestedTaskId = params.params.taskId
     if (typeof requestedTaskId !== 'string' || !TASK_ID_PATTERN.test(requestedTaskId)) {
-      throw new ZToolsError(errorCodes.invalidRequest, '回调调用缺少有效 taskId')
+      throw new ZToolsError(errorCodes.invalidRequest, t('dll.error.missingTaskId'), {
+        i18nKey: 'dll.error.missingTaskId'
+      })
     }
     const owner = copyTaskOwner(caller)
     const taskKey = taskOwnerKey(owner, requestedTaskId)
     if (this.#tasks.has(taskKey) || this.#reservedTaskIds.has(taskKey)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'DLL 回调任务ID已被占用')
+      throw new ZToolsError(errorCodes.invalidRequest, t('dll.error.callbackTaskIdInUse'), {
+        i18nKey: 'dll.error.callbackTaskIdInUse'
+      })
     }
     const reservation: TaskReservation = { owner }
     this.#reservedTaskIds.set(taskKey, reservation)
     let capabilityLease: RuntimeCapabilityLease | undefined
     try {
       return await this.#trackTaskStart(owner, async () => {
-        const target = await this.#resolve(params.plugin, owner)
-        this.#assertPluginAvailable(target.pluginId)
-        capabilityLease = this.#beginScreenCaptureOperation(target, params.func, owner)
-        capabilityLease?.assertCurrent()
-        const nativeParams = await this.#authorizeMediaParams(target, params.func, params.params, owner)
-        capabilityLease?.assertCurrent()
-        this.#requireTaskStartCaller(owner)
-        if (this.#isWatermarkSettingsMethod(target, params.func)) {
-          throw new ZToolsError(errorCodes.notSupported, '水印设置仅支持同步接口')
-        }
-        const { params: callParams, settingsToSave } = this.#prepareNativeMediaCall(target, params.func, nativeParams)
+        const { target, localizedCallParams, settingsToSave } = await this.#prepareTaskInvocation(
+          params,
+          owner,
+          (lease) => { capabilityLease = lease }
+        )
         if (target.requireAdmin) {
           const service = this.#requireServiceTasks()
           await service.enableTaskEvents?.().catch(() => false)
@@ -722,7 +1145,7 @@ export class DllPluginService {
           capabilityLease = undefined
           this.#rememberTask(task)
           try {
-            await service.callDllWithCallback(target.pluginId, target.dllId, params.func, nativeTaskId, callParams)
+            await service.callDllWithCallback(target.pluginId, target.dllId, params.func, nativeTaskId, localizedCallParams)
             task.startState = 'started'
             task.status = 'running'
             if (task.cancelRequested) void this.#sendTaskCancellation(task).catch(() => undefined)
@@ -746,7 +1169,7 @@ export class DllPluginService {
           target.pluginId,
           target.dllId,
           params.func,
-          callParams,
+          localizedCallParams,
           nativeContext,
           undefined,
           preassignedTaskId
@@ -804,13 +1227,14 @@ export class DllPluginService {
           const errorCode = (outcome.error as Error & { code?: unknown }).code
           return {
             success: false,
-            error: outcome.error.message || 'NativeHost32 未启动 DLL 任务',
+            error: resolveNativeErrorMessage(outcome.error.message, 'dll.error.nativeHostNotStarted'),
             taskStartResolved: 'not-started',
             workNotStarted: true,
             ...(typeof errorCode === 'string' ? { code: errorCode } : {})
           }
         }
         if (outcome.kind !== 'started') throw outcome.error
+        this.#rememberActiveResidentDll(target, nativeContext)
         if (settingsToSave) {
           task.settingsSavePromise ??= this.#persistWatermarkSettings(target, settingsToSave, owner)
           task.settingsSaved = await task.settingsSavePromise
@@ -883,7 +1307,7 @@ export class DllPluginService {
         }
         if (task.backend === 'native' && status.status === task.status && status.error && !task.error) {
           const nativeError = parseCallbackResult(status.error)
-          task.error = nativeError.error ?? status.error
+          task.error = nativeError.error ?? localizeDllErrorString(status.error)
         }
       }
     }
@@ -905,7 +1329,7 @@ export class DllPluginService {
       ...(task.startState === 'host-exited' ? { workOutcome: 'unknown', noReplay: true } : {}),
       ...(task.startErrorCode ? { code: task.startErrorCode } : {}),
       ...(!permissionRevoked && task.data !== undefined ? { taskData: task.data } : {}),
-      ...(permissionRevoked ? { taskError: '屏幕采集授权已撤销；已请求停止任务，已派发的原生操作可能无法回滚' } :
+      ...(permissionRevoked ? { taskError: t('dll.error.screenCaptureRevokedStopping') } :
         task.error ? { taskError: task.error } : {})
     }
   }
@@ -920,7 +1344,7 @@ export class DllPluginService {
       return { success: true, taskCancelPending: true }
     }
     const code = await this.#sendTaskCancellation(task)
-    if (code !== 0) return { success: false, error: `取消 DLL 任务失败，错误码: ${code}`, code }
+    if (code !== 0) return { success: false, error: t('dll.cancelFailedWithCode', { code }), code }
     return { success: true }
   }
 
@@ -936,13 +1360,17 @@ export class DllPluginService {
       const reservation = this.#reservedTaskIds.get(taskKey)
       if (reservation) {
         this.#requireReservationOwner(reservation, caller)
-        throw new ZToolsError(errorCodes.pluginBusy, 'DLL 回调任务启动尚未确认')
+        throw new ZToolsError(errorCodes.pluginBusy, t('dll.error.callbackStartUnconfirmed'), {
+          i18nKey: 'dll.error.callbackStartUnconfirmed'
+        })
       }
       return { success: true }
     }
     this.#requireTaskOwner(task, caller)
     if (!finalTaskStatus(task.status)) {
-      throw new ZToolsError(errorCodes.pluginBusy, 'DLL 回调任务尚未确认停止')
+      throw new ZToolsError(errorCodes.pluginBusy, t('dll.error.callbackStopUnconfirmed'), {
+        i18nKey: 'dll.error.callbackStopUnconfirmed'
+      })
     }
     if (task.startState === 'not-started' || task.startState === 'host-exited') {
       this.#forgetTask(task)
@@ -1006,7 +1434,9 @@ export class DllPluginService {
         reservation.owner.pluginId !== undefined && sameIdentity(reservation.owner.pluginId, installedId)
       )
     if (remains || hasPendingStart) {
-      throw new ZToolsError(errorCodes.pluginBusy, 'DLL 任务停止状态未确认，拒绝卸载插件')
+      throw new ZToolsError(errorCodes.pluginBusy, t('dll.error.taskStopUnconfirmedUnload'), {
+        i18nKey: 'dll.error.taskStopUnconfirmedUnload'
+      })
     }
 
     if (this.runtimePlatform === 'darwin' || installed.requireAdmin === true) return
@@ -1014,17 +1444,23 @@ export class DllPluginService {
     if (!dllId) return
     const native = this.#requireNativeHost()
     if (!native.unloadDll) {
-      throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 未提供 DLL 卸载能力')
+      throw new ZToolsError(errorCodes.nativeHostUnavailable, t('dll.error.unloadNotSupported'), {
+        i18nKey: 'dll.error.unloadNotSupported'
+      })
     }
     let releaseMaintenance: (() => void) | undefined
     if (typeof native.acquirePluginMaintenance !== 'function') {
-      throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 插件维护锁未配置，拒绝卸载 DLL')
+      throw new ZToolsError(errorCodes.nativeHostUnavailable, t('dll.error.maintenanceLockNotConfigured'), {
+        i18nKey: 'dll.error.maintenanceLockNotConfigured'
+      })
     }
     const lockPromise = native.acquirePluginMaintenance(installedId)
       const acquired = await this.#awaitUntil(lockPromise, deadline)
       if (acquired === DEADLINE_EXCEEDED) {
         void lockPromise.then((release) => release()).catch(() => undefined)
-        throw new ZToolsError(errorCodes.pluginBusy, 'DLL 維護鎖等待超時，拒絕卸載插件')
+        throw new ZToolsError(errorCodes.pluginBusy, t('dll.error.maintenanceLockTimeout'), {
+          i18nKey: 'dll.error.maintenanceLockTimeout'
+        })
       }
     releaseMaintenance = acquired
     try {
@@ -1034,8 +1470,11 @@ export class DllPluginService {
         const releaseAfterUnload = releaseMaintenance
         releaseMaintenance = undefined
         void unloadPromise.then(releaseAfterUnload, releaseAfterUnload)
-        throw new ZToolsError(errorCodes.pluginBusy, 'DLL 卸载确认超时，拒绝继续更新插件')
+        throw new ZToolsError(errorCodes.pluginBusy, t('dll.error.unloadTimeout'), {
+          i18nKey: 'dll.error.unloadTimeout'
+        })
       }
+      this.#forgetActiveResidentDllsForPlugin(installedId)
     } finally {
       releaseMaintenance?.()
     }
@@ -1044,6 +1483,7 @@ export class DllPluginService {
   stop(): Promise<void> {
     if (this.#stopPromise) return this.#stopPromise
     this.#stopped = true
+    this.#activeResidentDlls.clear()
     this.#stopDeadlineMs = Date.now() + this.#taskQuiesceTimeoutMs
     this.#removeWindowListener?.()
     for (const task of this.#tasks.values()) {
@@ -1066,7 +1506,9 @@ export class DllPluginService {
     let pluginId: string
     if (caller.type === 'plugin') {
       if (!caller.pluginId) {
-        throw new ZToolsError(errorCodes.permissionDenied, '插件调用者缺少 pluginId')
+        throw new ZToolsError(errorCodes.permissionDenied, t('dll.error.callerMissingPluginId'), {
+          i18nKey: 'dll.error.callerMissingPluginId'
+        })
       }
       pluginId = caller.pluginId
     } else {
@@ -1083,28 +1525,38 @@ export class DllPluginService {
       }
       if (candidates.length === 0) {
         if (common) return commonTarget(common)
-        throw new ZToolsError(errorCodes.pluginNotFound, 'DLL 插件不存在')
+        throw new ZToolsError(errorCodes.pluginNotFound, t('dll.error.pluginNotFound'), {
+          i18nKey: 'dll.error.pluginNotFound'
+        })
       }
       if (candidates.length !== 1 || typeof candidates[0]?.id !== 'string') {
-        throw new ZToolsError(errorCodes.permissionDenied, 'DLL 插件名称不唯一')
+        throw new ZToolsError(errorCodes.permissionDenied, t('dll.error.pluginNameAmbiguous'), {
+          i18nKey: 'dll.error.pluginNameAmbiguous'
+        })
       }
       pluginId = candidates[0].id
     }
     return this.manifests.withPluginManifest(pluginId, async (manifest, metadata) => {
       this.#assertPluginAvailable(manifest.id)
       if (this.runtimePlatform === 'darwin' && (manifest.requireAdmin || manifest.dllloader)) {
-        throw new ZToolsError(errorCodes.notSupported, 'Mac 原生插件不支持旧 DLL 或管理员字段')
+        throw new ZToolsError(errorCodes.notSupported, t('dll.error.macUnsupportedLegacyFields'), {
+          i18nKey: 'dll.error.macUnsupportedLegacyFields'
+        })
       }
       const declaredDllId = this.runtimePlatform === 'darwin'
         ? metadata?.macNativeComponents?.find((component) => component.id === dllId)?.id ?? ''
         : dllIdFromLoader(manifest.dllloader)
       if (!declaredDllId) {
         if (common && caller.type === 'plugin') return commonTarget(common)
-        throw new ZToolsError(errorCodes.pluginNotFound, '插件未声明 DLL')
+        throw new ZToolsError(errorCodes.pluginNotFound, t('dll.error.pluginNoDeclaredDll'), {
+          i18nKey: 'dll.error.pluginNoDeclaredDll'
+        })
       }
       if (this.runtimePlatform === 'darwin' ? declaredDllId !== dllId : declaredDllId.toLowerCase() !== dllId.toLowerCase()) {
         if (common && caller.type === 'plugin') return commonTarget(common)
-        throw new ZToolsError(errorCodes.permissionDenied, '插件只能调用自身声明的 DLL')
+        throw new ZToolsError(errorCodes.permissionDenied, t('dll.error.pluginDeclaredDllOnly'), {
+          i18nKey: 'dll.error.pluginDeclaredDllOnly'
+        })
       }
       return {
         pluginId,
@@ -1118,7 +1570,9 @@ export class DllPluginService {
   #macDeclaredIds(pluginId: string): Promise<string[]> {
     return this.manifests.withPluginManifest(pluginId, async (manifest, metadata) => {
       if (manifest.requireAdmin || manifest.dllloader) {
-        throw new ZToolsError(errorCodes.notSupported, 'Mac 原生插件不支持旧 DLL 或管理员字段')
+        throw new ZToolsError(errorCodes.notSupported, t('dll.error.macUnsupportedLegacyFields'), {
+          i18nKey: 'dll.error.macUnsupportedLegacyFields'
+        })
       }
       return metadata?.macNativeComponents?.map((component) => component.id) ?? []
     })
@@ -1126,7 +1580,9 @@ export class DllPluginService {
 
   #requireNativeHost(): NativeDllRuntimePort {
     if (!this.nativeHost) {
-      throw new ZToolsError(errorCodes.nativeHostUnavailable, '普通 Native Host 未配置')
+      throw new ZToolsError(errorCodes.nativeHostUnavailable, t('dll.error.nativeHostNotConfigured'), {
+        i18nKey: 'dll.error.nativeHostNotConfigured'
+      })
     }
     return this.nativeHost
   }
@@ -1135,7 +1591,8 @@ export class DllPluginService {
     if (!this.serviceClient || this.serviceClient.diagnostics.state !== 'ready') {
       throw new ZToolsError(
         errorCodes.serviceUnavailable,
-        'ZToolsService 尚未认证'
+        t('dll.error.serviceNotAuthenticated'),
+        { i18nKey: 'dll.error.serviceNotAuthenticated' }
       )
     }
     return this.serviceClient
@@ -1148,7 +1605,9 @@ export class DllPluginService {
         typeof service.queryDllTask !== 'function' ||
         typeof service.cancelDllTask !== 'function' ||
         typeof service.clearDllTask !== 'function') {
-      throw new ZToolsError(errorCodes.notSupported, 'ZToolsService 未提供 DLL 任务能力')
+      throw new ZToolsError(errorCodes.notSupported, t('dll.error.serviceTasksNotSupported'), {
+        i18nKey: 'dll.error.serviceTasksNotSupported'
+      })
     }
     return service
   }
@@ -1208,16 +1667,21 @@ export class DllPluginService {
       else task.status = status.status
       task.progress = status.status === 'completed' ? 100 : Math.max(task.progress, status.progress)
     }
-    if (status.error && !task.error) task.error = status.error
+    if (status.error && !task.error) task.error = localizeDllErrorString(status.error)
     if (status.resultReady === true && task.data === undefined) {
-      task.data = parseDllResult(status.result ?? null)
+      task.data = localizeDllErrorPayload(parseDllResult(status.result ?? null))
     }
     this.#deliverServiceCallbackResults(task, status.callbackResults)
     if (finalTaskStatus(task.status)) this.#clearTaskPolling(task)
-    if (publish && (previousStatus !== task.status || previousProgress !== task.progress)) {
+    const rawServiceMessage = (status as NativeDllTaskStatus & { message?: unknown }).message
+    const localizedServiceMessage = typeof rawServiceMessage === 'string' && rawServiceMessage.length > 0
+      ? localizeDllProgressMessage(rawServiceMessage)
+      : undefined
+    if (publish && (previousStatus !== task.status || previousProgress !== task.progress || localizedServiceMessage !== undefined)) {
       this.#publishProgress(task, {
         percent: task.progress,
         status: task.status,
+        ...(localizedServiceMessage !== undefined ? { message: localizedServiceMessage } : {}),
         ...(task.error ? { error: task.error } : {}),
         ...(task.data !== undefined ? { data: task.data } : {})
       })
@@ -1230,10 +1694,11 @@ export class DllPluginService {
   #deliverServiceCallbackResults(task: TaskRecord, results?: string[]): void {
     if (task.mode !== 'callback' || !results || !this.#canExposeTaskResult(task)) return
     for (const result of results) {
+      const callbackResult = parseCallbackResult(result)
       this.#publishTaskEvent('dllplugin_callback_result', {
         plugin: task.dllId,
         taskId: task.externalTaskId,
-        result
+        result: callbackResult.serializedResult ?? result
       }, task.owner)
     }
   }
@@ -1248,7 +1713,9 @@ export class DllPluginService {
       return await this.nativeMediaPolicy.authorizeCall(target.dllId, functionName, params, caller)
     }
     if (isBuiltInNativeMediaDll(target.dllId)) {
-      throw new ZToolsError(errorCodes.notSupported, '媒体 DLL 路径策略未配置')
+      throw new ZToolsError(errorCodes.notSupported, t('dll.error.mediaPolicyNotConfigured'), {
+        i18nKey: 'dll.error.mediaPolicyNotConfigured'
+      })
     }
     return params
   }
@@ -1311,8 +1778,8 @@ export class DllPluginService {
     const settings = this.#watermarkSettingsFromParams(params)
     const settingsSaved = await this.#persistWatermarkSettings(target, settings, caller)
     return settingsSaved
-      ? { success: true, message: '水印设置已保存', settings }
-      : { success: false, error: '水印设置保存失败' }
+      ? { success: true, message: t('dll.watermark.saved'), settings }
+      : { success: false, error: t('dll.error.watermarkSaveFailed') }
   }
 
   async #loadWatermarkSettings(
@@ -1320,7 +1787,7 @@ export class DllPluginService {
     caller: CallerIdentity
   ): Promise<Record<string, unknown>> {
     const database = this.watermarkSettingsDatabase
-    if (!database) return { success: false, error: '水印设置数据库未配置' }
+    if (!database) return { success: false, error: t('dll.error.watermarkDbNotConfigured') }
     try {
       const stored = await database.get({
         plugin_id: target.pluginId,
@@ -1328,14 +1795,14 @@ export class DllPluginService {
         is_base64: false
       }, caller, new AbortController().signal)
       const parsed = JSON.parse(stored.data) as unknown
-      if (!isRecord(parsed)) return { success: false, error: '水印设置数据无效' }
+      if (!isRecord(parsed)) return { success: false, error: t('dll.error.watermarkDataInvalid') }
       const settings = await this.#authorizeMediaParams(target, 'SaveWatermarkSettings', parsed, caller)
-      return { success: true, message: '水印设置已加载', settings }
+      return { success: true, message: t('dll.watermark.loaded'), settings }
     } catch (error) {
       if (error instanceof ZToolsError && error.code === errorCodes.databaseKeyNotFound) {
-        return { success: false, error: '尚未保存水印设置' }
+        return { success: false, error: t('dll.error.watermarkNotSaved') }
       }
-      return { success: false, error: '水印设置读取失败' }
+      return { success: false, error: t('dll.error.watermarkReadFailed') }
     }
   }
 
@@ -1344,7 +1811,9 @@ export class DllPluginService {
     const existingTask = this.#tasks.get(taskKey)
     const existingNativeTask = this.#nativeTasks.get(task.nativeTaskId)
     if ((existingTask && existingTask !== task) || (existingNativeTask && existingNativeTask !== task)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'DLL 任务标识正在使用')
+      throw new ZToolsError(errorCodes.invalidRequest, t('dll.error.taskIdInUse'), {
+        i18nKey: 'dll.error.taskIdInUse'
+      })
     }
     this.#tasks.set(taskKey, task)
     this.#nativeTasks.set(task.nativeTaskId, task)
@@ -1420,7 +1889,7 @@ export class DllPluginService {
     const wasUnknown = task.startState === 'unknown'
     task.startState = outcome.kind === 'not-started' ? 'not-started' : 'host-exited'
     task.resolveStartOutcome?.(outcome)
-    const error = outcome.error.message || 'NativeHost32 未确认 DLL 任务启动'
+    const error = resolveNativeErrorMessage(outcome.error.message, 'dll.error.nativeHostStartUnconfirmed')
     if (task.mode === 'async') {
       const code = (outcome.error as Error & { code?: unknown }).code
       if (typeof code === 'string') task.startErrorCode = code
@@ -1489,7 +1958,9 @@ export class DllPluginService {
 
   #requireReservationOwner(reservation: TaskReservation, caller: CallerIdentity): void {
     if (!isSameTaskOwner(reservation.owner, caller)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'DLL 回调任务不存在或不属于当前调用窗口')
+      throw new ZToolsError(errorCodes.invalidRequest, t('dll.error.callbackTaskNotFoundOrNotOwned'), {
+        i18nKey: 'dll.error.callbackTaskNotFoundOrNotOwned'
+      })
     }
   }
 
@@ -1527,14 +1998,18 @@ export class DllPluginService {
 
   #requireTaskStartCaller(owner: CallerIdentity): void {
     if (this.#stopped || this.#closedCallers.has(taskOwnerIdentityKey(owner))) {
-      throw new ZToolsError(errorCodes.appStopping, 'DLL 任务调用窗口正在关闭')
+      throw new ZToolsError(errorCodes.appStopping, t('dll.error.callerWindowClosing'), {
+        i18nKey: 'dll.error.callerWindowClosing'
+      })
     }
     if (owner.pluginId) this.#assertPluginAvailable(owner.pluginId)
   }
 
   #assertPluginAvailable(pluginId: string): void {
     if (this.#quiescingPlugins.has(pluginId.toLowerCase())) {
-      throw new ZToolsError(errorCodes.pluginBusy, '插件 DLL 正在停止，暂不可调用')
+      throw new ZToolsError(errorCodes.pluginBusy, t('dll.error.pluginStopping'), {
+        i18nKey: 'dll.error.pluginStopping'
+      })
     }
   }
 
@@ -1545,11 +2020,15 @@ export class DllPluginService {
   ): RuntimeCapabilityLease | undefined {
     if (!isScreenCaptureDllOperation(target, functionName)) return undefined
     if (!this.capabilityAuthorization && owner.type === 'plugin') {
-      throw new ZToolsError(errorCodes.notSupported, '屏幕采集授权服务未接线，已停止截图')
+      throw new ZToolsError(errorCodes.notSupported, t('dll.error.screenCaptureAuthUnavailable'), {
+        i18nKey: 'dll.error.screenCaptureAuthUnavailable'
+      })
     }
     const lease = this.capabilityAuthorization?.beginOperation('screen.capture', owner)
     if (owner.type === 'plugin' && !lease) {
-      throw new ZToolsError(errorCodes.permissionDenied, '当前插件实例未获得屏幕采集授权')
+      throw new ZToolsError(errorCodes.permissionDenied, t('dll.error.screenCaptureNotAuthorized'), {
+        i18nKey: 'dll.error.screenCaptureNotAuthorized'
+      })
     }
     return lease
   }
@@ -1567,7 +2046,7 @@ export class DllPluginService {
       if (task.permissionRevoked) return
       task.permissionRevoked = true
       task.cancelRequested = true
-      task.error = '屏幕采集授权已撤销'
+      task.error = t('dll.error.screenCaptureRevoked')
       if (task.nativeTaskObserved && !finalTaskStatus(task.status)) {
         void this.#sendTaskCancellation(task).catch(() => undefined)
       }
@@ -1740,7 +2219,7 @@ export class DllPluginService {
         if (finalTaskStatus(status.status)) this.#setTerminalStatus(task, status.status)
         else task.status = status.status
         task.progress = status.status === 'completed' ? 100 : Math.max(task.progress, status.progress)
-        if (status.error) task.error = status.error
+        if (status.error) task.error = localizeDllErrorString(status.error)
       }
       if (!finalTaskStatus(task.status)) {
         const delay = Math.min(this.#taskQuiescePollIntervalMs, Math.max(0, deadline - Date.now()))
@@ -1830,7 +2309,9 @@ export class DllPluginService {
   #requireTask(taskId: string, target: ResolvedDll, caller: CallerIdentity): TaskRecord {
     const task = this.#tasks.get(taskOwnerKey(copyTaskOwner(caller), taskId))
     if (!task || !sameIdentity(task.pluginId, target.pluginId) || !sameIdentity(task.dllId, target.dllId)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'DLL 任务不存在或不属于当前插件')
+      throw new ZToolsError(errorCodes.invalidRequest, t('dll.error.taskNotFoundOrNotPlugin'), {
+        i18nKey: 'dll.error.taskNotFoundOrNotPlugin'
+      })
     }
     this.#requireTaskOwner(task, caller)
     return task
@@ -1838,7 +2319,9 @@ export class DllPluginService {
 
   #requireTaskOwner(task: TaskRecord, caller: CallerIdentity): void {
     if (!isSameTaskOwner(task.owner, caller)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'DLL 任务不存在或不属于当前调用窗口')
+      throw new ZToolsError(errorCodes.invalidRequest, t('dll.error.taskNotFoundOrNotOwner'), {
+        i18nKey: 'dll.error.taskNotFoundOrNotOwner'
+      })
     }
   }
 
@@ -1866,16 +2349,19 @@ export class DllPluginService {
       const reportedProgress = Number.isFinite(event.percent)
         ? Math.max(0, Math.min(100, event.percent))
         : task.progress
+      const message = event.percent < 0
+        ? localizeDllErrorString(event.message)
+        : localizeDllProgressMessage(event.message)
       task.progress = event.percent < 0 ? task.progress : Math.max(task.progress, reportedProgress)
       if (event.percent < 0) {
         this.#setTerminalStatus(task, 'error')
-        task.error = event.message
+        task.error = message
       } else task.status = 'running'
       this.#publishProgress(task, {
         percent: task.progress,
-        message: event.message,
+        message,
         status: event.percent < 0 ? 'error' : 'running',
-        ...(event.percent < 0 ? { error: event.message } : {})
+        ...(event.percent < 0 ? { error: message } : {})
       })
       this.#sendCancellationIfRequested(task)
       return
@@ -1898,12 +2384,12 @@ export class DllPluginService {
       } else if (callbackResult.status === 'error') {
         this.#setTerminalStatus(task, 'error')
         task.data = callbackResult.value
-        task.error = callbackResult.error ?? 'DLL 回调调用失败'
+        task.error = resolveNativeErrorMessage(callbackResult.error, 'dll.callbackFailed')
       }
       this.#publishTaskEvent('dllplugin_callback_result', {
         plugin: task.dllId,
         taskId: task.externalTaskId,
-        result: event.result
+        result: callbackResult.serializedResult ?? event.result
       }, task.owner)
       this.#sendCancellationIfRequested(task)
       return
@@ -1913,11 +2399,13 @@ export class DllPluginService {
       if (event.type === 'callback-return') {
         if (response.success !== true) {
           this.#setTerminalStatus(task, 'error')
-          task.error = String(response.error ?? 'DLL 回调调用失败')
+          task.error = resolveNativeErrorMessage(response.error, 'dll.callbackFailed')
           this.#publishTaskEvent('dllplugin_callback_result', {
             plugin: task.dllId,
             taskId: task.externalTaskId,
-            error: task.error
+            error: task.error,
+            ...(typeof response.errorCode === 'string' ? { errorCode: response.errorCode } : {}),
+            ...(isRecord(response.errorParams) ? { errorParams: response.errorParams } : {})
           }, task.owner)
         } else this.#sendCancellationIfRequested(task)
         return
@@ -1930,20 +2418,29 @@ export class DllPluginService {
         this.#publishProgress(task, { percent: 100, status: 'completed', data: task.data })
       } else {
         this.#setTerminalStatus(task, 'error')
-        task.error = String(response.error ?? 'DLL 异步调用失败')
-        this.#publishProgress(task, { status: 'error', error: task.error })
+        task.error = resolveNativeErrorMessage(response.error, 'dll.asyncFailed')
+        this.#publishProgress(task, {
+          status: 'error',
+          error: task.error,
+          ...(typeof response.errorCode === 'string' ? { errorCode: response.errorCode } : {}),
+          ...(isRecord(response.errorParams) ? { errorParams: response.errorParams } : {})
+        })
       }
       return
     }
     if (event.type === 'cancelled') {
       this.#setTerminalStatus(task, 'cancelled')
-      this.#publishProgress(task, { status: 'cancelled', error: event.code === 0 ? undefined : `错误码: ${event.code}` })
+      this.#publishProgress(task, {
+        status: 'cancelled',
+        error: event.code === 0 ? undefined : t('dll.cancelledWithCode', { code: event.code })
+      })
       return
     }
     if (event.type === 'task-error') {
+      const localizedError = localizeDllErrorString(event.error)
       this.#setTerminalStatus(task, 'error')
-      task.error = event.error
-      this.#publishProgress(task, { status: 'error', error: event.error })
+      task.error = localizedError
+      this.#publishProgress(task, { status: 'error', error: localizedError })
     }
   }
 
@@ -1967,7 +2464,7 @@ export class DllPluginService {
         this.#publishTaskEvent('dllplugin_callback_result', {
           plugin: task.dllId,
           taskId: task.externalTaskId,
-          result: event.result
+          result: callbackResult.serializedResult ?? event.result
         }, task.owner)
       }
       return
@@ -1980,26 +2477,34 @@ export class DllPluginService {
         task.progress = 100
         this.#publishProgress(task, { percent: 100, status: 'completed', data: task.data })
       } else if (response.success !== true && task.status === 'error' && !task.error) {
-        task.error = String(response.error ?? 'DLL 异步调用失败')
-        this.#publishProgress(task, { status: 'error', error: task.error })
+        task.error = resolveNativeErrorMessage(response.error, 'dll.asyncFailed')
+        this.#publishProgress(task, {
+          status: 'error',
+          error: task.error,
+          ...(typeof response.errorCode === 'string' ? { errorCode: response.errorCode } : {}),
+          ...(isRecord(response.errorParams) ? { errorParams: response.errorParams } : {})
+        })
       }
       return
     }
 
     if (event.type === 'callback-return' && event.call.code !== 0 && task.status === 'error' && !task.error) {
       const response = callResponse(event.call)
-      task.error = String(response.error ?? 'DLL 回调调用失败')
+      task.error = resolveNativeErrorMessage(response.error, 'dll.callbackFailed')
       this.#publishTaskEvent('dllplugin_callback_result', {
         plugin: task.dllId,
         taskId: task.externalTaskId,
-        error: task.error
+        error: task.error,
+        ...(typeof response.errorCode === 'string' ? { errorCode: response.errorCode } : {}),
+        ...(isRecord(response.errorParams) ? { errorParams: response.errorParams } : {})
       }, task.owner)
       return
     }
 
     if (event.type === 'task-error' && task.status === 'error' && !task.error) {
-      task.error = event.error
-      this.#publishProgress(task, { status: 'error', error: event.error })
+      const localizedError = localizeDllErrorString(event.error)
+      task.error = localizedError
+      this.#publishProgress(task, { status: 'error', error: localizedError })
     }
   }
 
@@ -2035,6 +2540,10 @@ export class DllPluginService {
   }
 
   #requireRunning(): void {
-    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'DLL 插件服务正在退出')
+    if (this.#stopped) {
+      throw new ZToolsError(errorCodes.appStopping, t('dll.error.serviceStopping'), {
+        i18nKey: 'dll.error.serviceStopping'
+      })
+    }
   }
 }

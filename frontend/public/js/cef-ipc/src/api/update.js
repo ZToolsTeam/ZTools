@@ -1,3 +1,5 @@
+import { resolveSdkText } from '../core/environment.js'
+
 /**
  * Update API - 软件更新
  * 提供应用和插件更新功能
@@ -18,7 +20,12 @@ class UpdateAPI {
     const r = await this.transport.call('update_check', { source: normalizedSource })
     // 严格协议：只接受扁平结构 { success, app, web }
     if (!r || typeof r !== 'object' || !('success' in r)) {
-      throw new Error('Invalid update_check response: missing success')
+      throw new Error(
+        resolveSdkText(
+          '更新检查响应无效：缺少 success 字段',
+          'Invalid update_check response: missing success'
+        )
+      )
     }
     return {
       success: r.success === true,
@@ -43,7 +50,9 @@ class UpdateAPI {
       fileSize: info.fileSize || 0
     }
     const downloaded = await this.transport.call('update_download_start', packageInfo, { timeout: Infinity })
-    if (revision !== this.updateRevision) throw Object.assign(new Error('更新已取消'), { code: 'CANCELLED' })
+    if (revision !== this.updateRevision) {
+      throw Object.assign(new Error(resolveSdkText('更新已取消', 'Update cancelled')), { code: 'CANCELLED' })
+    }
     if (!downloaded || downloaded.success !== true) return downloaded || { success: false }
     const installed = await this.transport.call('update_install_start', packageInfo, { timeout: Infinity })
     return installed || { success: false }

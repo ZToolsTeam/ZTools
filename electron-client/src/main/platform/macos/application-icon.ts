@@ -65,14 +65,14 @@ const runBatchIconScript: IconRunner = async (executable, args) => {
 
 function assertApplicationPath(appPath: string): void {
   if (!path.posix.isAbsolute(appPath) || appPath.includes('\0') || !appPath.toLowerCase().endsWith('.app')) {
-    throw new Error('无效的 macOS 应用路径')
+    throw new Error('Invalid macOS application path')
   }
 }
 
 function toPngDataUrl(output: string): string {
   const base64 = output.trim()
   if (base64.length > MAX_ICON_BASE64_LENGTH || !/^iVBORw0KGgo[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
-    throw new Error('macOS 应用图标读取失败')
+    throw new Error('Failed to read macOS application icon')
   }
   return `data:image/png;base64,${base64}`
 }

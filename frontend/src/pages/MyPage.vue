@@ -47,6 +47,7 @@ import {
 } from '@/utils/keymap'
 import { useAppI18n } from '@/i18n'
 import { getLocalizedPluginName, getLocalizedPluginDescription, getLocalizedCategoryName } from '@/utils/pluginI18n'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 
 const { t } = useAppI18n()
 
@@ -476,7 +477,7 @@ async function savePinnedList(list) {
       )
     }
   } catch (e) {
-    error(t('myPage.savePinnedFailed', { reason: e.message }))
+    error(t('myPage.savePinnedFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
   }
 }
 
@@ -516,7 +517,7 @@ async function saveRecentOrder(order) {
       )
     }
   } catch (e) {
-    error(t('myPage.saveOrderFailed', { reason: e.message }))
+    error(t('myPage.saveOrderFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
   }
 }
 
@@ -542,7 +543,7 @@ async function persistCurrentOrder() {
 
 async function pinPlugin(pluginId) {
   if (!canPin.value) {
-    warning(t('myPage.maxPinnedWarning', { count: MAX_PINNED_COUNT }))
+    warning(t('myPage.maxPinnedWarning', { count: MAX_PINNED_COUNT }, MAX_PINNED_COUNT))
     return
   }
 
@@ -739,11 +740,11 @@ async function handleOpenPlugin(pluginId) {
   try {
     const res = await pluginsStore.openPlugin(id)
     if (res?.action === 'navigate_to_detail') {
-      toastWarning(res.error || t('details.notInstalledReinstall'))
+      toastWarning(resolveErrorMessage(res, 'details.notInstalledReinstall'))
       router.push(routeUtils.toPluginDetails(res.pluginId || id))
     }
   } catch (e) {
-    toastError(t('details.launchFailed', { reason: e.message || e }))
+    toastError(t('details.launchFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
   }
 }
 
@@ -770,7 +771,7 @@ async function openApp(id) {
 
     // 检查是否需要导航到详情页（插件已卸载的情况）
     if (res?.action === 'navigate_to_detail') {
-      toastWarning(res.error || t('details.notInstalledReinstall'))
+      toastWarning(resolveErrorMessage(res, 'details.notInstalledReinstall'))
       router.push(routeUtils.toPluginDetails(res.pluginId || id))
       return
     }
@@ -781,7 +782,7 @@ async function openApp(id) {
       toastError(t('market.openFailed'))
     }
   } catch (e) {
-    toastError(t('market.openFailedWithReason', { reason: e.message || e }))
+    toastError(t('market.openFailedWithReason', { reason: resolveErrorMessage(e, 'common.unknownError') }))
   }
 }
 
@@ -807,7 +808,7 @@ async function handleToggleFavorite(pluginId) {
   } catch (e) {
     if (!onAuthRequired(e)) {
       console.error('toggleFavorite error:', e)
-      toastError(t('market.operationFailed', { reason: e.message || e }))
+      toastError(t('market.operationFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
     }
   }
 }
@@ -867,12 +868,12 @@ function handleUninstallPlugin(pluginId, options = {}) {
       try {
         const result = await pluginsStore.uninstallPlugin(pluginId)
         if (!result?.success) {
-          throw new Error(result?.error || result?.message || t('common.unknownError'))
+          throw new Error(resolveErrorMessage(result, 'common.unknownError'))
         }
         clampFocusedCardIndex()
         toastSuccess(t('market.uninstallSuccess'))
       } catch (e) {
-        toastError(t('market.uninstallFailed', { reason: e?.message || e }))
+        toastError(t('market.uninstallFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
       }
     }
   })
@@ -909,7 +910,7 @@ function handlePluginInstalled(event) {
         info(t('myPage.pluginInstalled'))
       }
     } else {
-      toastError(t('myPage.pluginInstallFailed', { reason: payload.error || t('common.unknownError') }))
+      toastError(t('myPage.pluginInstallFailed', { reason: resolveErrorMessage(payload, 'common.unknownError') }))
     }
   }
 }
@@ -957,7 +958,7 @@ async function syncPinnedToCloud() {
       pinned_list: getPinnedList()
     })
   } catch (e) {
-    syncError.value = e.message
+    syncError.value = resolveErrorMessage(e, 'common.unknownError')
     console.warn('同步固定列表失败:', e)
   } finally {
     syncing.value = false
@@ -975,7 +976,7 @@ async function syncOrderToCloud() {
       plugin_order: getRecentOrder()
     })
   } catch (e) {
-    syncError.value = e.message
+    syncError.value = resolveErrorMessage(e, 'common.unknownError')
     console.warn('同步排序失败:', e)
   } finally {
     syncing.value = false
@@ -1152,10 +1153,11 @@ const contextMenuItems = computed(() => {
   }
 
   if (canUninstallPlugin(pid)) {
+    const bundled = isBundledPlugin(pid)
     items.push({
       key: 'uninstall',
-      label: t('common.uninstall'),
-      danger: true,
+      label: bundled ? t('myPage.manageBundledTitle') : t('common.uninstall'),
+      danger: !bundled,
       dividerBefore: true,
       disabled: false,
       action: () => {
@@ -1697,7 +1699,7 @@ onUnmounted(() => {
               <span class="recent-name">{{ getLocalizedPluginName(plugin) || getPluginId(plugin) }}</span>
               <span class="recent-desc">{{ getLocalizedPluginDescription(plugin) || t('common.noDescription') }}</span>
             </span>
-            <span class="recent-cat">{{ plugin.category ? getLocalizedCategoryName(plugin.category) : '' }}</span>
+            <span class="recent-cat">{{ (plugin.categoryId || plugin.category) ? getLocalizedCategoryName(plugin.categoryId || plugin.category) : '' }}</span>
             <span class="recent-time">{{ recentTimeLabel(plugin) }}</span>
             <span class="recent-open">{{ t('common.open') }} <ShortcutKeys combo="Enter" /></span>
           </button>
@@ -1875,10 +1877,10 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* 「已安装 / 收藏」横向启动卡网格（minmax(184px, 1fr)，常规窗口 4 列，间距 8px） */
+/* 卡片按内容区宽度排列；极窄窗口仍能收缩到单列。 */
 .plugin-tile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
   gap: 8px;
 }
 

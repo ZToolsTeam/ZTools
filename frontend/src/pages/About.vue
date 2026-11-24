@@ -8,6 +8,7 @@ import { isUpdateUnsupported } from '@/composables/useAppUpdate'
 import { isMacOS, isWindows } from '@/utils/platform'
 import { EDITION, isOnline } from '@edition'
 import { useAppI18n } from '@/i18n'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 
 const { t } = useAppI18n()
 const appVersion = ref('--')
@@ -50,7 +51,7 @@ async function handleCheckUpdate() {
           if (!ok) window.__ztoolsToast?.('error', t('about.webUpdateIncomplete'))
         } catch (error) {
           console.error('Web 更新失败:', error)
-          window.__ztoolsToast?.('error', t('about.webUpdateFailed', { reason: error.message || t('common.unknownError') }))
+          window.__ztoolsToast?.('error', t('about.webUpdateFailed', { reason: resolveErrorMessage(error, 'common.unknownError') }))
         }
       } else {
         window.__ztoolsToast?.('success', t('about.alreadyLatest'))

@@ -24,7 +24,7 @@ export class ElectronReferencePdfRenderer implements ReferencePdfRenderer {
     this.#documents.clear(); this.#session.protocol.unhandle('ztools-reference-pdf')
   }
   async render(html: string, signal: AbortSignal): Promise<Buffer> {
-    const cancelled = () => new ZToolsError(errorCodes.callerDestroyed, 'PDF渲染已取消')
+    const cancelled = () => new ZToolsError(errorCodes.callerDestroyed, 'PDF rendering was cancelled')
     if (this.#stopped || signal.aborted) throw cancelled()
     const url = 'ztools-reference-pdf://render/' + randomUUID()
     const window = new BrowserWindow({ show: false, webPreferences: { partition: this.#partition,
@@ -42,7 +42,7 @@ export class ElectronReferencePdfRenderer implements ReferencePdfRenderer {
       if (signal.aborted || this.#stopped || window.isDestroyed()) throw cancelled()
       return bytes
     } catch (error) {
-      if (timedOut) throw new ZToolsError(errorCodes.requestTimeout, 'PDF渲染超时')
+      if (timedOut) throw new ZToolsError(errorCodes.requestTimeout, 'PDF rendering timed out')
       if (signal.aborted || this.#stopped || window.isDestroyed()) throw cancelled()
       throw error
     } finally {

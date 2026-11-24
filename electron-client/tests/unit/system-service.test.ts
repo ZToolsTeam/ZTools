@@ -226,7 +226,7 @@ test('system service exposes compatible queries and cleans caller-owned blockers
       () => service.getNetworkStats(),
       (error) => error instanceof ZToolsError &&
         error.code === errorCodes.notSupported &&
-        error.message === '网络流量统计尚未实现'
+        error.message === 'Network traffic statistics are not implemented'
     )
     if (process.platform === 'win32') {
       const defaultDisk = await service.getDiskUsage({})

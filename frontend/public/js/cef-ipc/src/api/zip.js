@@ -1,3 +1,5 @@
+import { resolveSdkText } from '../core/environment.js'
+
 /**
  * Zip API - 压缩与解压功能
  * 封装 ZipPlugin.dll 提供压缩解压功能
@@ -73,11 +75,17 @@ class ZipAPI {
     if (window.__ztoolsElectron?.contractVersion === 2) {
       const refs = new ReferenceFileSystemAPI(this.transport)
       refs._options(options, ['sources', 'output', 'format', 'password', 'level', 'storePaths', 'replace', 'signal'])
-      if ((options.format !== undefined && options.format !== 'zip') || (options.password !== undefined && options.password !== '') || (options.storePaths !== undefined && typeof options.storePaths !== 'boolean')) throw refs._error('NOT_SUPPORTED', '当前引用provider只生成未加密ZIP')
+      if ((options.format !== undefined && options.format !== 'zip') || (options.password !== undefined && options.password !== '') || (options.storePaths !== undefined && typeof options.storePaths !== 'boolean')) {
+        throw refs._error('NOT_SUPPORTED', resolveSdkText('当前引用provider只生成未加密ZIP', 'Current reference provider only supports unencrypted ZIP archives'))
+      }
       const sources = Array.isArray(options.sources) ? options.sources : [options.sources]
-      if (!sources.length || sources.length > 64 || !Number.isInteger(options.level ?? 6) || (options.level ?? 6) < 0 || (options.level ?? 6) > 9 || (options.replace !== undefined && typeof options.replace !== 'boolean')) throw refs._error('INVALID_REQUEST', 'ZIP来源/压缩级别无效')
+      if (!sources.length || sources.length > 64 || !Number.isInteger(options.level ?? 6) || (options.level ?? 6) < 0 || (options.level ?? 6) > 9 || (options.replace !== undefined && typeof options.replace !== 'boolean')) {
+        throw refs._error('INVALID_REQUEST', resolveSdkText('ZIP来源/压缩级别无效', 'Invalid ZIP sources or compression level'))
+      }
       const result = await refs._call('zip_compress', { fileGrantIds: sources.map(source => refs._reference(source, ['file', 'directory'], 'read')), saveGrantId: refs._reference(options.output, ['save'], 'write'), level: options.level ?? 6, replace: options.replace ?? false, storePaths: options.storePaths ?? true }, { signal: options.signal })
-      if (result.status !== 'committed' || result.sourceCount !== sources.length || !Number.isSafeInteger(result.fileCount) || result.fileCount < 0 || result.fileCount > 1024 || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024) throw refs._error('FILE_WRITE_OUTCOME_UNKNOWN', 'ZIP保存结果未确认')
+      if (result.status !== 'committed' || result.sourceCount !== sources.length || !Number.isSafeInteger(result.fileCount) || result.fileCount < 0 || result.fileCount > 1024 || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024) {
+        throw refs._error('FILE_WRITE_OUTCOME_UNKNOWN', resolveSdkText('ZIP保存结果未确认', 'ZIP save outcome could not be confirmed'))
+      }
       return true
     }
     const {
@@ -91,7 +99,7 @@ class ZipAPI {
     } = options
 
     if (!sources || !output) {
-      throw new Error('sources 和 output 参数必填')
+      throw new Error(resolveSdkText('sources 和 output 参数必填', 'Both sources and output parameters are required'))
     }
 
     // 统一处理 sources 为字符串（多个路径用逗号分隔）
@@ -171,16 +179,25 @@ class ZipAPI {
     if (window.__ztoolsElectron?.contractVersion === 2) {
       const refs = new ReferenceFileSystemAPI(this.transport)
       refs._options(options, ['archive', 'output', 'password', 'replace', 'signal'])
-      if ((options.password !== undefined && options.password !== '') || options.replace === true) throw refs._error('NOT_SUPPORTED', '引用解压仅支持未加密ZIP且不覆盖已有文件')
+      if ((options.password !== undefined && options.password !== '') || options.replace === true) {
+        throw refs._error('NOT_SUPPORTED', resolveSdkText('引用解压仅支持未加密ZIP且不覆盖已有文件', 'Reference extraction only supports unencrypted ZIP archives without overwriting existing files'))
+      }
       const result = await refs._call('zip_extract', { fileGrantId: refs._reference(options.archive, ['file'], 'read'), directoryGrantId: refs._reference(options.output, ['directory'], 'write') }, { signal: options.signal })
-      if (!['committed', 'partial'].includes(result.status) || !Array.isArray(result.completed) || !Array.isArray(result.createdDirectories) || result.completed.length > 1024 || result.createdDirectories.length > 65536 || [...result.completed, ...result.createdDirectories].some(name => typeof name !== 'string')) throw refs._error('FILE_WRITE_OUTCOME_UNKNOWN', '解压结果未确认')
-      if (result.status === 'partial') throw Object.assign(refs._error(result.error?.code || 'FILE_ERROR', result.error?.message || '解压部分完成'), { completed: result.completed, createdDirectories: result.createdDirectories, uncertain: result.uncertain })
+      if (!['committed', 'partial'].includes(result.status) || !Array.isArray(result.completed) || !Array.isArray(result.createdDirectories) || result.completed.length > 1024 || result.createdDirectories.length > 65536 || [...result.completed, ...result.createdDirectories].some(name => typeof name !== 'string')) {
+        throw refs._error('FILE_WRITE_OUTCOME_UNKNOWN', resolveSdkText('解压结果未确认', 'Extraction outcome could not be confirmed'))
+      }
+      if (result.status === 'partial') {
+        throw Object.assign(
+          refs._error(result.error?.code || 'FILE_ERROR', result.error?.message || resolveSdkText('解压部分完成', 'Extraction partially completed')),
+          { completed: result.completed, createdDirectories: result.createdDirectories, uncertain: result.uncertain }
+        )
+      }
       return true
     }
     const { archive, output, password = '', onProgress } = options
 
     if (!archive || !output) {
-      throw new Error('archive 和 output 参数必填')
+      throw new Error(resolveSdkText('archive 和 output 参数必填', 'Both archive and output parameters are required'))
     }
 
     const params = {
@@ -240,12 +257,19 @@ class ZipAPI {
       const refs = new ReferenceFileSystemAPI(this.transport)
       refs._options(options, ['signal'])
       const result = await refs._call('zip_list', { fileGrantId: refs._reference(archive, ['file'], 'read') }, options)
-      if (!Array.isArray(result.files) || result.files.length > 1024 || result.files.some(file => !file || typeof file.name !== 'string' || typeof file.isDirectory !== 'boolean' || !Number.isSafeInteger(file.size) || file.size < 0)) throw refs._error('FILE_ERROR', 'ZIP列表响应无效')
+      if (!Array.isArray(result.files) || result.files.length > 1024 || result.files.some(file => !file || typeof file.name !== 'string' || typeof file.isDirectory !== 'boolean' || !Number.isSafeInteger(file.size) || file.size < 0)) {
+        throw refs._error('FILE_ERROR', resolveSdkText('ZIP列表响应无效', 'Invalid ZIP entry list response'))
+      }
       return result.files
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('当前ZIP合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) {
+      throw Object.assign(
+        new Error(resolveSdkText('当前ZIP合约不支持取消选项', 'Current ZIP contract does not support cancellation options')),
+        { code: 'NOT_SUPPORTED' }
+      )
+    }
     if (!archive) {
-      throw new Error('archive 参数必填')
+      throw new Error(resolveSdkText('archive 参数必填', 'archive parameter is required'))
     }
 
     const pluginName = await this._getPluginName()
@@ -274,12 +298,19 @@ class ZipAPI {
       const refs = new ReferenceFileSystemAPI(this.transport)
       refs._options(options, ['signal'])
       const result = await refs._call('zip_test', { fileGrantId: refs._reference(archive, ['file'], 'read') }, options)
-      if (typeof result.valid !== 'boolean') throw refs._error('FILE_ERROR', 'ZIP校验响应无效')
+      if (typeof result.valid !== 'boolean') {
+        throw refs._error('FILE_ERROR', resolveSdkText('ZIP校验响应无效', 'Invalid ZIP validation response'))
+      }
       return result.valid
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('当前ZIP合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) {
+      throw Object.assign(
+        new Error(resolveSdkText('当前ZIP合约不支持取消选项', 'Current ZIP contract does not support cancellation options')),
+        { code: 'NOT_SUPPORTED' }
+      )
+    }
     if (!archive) {
-      throw new Error('archive 参数必填')
+      throw new Error(resolveSdkText('archive 参数必填', 'archive parameter is required'))
     }
 
     const pluginName = await this._getPluginName()

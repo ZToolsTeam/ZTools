@@ -124,12 +124,13 @@
     },
     {
       "code": "gen-uuid",
-      "explain": "UUID v4 批量生成",
+      "explain": "UUID v4 / v7 / v1 批量生成与格式切换",
       "mode": "view",
       "cmds": [
         "uuid",
         "guid",
-        "生成uuid"
+        "生成uuid",
+        "uuid v7"
       ]
     }
   ],
@@ -217,15 +218,28 @@
           ]
         },
         "gen-uuid": {
-          "explain": "Batch generate random UUID v4 identifiers",
+          "explain": "Batch generate UUID v4, v7 (time-ordered), and v1 identifiers with format switching",
           "cmds": [
             "uuid",
             "guid",
             "generate uuid",
-            "uuid v4"
+            "uuid v4",
+            "uuid v7"
           ]
         }
-      }
+      },
+      "screenshots": [
+        {
+          "file": "screenshots/en-US/01.png",
+          "title": "Encoding & Hashing"
+        }
+      ]
     }
-  }
+  },
+  "screenshots": [
+    {
+      "path": "screenshots/01.png",
+      "title": "常用编码与哈希"
+    }
+  ]
 }

@@ -49,7 +49,7 @@ type SubscriptionListener = (count: number) => void
 
 function stampEnvelope(input: EventEnvelope, caller: CallerIdentity): HostEnvelope {
   if (caller.type === 'plugin' && !caller.pluginId) {
-    throw new ZToolsError(errorCodes.permissionDenied, '插件调用者缺少已注册 pluginId')
+    throw new ZToolsError(errorCodes.permissionDenied, 'Plugin caller is missing a registered pluginId')
   }
   const envelopeId = `host_${randomUUID()}`
   return {
@@ -91,7 +91,7 @@ export class EventService {
     this.#requireRunning()
     const subscriptions = this.#subscriptions.get(caller.webContentsId) ?? new Set<string>()
     if (!subscriptions.has(params.key) && subscriptions.size >= MAX_SUBSCRIPTIONS_PER_CALLER) {
-      throw new ZToolsError(errorCodes.permissionDenied, '单窗口事件订阅数量已达上限')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Maximum event subscriptions per window reached')
     }
     const before = subscriptions.size
     subscriptions.add(params.key)
@@ -200,12 +200,12 @@ export class EventService {
     this.#requireRunning()
     if (typeof isKill !== 'boolean' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2000 ||
         owner.type !== 'plugin' || !owner.pluginId || !owner.pluginInstanceId) {
-      throw new ZToolsError(errorCodes.invalidRequest, '插件退出请求参数无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid plugin exit request parameters')
     }
     if (!sameCaller(this.#callers.get(owner.webContentsId), owner)) return Promise.resolve('OWNER_GONE')
     const subscriptions = this.#subscriptions.get(owner.webContentsId)
     if (!subscriptions?.has('plugin_out') && !subscriptions?.has('*')) return Promise.resolve('NO_SUBSCRIBERS')
-    if (this.#pendingPluginExits.size >= 16) throw new ZToolsError(errorCodes.pluginBusy, '插件退出请求数量已达上限')
+    if (this.#pendingPluginExits.size >= 16) throw new ZToolsError(errorCodes.pluginBusy, 'Maximum concurrent plugin exit requests reached')
     const id = 'host_' + randomUUID()
     return new Promise(resolve => {
       const timeout = setTimeout(() => this.#finishPluginExit(id, 'TIMEOUT'), timeoutMs)
@@ -326,19 +326,19 @@ export class EventService {
     const exit = this.#pendingPluginExits.get(exitId)
     if (exit) {
       if (!sameCaller(exit.owner, caller) || !sameCaller(this.#callers.get(caller.webContentsId), caller)) {
-        throw new ZToolsError(errorCodes.permissionDenied, '调用者未收到对应退出请求')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Caller did not receive the matching exit request')
       }
       if (input.type !== 'events.Ack' || !input.payload || typeof input.payload !== 'object' ||
           Array.isArray(input.payload) || typeof (input.payload as Record<string, unknown>).ok !== 'boolean') {
-        throw new ZToolsError(errorCodes.invalidRequest, '退出确认格式无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid plugin exit acknowledgement payload')
       }
       this.#finishPluginExit(exitId, (input.payload as Record<string, unknown>).ok === true ? 'COMPLETED' : 'CALLBACK_FAILED')
       return { success: true, delivered: 1 }
     }
     const pending = this.#pendingRequests.get(input.replyTo ?? '')
-    if (!pending) throw new ZToolsError(errorCodes.invalidRequest, 'replyTo 对应的请求不存在或已结束')
+    if (!pending) throw new ZToolsError(errorCodes.invalidRequest, 'Request referenced by replyTo does not exist or has already completed')
     if (!pending.recipientIds.has(caller.webContentsId)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '调用者未收到对应请求')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Caller did not receive the matching request')
     }
     clearTimeout(pending.timeout)
     this.#pendingRequests.delete(input.replyTo ?? '')
@@ -417,20 +417,20 @@ export class EventService {
   }
 
   #requireRunning(): void {
-    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
   }
 
   #assertRendererMayPublish(type: string): void {
     if (type === RUNTIME_PERMISSION_CHANGED_EVENT || type === 'plugin_out' || type === 'plugin_enter' ||
         type === 'plugin_runtime_stopped' || type === 'super_panel_changed' ||
         ACCOUNT_EVENT_TYPES.has(type)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '该事件仅允许宿主发布')
+      throw new ZToolsError(errorCodes.permissionDenied, 'This event can only be published by the host')
     }
   }
 
   #assertOwnerOnlyHostEvent(type: string): void {
     if (type === RUNTIME_PERMISSION_CHANGED_EVENT || type === 'plugin_out' || type === 'plugin_enter') {
-      throw new ZToolsError(errorCodes.permissionDenied, '该事件必须定向发送给当前调用者')
+      throw new ZToolsError(errorCodes.permissionDenied, 'This event must be targeted to the current caller')
     }
   }
 }

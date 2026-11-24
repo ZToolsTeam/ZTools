@@ -33,7 +33,7 @@ const QR_ENCODER_MESSAGES = {
         capacityExceeded: (bytes) => `内容太长（${bytes} 字节），超出二维码最大容量`
     },
     "en-US": {
-        capacityExceeded: (bytes) => `Content is too long (${bytes} bytes), exceeding maximum QR code capacity`
+        capacityExceeded: (bytes) => `Content is too long (${bytes} ${bytes === 1 ? "byte" : "bytes"}), exceeding maximum QR code capacity`
     }
 };
 function qrEncoderStrings() {

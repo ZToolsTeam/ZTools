@@ -66,9 +66,9 @@ describe('市场分类从 CDN、本地快照和内置清单到筛选与统计', 
     const store = usePluginsStore()
     store._updateCategoryCounts(catalog)
     for (const category of categories) {
-      const result = await manager.query({ category: category.name, pageSize: 100 })
-      expect(result.total, category.name).toBe(category.pluginsCount)
-      expect(store.categoryCounts[category.name], category.name).toBe(result.total)
+      const result = await manager.query({ category: category.id, pageSize: 100 })
+      expect(result.total, category.id).toBe(category.pluginsCount)
+      expect(store.categoryCounts[category.id], category.id).toBe(result.total)
     }
     expect((await manager.query({ category: '文件管理' })).list.map(({ id }) => id)).toEqual(['batch-rename'])
     expect((await manager.query({ category: '网络工具' })).list.map(({ id }) => id)).toEqual(['browser-history', 'network-adapter'])
@@ -143,7 +143,7 @@ describe('市场分类从 CDN、本地快照和内置清单到筛选与统计', 
     try {
       await flushPromises()
       expect(wrapper.findAll('article').map((item) => item.text())).toEqual(['离线文件插件', '离线未分类插件'])
-      expect(wrapper.vm.visibleMarketCategories.map((c) => c.name)).toEqual(['全部', '文件管理', '其他工具'])
+      expect(wrapper.vm.visibleMarketCategories.map((c) => c.id)).toEqual(['all', 'files', 'other'])
       await router.push('/list/其他工具')
       await flushPromises()
       expect(wrapper.findAll('article').map((item) => item.text())).toEqual(['离线未分类插件'])

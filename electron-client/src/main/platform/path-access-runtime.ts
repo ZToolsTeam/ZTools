@@ -17,7 +17,7 @@ export interface PathAccessRuntime {
   stop(): Promise<void>
 }
 type RuntimeAdapter = PathAccessAdapter & RecoveryAdapter
-const failed = () => new ZToolsError(errorCodes.fileError, '原生文件运行时初始化或退出未确认')
+const failed = () => new ZToolsError(errorCodes.fileError, 'Native file runtime initialization or shutdown was not confirmed')
 function createCleanupScope() {
   const actions: ApplicationCleanupAction[] = []
   let cleanup: Promise<void> | undefined

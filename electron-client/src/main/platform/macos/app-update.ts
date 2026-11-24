@@ -7,6 +7,7 @@ import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 import { errorCodes, ZToolsError } from '../../../contracts/errors.js'
+import { t } from '../../i18n/index.js'
 import type { MacUpdateInstaller } from '../../services/update-service.js'
 
 const execute = promisify(execFile)
@@ -19,7 +20,7 @@ function expectedBundleVersions(version: string): { shortVersion: string; buildV
   const merged = patch * 1000 + build
   if (parts.length !== 4 || parts.some(part => !/^(0|[1-9][0-9]*)$/.test(part) || !Number.isSafeInteger(Number(part))) ||
       build > 999 || !Number.isSafeInteger(merged)) {
-    throw new ZToolsError(errorCodes.dataCorrupt, 'macOS 更新发布版本号无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, t('update.macos.invalidReleaseVersion'))
   }
   // 与发行包一致：X.Y.Z.W 对应显示版本 X.Y.Z、构建号 X.Y.(Z×1000+W)。
   return { shortVersion: parts.slice(0, 3).join('.'), buildVersion: `${parts.slice(0, 2).join('.')}.${merged}` }
@@ -68,7 +69,7 @@ export class MacAppUpdater implements MacUpdateInstaller {
     this.#ready = true
     this.#finishNative?.()
   }
-  readonly #onNativeMissing = (): void => this.#onNativeError(new Error('原生更新器未接受更新包'))
+  readonly #onNativeMissing = (): void => this.#onNativeError(new Error(t('update.macos.nativeRejected')))
   #restartTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(options: MacAppUpdaterOptions) {
@@ -83,10 +84,10 @@ export class MacAppUpdater implements MacUpdateInstaller {
   assertSupported(): void {
     const { isPackaged, appPath } = this.#options
     if (!isPackaged || !path.isAbsolute(appPath) || !appPath.endsWith('.app')) {
-      throw new ZToolsError(errorCodes.notSupported, '请在正式安装的 ZTools 中更新，开发环境不支持替换应用')
+      throw new ZToolsError(errorCodes.notSupported, t('update.macos.devNotSupported'))
     }
     if (appPath.startsWith('/Volumes/') || appPath.includes('/AppTranslocation/')) {
-      throw new ZToolsError(errorCodes.notSupported, '请先将 ZTools 拖入“应用程序”并从那里打开，再进行更新')
+      throw new ZToolsError(errorCodes.notSupported, t('update.macos.moveToApplications'))
     }
   }
 
@@ -101,14 +102,14 @@ export class MacAppUpdater implements MacUpdateInstaller {
     if (await infoValue(candidate, 'CFBundleIdentifier') !== currentId ||
         await infoValue(candidate, 'CFBundleShortVersionString') !== expected.shortVersion ||
         await infoValue(candidate, 'CFBundleVersion') !== expected.buildVersion) {
-      throw new ZToolsError(errorCodes.dataCorrupt, '更新包中的应用标识或版本与发布信息不一致')
+      throw new ZToolsError(errorCodes.dataCorrupt, t('update.macos.bundleMismatch'))
     }
     await this.#run('/usr/bin/codesign', ['--verify', '--deep', '--strict', current], signal)
     const signature = await this.#run('/usr/bin/codesign', ['--display', '--verbose=2', '-r-', current], signal)
     const details = signature.stdout + '\n' + signature.stderr
     const requirement = details.match(/^designated => (.+)$/m)?.[1]
     if (!requirement || !/^TeamIdentifier=[A-Z0-9]{10}$/m.test(details)) {
-      throw new ZToolsError(errorCodes.notSupported, '当前应用没有有效的开发者签名，无法自动更新')
+      throw new ZToolsError(errorCodes.notSupported, t('update.macos.invalidSignature'))
     }
     // 同时验证嵌套代码与当前应用的 designated requirement，拒绝换签/换产品的包。
     await this.#run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '-R', '=' + requirement, candidate], signal)
@@ -120,7 +121,7 @@ export class MacAppUpdater implements MacUpdateInstaller {
     try {
       await this.#run('/usr/bin/hdiutil', ['attach', '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', mountpoint, dmgPath], signal)
       const apps = (await fs.readdir(mountpoint, { withFileTypes: true })).filter(entry => entry.isDirectory() && entry.name.endsWith('.app'))
-      if (apps.length !== 1) throw new ZToolsError(errorCodes.dataCorrupt, '更新磁盘映像必须包含一个应用')
+      if (apps.length !== 1) throw new ZToolsError(errorCodes.dataCorrupt, t('update.macos.invalidDmgContent'))
       const candidate = path.join(mountpoint, apps[0]!.name)
       await this.#verifyApplication(candidate, version, signal)
       const archive = path.join(root, 'update.zip')
@@ -143,7 +144,7 @@ export class MacAppUpdater implements MacUpdateInstaller {
 
   async prepare(dmgPath: string, version: string, signal: AbortSignal): Promise<void> {
     this.assertSupported()
-    if (this.#busy || this.#ready || this.#nativePending) throw new ZToolsError(errorCodes.invalidRequest, '已有 macOS 更新正在安装')
+    if (this.#busy || this.#ready || this.#nativePending) throw new ZToolsError(errorCodes.invalidRequest, t('update.macos.alreadyInstalling'))
     this.#busy = true
     let root: string | undefined
     try {
@@ -152,7 +153,7 @@ export class MacAppUpdater implements MacUpdateInstaller {
         await fs.access(this.#options.appPath, fs.constants.W_OK)
         await fs.access(path.dirname(this.#options.appPath), fs.constants.W_OK)
       } catch {
-        throw new ZToolsError(errorCodes.permissionDenied, '当前账户无法替换此应用，请将 ZTools 安装到有写入权限的位置后重试')
+        throw new ZToolsError(errorCodes.permissionDenied, t('update.macos.noWritePermission'))
       }
       await fs.mkdir(this.#options.stagingRoot, { recursive: true })
       root = await fs.mkdtemp(path.join(this.#options.stagingRoot, 'update-'))
@@ -202,7 +203,7 @@ export class MacAppUpdater implements MacUpdateInstaller {
         server.listen(0, '127.0.0.1', () => resolve())
       })
       const address = server.address()
-      if (!address || typeof address === 'string') throw new Error('无法启动本机更新服务')
+      if (!address || typeof address === 'string') throw new Error(t('update.macos.localServerFailed'))
       origin = `http://127.0.0.1:${address.port}`
       signal.throwIfAborted()
       await new Promise<void>((resolve, reject) => {
@@ -213,8 +214,8 @@ export class MacAppUpdater implements MacUpdateInstaller {
           if (error) reject(error)
           else resolve()
         }
-        const onAbort = (): void => finish(new ZToolsError(errorCodes.appStopping, '应用退出，更新准备已中断'))
-        const timer = setTimeout(() => finish(new Error('原生更新器准备超时，请重新打开 ZTools 后重试')), this.#options.nativeTimeoutMs ?? TOOL_TIMEOUT_MS)
+        const onAbort = (): void => finish(new ZToolsError(errorCodes.appStopping, t('update.macos.interruptedByQuit')))
+        const timer = setTimeout(() => finish(new Error(t('update.macos.nativeTimeout'))), this.#options.nativeTimeoutMs ?? TOOL_TIMEOUT_MS)
         fail = finish
         this.#finishNative = finish
         this.#nativePending = true

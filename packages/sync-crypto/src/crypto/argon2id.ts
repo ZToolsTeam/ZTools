@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { tSync } from '../i18n.js'
 
 export interface Argon2idOptions {
   /**
@@ -17,6 +18,10 @@ export interface Argon2idOptions {
    * 派生密钥字节长度（默认 32 字节，适用于 AES-256）
    */
   outputLength?: number
+  /**
+   * 显式指定错误文案语言（覆盖运行时默认语言）
+   */
+  locale?: string
 }
 
 // 64位无符号长整数旋转与基础算术辅助函数
@@ -157,7 +162,7 @@ export function argon2id(
   const saltBuf = Buffer.isBuffer(salt) ? salt : Buffer.from(salt, 'utf8')
 
   if (saltBuf.length < 8) {
-    throw new Error('Argon2id 盐值长度至少需要 8 字节')
+    throw new Error(tSync('argon2.saltTooShort', undefined, options.locale))
   }
 
   // 1. 计算初始哈希 H_0 = BLAKE2b-512(p, T, m, t, v=0x13, y=2, len(P), P, len(S), S, ...)
@@ -282,6 +287,7 @@ export function deriveMasterKey(
     memoryCost: options.memoryCost ?? 64, // 默认 64KiB 测试/运行平衡
     timeCost: options.timeCost ?? 3,
     parallelism: options.parallelism ?? 1,
-    outputLength: options.outputLength ?? 32
+    outputLength: options.outputLength ?? 32,
+    ...(options.locale !== undefined ? { locale: options.locale } : {})
   })
 }

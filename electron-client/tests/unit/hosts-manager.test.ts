@@ -63,7 +63,7 @@ test('符号链接、硬链接、非普通文件、备份不可写与不安全�
     try { const result = await native(dir, before, '# next\n'); assert.equal(result.success, false, mode); assert.equal(await fs.readFile(file, 'utf8'), original) }
     finally { await fs.chmod(dir, 0o700) }
   }
-  const { file } = await fixture(); await fs.rm(file); await fs.mkdir(file); await assert.rejects(readHostsFile(file, signal()), /普通/)
+  const { file } = await fixture(); await fs.rm(file); await fs.mkdir(file); await assert.rejects(readHostsFile(file, signal()), /regular single-link file/i)
 })
 test('宿主真实请求文件、shell 转义和原生回执链路；授权失败明确抛错', mac, async () => {
   const { dir, file } = await fixture(), helperWithQuote = path.join(root, "helper with ' quote")
@@ -75,7 +75,7 @@ test('宿主真实请求文件、shell 转义和原生回执链路；授权失�
   const before = await provider.read(signal()), content = original + '# via-provider\n'
   assert.ok((await provider.write(before, content, signal())).recoveryPath); assert.equal((await provider.read(signal())).content, content)
   const denied = new MacHostsProvider(binary, async () => { throw new Error('用户取消授权') }, file)
-  await assert.rejects(denied.write(await denied.read(signal()), original, signal()), /授权或写入未确认/)
+  await assert.rejects(denied.write(await denied.read(signal()), original, signal()), /authorization or write was not confirmed/i)
   assert.equal(await fs.readFile(file, 'utf8'), content)
 })
 test('取消标记写入失败时撤销请求，迟到的原生写入不能修改文件', mac, async t => {
@@ -98,7 +98,7 @@ test('取消标记写入失败时撤销请求，迟到的原生写入不能修�
     const result = await exec('/bin/sh', ['-c', shell + " '" + dir + "'"])
     return result.stdout
   }, file)
-  await assert.rejects(provider.write(await provider.read(signal()), original + '# cancelled\n', controller.signal), /Hosts 未确认写入.*取消标记写入失败/)
+  await assert.rejects(provider.write(await provider.read(signal()), original + '# cancelled\n', controller.signal), /Hosts write not confirmed.*failed to write cancel marker/i)
   assert.equal(failedMarkers, 1)
   assert.equal(await fs.readFile(file, 'utf8'), original)
 })
@@ -106,8 +106,8 @@ test('备份损坏、路径穿越、陌生字段与超长内容失败关闭', ma
   for (const request of [{ action: 'read', customHostsPath: '/tmp/no' }, { action: 'prepare', sessionId: 'bad', content: '' }, { action: 'prepare', sessionId: 'a'.repeat(36), content: '\0' }, { action: 'prepare', sessionId: 'a'.repeat(36), content: 'x'.repeat(1048577) }]) assert.throws(() => validateHostsRequest(request))
   const dir = path.join(root, 'backup-store'), backups = new HostsBackups(dir), saved = await backups.save(original, original + '# next\n')
   assert.equal((await backups.load(saved.id)).before, original); assert.equal((await backups.list()).length, 1)
-  await fs.writeFile(path.join(dir, saved.id + '.json'), '{}'); await assert.rejects(backups.load(saved.id), /校验失败/)
-  await assert.rejects(backups.load('../etc/hosts'), /编号无效/)
+  await fs.writeFile(path.join(dir, saved.id + '.json'), '{}'); await assert.rejects(backups.load(saved.id), /checksum verification failed/i)
+  await assert.rejects(backups.load('../etc/hosts'), /Invalid hosts backup ID/i)
 })
 async function serviceFixture(flushError = '') {
   const { dir, file } = await fixture(); let writes = 0
@@ -136,14 +136,14 @@ test('其他窗口、读后外部修改、确认后修改、取消计划均不�
   const { call, service, file, writes } = await serviceFixture()
   try {
     const snapshot = await call({ action: 'read' })
-    await assert.rejects(call({ action: 'prepare', sessionId: snapshot.sessionId, content: 'next' }, { ...caller, webContentsId: 100 }), /过期/)
+    await assert.rejects(call({ action: 'prepare', sessionId: snapshot.sessionId, content: 'next' }, { ...caller, webContentsId: 100 }), /expired/i)
     const plan = await call({ action: 'prepare', sessionId: snapshot.sessionId, content: original + '# next\n' })
-    await assert.rejects(call({ action: 'apply', planId: plan.planId }, { ...caller, webContentsId: 100 }), /过期/)
+    await assert.rejects(call({ action: 'apply', planId: plan.planId }, { ...caller, webContentsId: 100 }), /expired/i)
     await fs.appendFile(file, '# outside\n')
-    await assert.rejects(call({ action: 'apply', planId: plan.planId }), /其他程序修改/)
-    await assert.rejects(call({ action: 'prepare', sessionId: snapshot.sessionId, content: 'next' }), /其他程序修改/)
+    await assert.rejects(call({ action: 'apply', planId: plan.planId }), /modified by another program/i)
+    await assert.rejects(call({ action: 'prepare', sessionId: snapshot.sessionId, content: 'next' }), /modified by another program/i)
     const fresh = await call({ action: 'read' }), pending = await call({ action: 'prepare', sessionId: fresh.sessionId, content: original })
-    await call({ action: 'cancel' }); await assert.rejects(call({ action: 'apply', planId: pending.planId }), /过期/); assert.equal(writes(), 0)
+    await call({ action: 'cancel' }); await assert.rejects(call({ action: 'apply', planId: pending.planId }), /expired/i); assert.equal(writes(), 0)
   } finally { await service.stop() }
 })
 test('备份写入失败时服务不调用系统写入，DNS刷新必须取得真实成功', mac, async () => {
@@ -206,7 +206,7 @@ test('真实 IPC 错误序列化保留失败原因、恢复目录和备份提示
     const plan = await service.handle({ action: 'prepare', sessionId: state.sessionId, content: original + '# next' }, caller, signal()) as Record<string, unknown>
     await assert.rejects(service.handle({ action: 'apply', planId: plan.planId }, caller, signal()), error => {
       const reply = toPublicError(error)
-      assert.equal(reply.code, errorCodes.nativeHostError); assert.match(reply.message, /WRITE_OUTCOME_UNKNOWN/); assert.match(reply.message, /恢复目录/); assert.match(reply.message, /原内容备份/)
+      assert.equal(reply.code, errorCodes.nativeHostError); assert.match(reply.message, /WRITE_OUTCOME_UNKNOWN/); assert.match(reply.message, /恢复目录/); assert.match(reply.message, /original backup/i)
       assert.ok(reply.message.length <= 2000); return true
     })
     await assert.rejects(service.handle({ action: 'flush' }, caller, signal()), error => { assert.match(toPublicError(error).message, /授权被取消/); return true })

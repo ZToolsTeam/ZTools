@@ -2,7 +2,7 @@
  * 实时数学计算与色彩检测引擎 (Safe Expression Evaluator & Color Inspector)
  * 纯算法实现，彻底禁止 eval() 与 new Function()，完全符合 AST 安全扫描规范
  */
-import { LocalStorage } from "@ztools/declarative-ui";
+import { LocalStorage, getLocale } from "@ztools/declarative-ui";
 const HISTORY_STORAGE_KEY = "ztools-calculator-history-v1";
 /** 未置顶历史最多保留的条数；置顶项不受限制，不会被淘汰 */
 export const MAX_RECENT_HISTORY = 100;
@@ -59,8 +59,8 @@ const ENGINE_MESSAGES = {
         dateOutOfRange: "Date is out of representable range",
         dateNotExist: 'Date does not exist: "{expr}"',
         dateToday: "Today",
-        dateDaysLater: "in {days} day(s)",
-        dateDaysAgo: "{days} day(s) ago",
+        dateDaysLater: "in {days} [[days:day|days]]",
+        dateDaysAgo: "{days} [[days:day|days]] ago",
         dateFutureDetails: "{expr} (+{count} {unit})",
         datePastDetails: "{expr} (-{count} {unit})",
         dateForwardDetails: "{desc} (+{count} {unit})",
@@ -77,19 +77,28 @@ function resolveEngineLocale(explicitLocale) {
     const docLang = typeof document !== "undefined" && typeof document.documentElement?.lang === "string"
         ? document.documentElement.lang
         : undefined;
+    const runtimeLocale = typeof getLocale === "function" ? getLocale() : undefined;
     const raw = explicitLocale ||
+        (docLang && docLang.trim() ? docLang : undefined) ||
         (typeof globalRecord.__ztoolsLocale === "string" ? globalRecord.__ztoolsLocale : undefined) ||
-        docLang;
-    if (typeof raw === "string" && /^en(?:[-_]|$)/i.test(raw.trim())) {
-        return "en-US";
+        runtimeLocale;
+    if (typeof raw === "string" && /^zh(?:[-_]|$)/i.test(raw.trim())) {
+        return "zh-CN";
     }
-    return "zh-CN";
+    return "en-US";
 }
 function engineT(key, params, explicitLocale) {
     const locale = resolveEngineLocale(explicitLocale);
     let template = ENGINE_MESSAGES[locale][key];
     if (params) {
         template = template.replace(/\{([A-Za-z0-9_]+)\}/g, (match, token) => Object.prototype.hasOwnProperty.call(params, token) ? String(params[token]) : match);
+    }
+    if (template.includes("[[")) {
+        template = template.replace(/\[\[([A-Za-z0-9_.-]+):([^|\]]+)\|([^\]]+)\]\]/g, (_m, k, one, other) => {
+            const v = params?.[k];
+            const n = typeof v === "number" ? v : Number(String(v ?? "").replace(/,/g, ""));
+            return n === 1 ? one : other;
+        });
     }
     return template;
 }
@@ -108,15 +117,16 @@ const UNIT_NUMBER_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
  * - 绝对值小于 1e-6 或不小于 1e21 用科学计数法（15 位有效数字），避免极小数被舍成 0；
  * - 其余小数保留 15 位有效数字（双精度可靠位数，去掉 0.1+0.2 这类浮点尾差）。
  */
-export function formatCalculatorNumber(val) {
+export function formatCalculatorNumber(val, explicitLocale) {
     if (val === 0)
         return "0";
     const abs = Math.abs(val);
     if (abs < 1e-6 || abs >= 1e21)
         return String(Number(val.toPrecision(15)));
+    const locale = resolveEngineLocale(explicitLocale);
     if (Number.isInteger(val))
-        return val.toLocaleString("en-US");
-    return val.toLocaleString("en-US", { maximumSignificantDigits: 15 });
+        return val.toLocaleString(locale);
+    return val.toLocaleString(locale, { maximumSignificantDigits: 15 });
 }
 /** 按小数位四舍五入，并把 -0 规范成 0 */
 function roundTo(val, digits) {
@@ -416,8 +426,8 @@ export function evaluateMathExpression(input, options = {}) {
             answer: val,
             // 单独一个整数（如进制换算的十进制结果填回）按 BigInt 原样显示：超过 2^53 的整数用 Number 会丢精度
             formattedAnswer: PLAIN_INTEGER_RE.test(trimmed)
-                ? BigInt(trimmed).toLocaleString("en-US")
-                : formatCalculatorNumber(val)
+                ? BigInt(trimmed).toLocaleString(resolveEngineLocale(options.locale))
+                : formatCalculatorNumber(val, options.locale)
         };
     }
     catch (err) {

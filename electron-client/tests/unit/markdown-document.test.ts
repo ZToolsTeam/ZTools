@@ -100,7 +100,7 @@ test('真实文件授权→读取→转换→另存：无授权拒绝、原文�
     await files.grantSavePath(output, caller)
     const replaced = await service.execute({ ...request('export'), markdown: '# 新内容', outputPath: output }, caller, signal()); assert.ok('status' in replaced && replaced.status === 'committed')
     assert.notDeepEqual(await fs.readFile(output), bytes); assert.match((await xmlParts(await fs.readFile(output))).get('word/document.xml')!, /新内容/)
-    await assert.rejects(service.execute({ ...request('export'), outputPath: output }, caller, signal()), /已存在/)
+    await assert.rejects(service.execute({ ...request('export'), outputPath: output }, caller, signal()), /already exists/i)
     await fs.writeFile(input, Buffer.from([0xff, 0xfe, 0x00])); await assert.rejects(service.execute({ action: 'read', path: input, operationId: 'bad' }, caller, signal()))
     await fs.writeFile(input, 'a'.repeat(256 * 1024 + 1)); await assert.rejects(service.execute({ action: 'read', path: input, operationId: 'large' }, caller, signal()), /256 KiB/)
   } finally { await service.stop(); await files.stop(); await fs.rm(root, { recursive: true, force: true }) }
@@ -118,7 +118,7 @@ test('授权文件被换成 FIFO 时读取及时失败，取消和停止完成�
       await files.grantOpenPath(input, caller); await fs.unlink(input); execFileSync('mkfifo', [input]);
       const service = new MarkdownDocumentService(files, {}), signal = new AbortController().signal;
       let rejected = false;
-      try { await service.execute({ action:'read', path:input, operationId:'pipe' }, caller, signal) } catch (e) { rejected = /普通/.test(e.message) }
+      try { await service.execute({ action:'read', path:input, operationId:'pipe' }, caller, signal) } catch (e) { rejected = /regular Markdown/i.test(e.message) }
       const cancel = await service.execute({ action:'cancel', operationId:'pipe' }, caller, signal);
       await service.stop(); await files.stop();
       if (!rejected || cancel.cancelRequested !== false) process.exitCode = 1;
@@ -135,16 +135,16 @@ test('富文本写入与读回一致才成功；相同纯文本但格式未更�
   const result = await service.execute(request('copy'), caller, signal()); assert.ok('copied' in result && result.copied)
   assert.match(clip.readHTML(), /<strong>加粗<\/strong>/)
   const oldHtml = clip.readHTML(); clip.readHTML = () => oldHtml
-  await assert.rejects(service.execute({ ...request('copy'), options: { ...options, fontSize: 'size-3' } }, caller, signal()), /富文本/)
+  await assert.rejects(service.execute({ ...request('copy'), options: { ...options, fontSize: 'size-3' } }, caller, signal()), /rich text/i)
   await assert.rejects(service.execute({ ...request('export'), outputPath: '/tmp/test.docx' }, caller, signal()), /磁盘已满/)
   await assert.rejects(service.execute({ action: 'read', operationId: 'x', path: '/tmp/test.md' }, caller, signal()), /读取失败/)
-  service.stop(); await assert.rejects(service.execute(request(), caller, signal()), /停止/)
+  service.stop(); await assert.rejects(service.execute(request(), caller, signal()), /has stopped/i)
 })
 test('并发、取消、关闭和迟到读取：取消等待当前处理退出且不声称已撤回成功写入', async () => {
   let finish!: (value: string) => void, writes = 0
   const service = new MarkdownDocumentService({ resolveAuthorizedPath: () => new Promise(resolve => { finish = resolve }), writeFile: async () => { writes++; throw new Error('不该写入') } }, clipboard())
-  const pending = service.execute({ action: 'read', operationId: 'read', path: '/tmp/test.md' }, caller, signal()), rejected = assert.rejects(pending, /取消/)
-  await assert.rejects(service.execute(request(), caller, signal()), /正在处理/)
+  const pending = service.execute({ action: 'read', operationId: 'read', path: '/tmp/test.md' }, caller, signal()), rejected = assert.rejects(pending, /cancelled/i)
+  await assert.rejects(service.execute(request(), caller, signal()), /already in progress/i)
   const other = await service.execute({ action: 'cancel', operationId: 'read' }, { ...caller, webContentsId: 78 }, signal()); assert.equal('cancelRequested' in other && other.cancelRequested, false)
   const cancel = service.execute({ action: 'cancel', operationId: 'read' }, caller, signal()); finish('/tmp/test.md'); await rejected
   const response = await cancel; assert.equal('cancelRequested' in response && response.cancelRequested, true); assert.ok(!('cancelled' in response)); assert.equal(writes, 0)
@@ -157,15 +157,15 @@ test('Markdown富文本与普通复制共用真实宿主互斥，延迟读取期
   const clip = clipboard(files), service = new MarkdownDocumentService({} as FileSystemService, clip.service)
   try {
     const earlier = clip.service.copyText({ tempFile: '/isolated-fixture/input.txt' }, caller)
-    await assert.rejects(clip.service.copyText({ text: 'other' }, caller), (error: unknown) => error instanceof Error && /正在进行/.test(error.message))
-    await assert.rejects(service.execute(request('copy'), caller, signal()), (error: unknown) => error instanceof Error && /正在进行/.test(error.message))
+    await assert.rejects(clip.service.copyText({ text: 'other' }, caller), (error: unknown) => error instanceof Error && /in progress/i.test(error.message))
+    await assert.rejects(service.execute(request('copy'), caller, signal()), (error: unknown) => error instanceof Error && /in progress/i.test(error.message))
     assert.equal(clip.readText(), '')
     finish({ success: true, content: 'earlier', size: 7 }); await earlier
     const copied = await service.execute(request('copy'), caller, signal())
     assert.ok('copied' in copied && copied.copied)
     assert.match(clip.readText(), /验收文档/); assert.match(clip.readHTML(), /<strong>加粗<\/strong>/)
     await clip.service.stop()
-    await assert.rejects(service.execute(request('copy'), caller, signal()), /取消/)
+    await assert.rejects(service.execute(request('copy'), caller, signal()), /cancelled/i)
   } finally { await service.stop(); await clip.service.stop() }
 })
 
@@ -176,7 +176,7 @@ test('富文本写入失败保留敏感清除任务，成功替换后不误清�
   try {
     await clip.service.copyText({ text: 'isolated-secret', sensitive: true }, caller)
     clip.write = () => {}
-    await assert.rejects(service.execute(request('copy'), caller, signal()), /富文本/)
+    await assert.rejects(service.execute(request('copy'), caller, signal()), /rich text/i)
     assert.equal(clip.readText(), 'isolated-secret')
     t.mock.timers.tick(30000); assert.equal(clip.readText(), '')
     await clip.service.copyText({ text: 'second-secret', sensitive: true }, caller)
@@ -186,7 +186,7 @@ test('富文本写入失败保留敏感清除任务，成功替换后不误清�
     t.mock.timers.tick(30000)
     assert.equal(clip.readText(), copied); assert.equal(clip.readHTML(), html)
     const aborted = new AbortController(); aborted.abort()
-    await assert.rejects(clip.service.copyRichText({ text: 'late', html: '<p>late</p>' }, aborted.signal), /取消/)
+    await assert.rejects(clip.service.copyRichText({ text: 'late', html: '<p>late</p>' }, aborted.signal), /cancelled/i)
     assert.equal(clip.readText(), copied)
   } finally { await service.stop(); await clip.service.stop() }
 })

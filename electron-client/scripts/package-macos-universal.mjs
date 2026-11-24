@@ -27,6 +27,10 @@ const EXPECTED_PACKAGER_VERSION = '20.3.0'
 const EXPECTED_ELECTRON_VERSION = '43.4.1'
 const EXPECTED_CLASSIC_LEVEL_VERSION = '3.0.0'
 const APPLICATION_NAME = 'ZTools'
+const EN_APPLE_EVENTS_USAGE_DESCRIPTION =
+  'ZTools needs to control other applications to switch windows, paste content, and read application icons.'
+const ZH_HANS_APPLE_EVENTS_USAGE_DESCRIPTION =
+  'ZTools 需要控制其他应用，用于切换窗口、粘贴内容和读取应用图标。'
 // 应用图标：由 resources/app/brand/app-icon.svg 生成的 macOS iconset（16–512 及 @2x）
 const MAC_APPLICATION_ICON = ['resources', 'app', 'ZTools.icns']
 
@@ -173,10 +177,10 @@ export function createMacUniversalPackagerOptions({ sourceRoot, outputRoot, appB
     icon: macApplicationIconPath(sourceRoot),
     extendInfo: {
       CFBundleDevelopmentRegion: 'en',
-      CFBundleLocalizations: ['en', 'zh_CN'],
+      CFBundleLocalizations: ['en', 'zh-Hans'],
       CFBundleURLTypes: [{ CFBundleURLName: 'ZTools plugin open', CFBundleURLSchemes: ['ztools'] }],
-      // 签名后启用加固运行时，通过 osascript 控制其他应用时系统会弹窗询问，这里是弹窗里的说明
-      NSAppleEventsUsageDescription: 'ZTools 需要控制其他应用，用于切换窗口、粘贴内容和读取应用图标。',
+      // 签名后启用加固运行时，通过 osascript 控制其他应用时系统会弹窗询问；主 Info.plist 保持英文回退，中文由 zh-Hans.lproj/InfoPlist.strings 提供
+      NSAppleEventsUsageDescription: EN_APPLE_EVENTS_USAGE_DESCRIPTION,
       ...(minimumOs ? { LSMinimumSystemVersion: minimumOs } : {})
     },
     // onnxruntime-web 的工作线程要从真实文件加载 wasm 运行时，整个目录解到 asar 外
@@ -338,11 +342,11 @@ export function writeMacLocalizationResources(fsApi, appBundlePath) {
   const localizations = [
     {
       dir: 'en.lproj',
-      description: 'ZTools needs to control other applications to switch windows, paste content, and read application icons.'
+      description: EN_APPLE_EVENTS_USAGE_DESCRIPTION
     },
     {
       dir: 'zh-Hans.lproj',
-      description: 'ZTools 需要控制其他应用，用于切换窗口、粘贴内容和读取应用图标。'
+      description: ZH_HANS_APPLE_EVENTS_USAGE_DESCRIPTION
     }
   ]
   const writtenPaths = []
@@ -352,7 +356,7 @@ export function writeMacLocalizationResources(fsApi, appBundlePath) {
     const stringsPath = path.join(lprojDir, 'InfoPlist.strings')
     fsApi.writeFileSync(
       stringsPath,
-      `"NSAppleEventsUsageDescription" = "${description}";\n`,
+      `CFBundleDisplayName = "${APPLICATION_NAME}";\n"NSAppleEventsUsageDescription" = "${description}";\n`,
       { encoding: 'utf8' }
     )
     writtenPaths.push(stringsPath)

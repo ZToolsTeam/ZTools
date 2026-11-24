@@ -815,15 +815,38 @@ const filterBarData = computed(() => {
   return fb ? (fb.props || fb) : null;
 });
 
+// 存在右侧勾选列表 / 工作台面板时，底部黄金三键已承担批量执行主动作；通过语义字段过滤顶栏重复的批量主动作按钮
+const REDUNDANT_BATCH_ACTION_ROLES = new Set([
+  "batch-primary",
+  "primary-batch",
+  "batch-clean",
+  "batch-execute"
+]);
+const REDUNDANT_BATCH_ACTION_IDS = new Set([
+  "batch-clean",
+  "clean-selected",
+  "clean-all",
+  "batch-execute",
+  "run-selected",
+  "delete-selected"
+]);
+
+function isRedundantBatchPrimaryAction(action) {
+  if (!action || typeof action !== "object") return false;
+  if (action.hideWhenSubList === true || action.redundantWithFooterPrimary === true) return true;
+  const role = typeof action.role === "string" ? action.role.trim().toLowerCase() : "";
+  if (role && REDUNDANT_BATCH_ACTION_ROLES.has(role)) return true;
+  const actionId = typeof (action.actionId || action.id) === "string"
+    ? String(action.actionId || action.id).trim().toLowerCase()
+    : "";
+  return Boolean(actionId && REDUNDANT_BATCH_ACTION_IDS.has(actionId));
+}
+
 const visibleGlobalActions = computed(() => {
   const actions = filterBarData.value?.actions || [];
   if (!Array.isArray(actions) || actions.length === 0) return [];
-  // 当存在右侧勾选列表 (subListData) 时，底部黄金三键已承担“批量清理/执行已选 (↵)”主动作，顶栏不再重复放置该按钮
   const filtered = (subListData.value || workbenchPanelData.value)
-    ? actions.filter((a) => {
-        const text = cleanUiText(a?.label || a?.title || "");
-        return !/^(批量清理|立即清理|一键清理|批量执行|开始批量|清理已选)/.test(text);
-      })
+    ? actions.filter((a) => !isRedundantBatchPrimaryAction(a))
     : actions;
   return (filtered.length > 0 ? filtered : actions.slice(-1)).slice(0, 3);
 });

@@ -79,11 +79,12 @@ import { computed } from 'vue'
 import { formatBytes } from '@/utils/formatBytes'
 import { getPluginPlatforms } from '@/utils/platform'
 import { useAppI18n, getCurrentLocale } from '@/i18n'
-import { getLocalizedPluginName, getLocalizedCategoryNames } from '@/utils/pluginI18n'
+import { getLocalizedPluginName, getLocalizedCategoryNames, getLocalizedPluginField } from '@/utils/pluginI18n'
 
 const { t } = useAppI18n()
 const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed } = usePluginIcon(() => props.plugin)
 const pluginName = computed(() => getLocalizedPluginName(props.plugin))
+const resolvedRevokedReason = computed(() => props.revokedReason || getLocalizedPluginField(props.plugin, 'revokedReason') || '')
 
 /**
  * 名称下方一行元信息：开发者 · 版本 · 分类 · 大小 · 安装量 / 内置 · 评分，最后是支持的平台标志。
@@ -94,7 +95,7 @@ const metaItems = computed(() => {
   const items = []
   if (p.author) items.push({ key: 'author', text: p.author })
   if (p.version) items.push({ key: 'version', text: `v${p.version}` })
-  const category = getLocalizedCategoryNames(p.category).join(' · ')
+  const category = getLocalizedCategoryNames(p.categoryId || p.category).join(' · ')
   if (category) items.push({ key: 'category', text: category })
   const size = formatBytes(p.size ?? p.fileSize ?? p.file_size)
   if (size) items.push({ key: 'size', text: size, title: p.builtin ? t('details.meta.bundledSizeTitle') : t('details.meta.packageSizeTitle') })
@@ -103,7 +104,7 @@ const metaItems = computed(() => {
   } else {
     const downloads = Number(p.downloads)
     if (Number.isFinite(downloads) && downloads > 0) {
-      items.push({ key: 'downloads', text: t('details.meta.installs', { count: downloads.toLocaleString(getCurrentLocale()) }) })
+      items.push({ key: 'downloads', text: t('details.meta.installs', { count: downloads.toLocaleString(getCurrentLocale()) }, downloads) })
     }
   }
   return items
@@ -121,14 +122,14 @@ const rating = computed(() => {
     return {
       score: '',
       text: t('details.meta.ratingInsufficient'),
-      title: count > 0 ? t('details.meta.ratingInsufficientTitle', { count }) : t('details.meta.ratingNoneTitle')
+      title: count > 0 ? t('details.meta.ratingInsufficientTitle', { count }, count) : t('details.meta.ratingNoneTitle')
     }
   }
   const score = value.toFixed(1)
   return {
     score,
     text: t('details.meta.ratingText', { score, count }),
-    title: t('details.meta.ratingTitle', { score, count })
+    title: t('details.meta.ratingTitle', { score, count }, count)
   }
 })
 </script>
@@ -155,7 +156,7 @@ const rating = computed(() => {
             v-if="plugin.revoked || isRevoked"
             tone="error"
             class="status-tag"
-            :title="revokedReason || plugin.revoked_reason || t('market.revokedDefaultReason')"
+            :title="resolvedRevokedReason || t('market.revokedDefaultReason')"
           >{{ t('market.card.revoked') }}</RcTag>
           <RcTag v-if="hasUpdate" tone="accent" class="status-tag">{{ t('details.meta.hasUpdate') }}</RcTag>
           <RcTag v-else-if="updateInfo?.incompatible" tone="warning" class="status-tag" :title="updateInfo.incompatReason">{{ t('details.meta.upgradeClient') }}</RcTag>
@@ -181,7 +182,7 @@ const rating = computed(() => {
         :installFailed="installFailed"
         :installError="installError"
         :isRevoked="plugin.revoked || isRevoked"
-        :revokedReason="revokedReason || plugin.revoked_reason || ''"
+        :revokedReason="resolvedRevokedReason"
         :isFavorite="isFavorite"
         :downloadProgress="downloadProgress"
         :downloadPhase="downloadPhase"
@@ -204,14 +205,6 @@ const rating = computed(() => {
 </template>
 
 <style scoped>
-.detail-header {
-  background: var(--rc-surface);
-  border: 1px solid var(--rc-border);
-  border-radius: var(--rc-radius-lg);
-  padding: 20px;
-  margin-bottom: 12px;
-}
-
 .header-top {
   display: flex;
   align-items: center;

@@ -1,5 +1,5 @@
 import { createTranslator } from "@ztools/declarative-ui";
-export const t = createTranslator({
+const rawT = createTranslator({
     "zh-CN": {
         hostNoReadFile: "当前客户端不支持读取本地文件",
         readFileFailed: "读取文件失败",
@@ -26,7 +26,17 @@ export const t = createTranslator({
         copyRust: "复制 Rust Struct",
         copyGo: "复制 Go Struct",
         copyMinified: "复制压缩单行 JSON",
+        copySorted: "复制按 Key 排序 JSON ({indent})",
+        copyEscaped: "复制转义 JSON 字符串 (Escape)",
         copyJsonPaths: "复制全部 JSONPath 列表",
+        sortKeysAction: "按 Key 字母排序格式化",
+        sortKeysDoneToast: "已按 Key 排序格式化并复制",
+        escapeAction: "转义为 JSON 字符串 (Escape)",
+        escapeDoneToast: "已转义为 JSON 字符串并复制",
+        escapeFailedToast: "转义失败",
+        unescapeAction: "去除转义 (Unescape)",
+        unescapeDoneToast: "已去除转义并复制",
+        unescapeFailedToast: "去除转义失败",
         codegenNavTitle: "生成的类型代码",
         rangeError: "JSON 嵌套过深或体积过大，缩进后的结果超出可处理范围，请拆分后再处理",
         syntaxErrorToast: "JSON 语法错误",
@@ -84,13 +94,23 @@ export const t = createTranslator({
         copyRust: "Copy Rust Struct",
         copyGo: "Copy Go Struct",
         copyMinified: "Copy Minified JSON",
+        copySorted: "Copy Key-Sorted JSON ({indent})",
+        copyEscaped: "Copy Escaped JSON String (Escape)",
         copyJsonPaths: "Copy All JSONPaths",
+        sortKeysAction: "Format with Sorted Keys",
+        sortKeysDoneToast: "Sorted keys & copied to clipboard",
+        escapeAction: "Escape to JSON String",
+        escapeDoneToast: "Escaped to JSON string & copied",
+        escapeFailedToast: "Escape failed",
+        unescapeAction: "Unescape JSON String",
+        unescapeDoneToast: "Unescaped & copied to clipboard",
+        unescapeFailedToast: "Unescape failed",
         codegenNavTitle: "Generated Types",
         rangeError: "JSON is too deeply nested or large to format; please split it first",
         syntaxErrorToast: "Invalid JSON syntax",
         formatErrorToast: "Failed to format JSON",
         formatDoneToast: "Formatted & types generated",
-        indentSpaces: "{n} spaces",
+        indentSpaces: "{n} [[n:space|spaces]]",
         readClipboardFailed: "Failed to read clipboard",
         clipboardEmpty: "Clipboard is empty",
         clipboardInvalidKeep: "Clipboard is not valid JSON; kept current input",
@@ -116,4 +136,14 @@ export const t = createTranslator({
         indent4Item: "4 Spaces",
         indentTabItem: "Tab"
     }
-}, { defaultLocale: "zh-CN" });
+}, { defaultLocale: "en-US" });
+export const t = (key, params) => {
+    const out = rawT(key, params);
+    if (!out.includes('[['))
+        return out;
+    return out.replace(/\[\[([A-Za-z0-9_.-]+):([^|\]]+)\|([^\]]+)\]\]/g, (_m, k, one, other) => {
+        const v = params?.[k];
+        const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/,/g, ''));
+        return n === 1 ? one : other;
+    });
+};

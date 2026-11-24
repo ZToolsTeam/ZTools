@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
 import { ReferenceZipExtractionService } from '../../src/main/services/reference-zip-extraction-service.js'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 import { ReferenceZipService } from '../../src/main/services/reference-zip-service.js'
 import { buildZipFixture } from '../helpers/zip-fixture.js'
 import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
@@ -59,7 +59,7 @@ test('invalid extraction options are rejected before IO', async () => {
   const f = fixture(); await assert.rejects(f.service.extract({ fileGrantId: input, directoryGrantId: output, replace: true }, caller, f.signal), { code: 'INVALID_REQUEST' }); assert.equal(f.writes.length, 0)
 })
 test('public ZIP extraction sends owned refs/signal and exposes partial receipts without claiming success', async () => {
-  const source = ['fs-reference', 'zip'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join(String.fromCharCode(10))
+  const source = loadCefIpcSources(['api/fs-reference', 'api/zip'])
   const Constructor = vm.runInNewContext(source + String.fromCharCode(10) + 'ZipAPI', { window: { __ztoolsElectron: { contractVersion: 2, transport: { methods: { zip_extract() {} }, cancellations: { zip_extract() {} } } } }, TextEncoder }) as new (dll: unknown, transport: unknown) => { extract(options: unknown): Promise<boolean> }
   let response: unknown = { success: true, status: 'committed', completed: ['a.txt'], createdDirectories: [] }; const calls: unknown[][] = [], signal = new AbortController().signal
   const api = new Constructor({}, { supportsAbortSignal: true, call: async (...args: unknown[]) => { calls.push(args); return response } })

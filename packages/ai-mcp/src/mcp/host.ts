@@ -15,6 +15,7 @@ import {
   isJsonRpcResponse
 } from './protocol.js';
 import { McpTransport } from './transport/transport.js';
+import { AiMcpError } from '../i18n.js';
 
 export interface McpHostOptions {
   name?: string;
@@ -63,7 +64,7 @@ export class McpHost {
       if (pending.serverName === serverName) {
         clearTimeout(pending.timer);
         this.pendingRequests.delete(reqId);
-        pending.reject(new Error(`MCP Server "${serverName}" disconnected`));
+        pending.reject(new AiMcpError('mcp.host.serverDisconnected', { serverName }));
       }
     }
   }
@@ -73,7 +74,7 @@ export class McpHost {
    */
   public async connectServer(serverName: string, transport: McpTransport): Promise<ConnectedServerInfo> {
     if (this.servers.has(serverName)) {
-      throw new Error(`Server with name "${serverName}" is already connected`);
+      throw new AiMcpError('mcp.host.serverAlreadyConnected', { serverName });
     }
 
     const serverEntry: ConnectedServerInfo = {
@@ -165,7 +166,7 @@ export class McpHost {
   public async refreshServerTools(serverName: string): Promise<McpTool[]> {
     const entry = this.servers.get(serverName);
     if (!entry) {
-      throw new Error(`Server "${serverName}" not connected`);
+      throw new AiMcpError('mcp.host.serverNotConnected', { serverName });
     }
 
     const res = await this.sendRequest(serverName, 'tools/list', {}) as { tools?: McpTool[] };
@@ -205,10 +206,10 @@ export class McpHost {
     if (preferredServer) {
       const entry = this.servers.get(preferredServer);
       if (!entry) {
-        throw new Error(`Server "${preferredServer}" is not connected`);
+        throw new AiMcpError('mcp.host.serverIsNotConnected', { serverName: preferredServer });
       }
       if (!entry.tools.has(toolName)) {
-        throw new Error(`Tool "${toolName}" not found on server "${preferredServer}"`);
+        throw new AiMcpError('mcp.host.toolNotFoundOnServer', { toolName, serverName: preferredServer });
       }
       return entry;
     }
@@ -219,7 +220,7 @@ export class McpHost {
       }
     }
 
-    throw new Error(`Tool "${toolName}" was not found on any connected MCP server`);
+    throw new AiMcpError('mcp.host.toolNotFoundAnyServer', { toolName });
   }
 
   /**
@@ -245,7 +246,7 @@ export class McpHost {
   public async sendRequest(serverName: string, method: string, params?: Record<string, unknown>): Promise<unknown> {
     const server = this.servers.get(serverName);
     if (!server) {
-      throw new Error(`Server "${serverName}" is not connected`);
+      throw new AiMcpError('mcp.host.serverIsNotConnected', { serverName });
     }
 
     const id = this.nextRequestId++;
@@ -254,7 +255,7 @@ export class McpHost {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(id);
-        reject(new Error(`MCP Request ${method} (id=${id}) timed out after ${this.requestTimeoutMs}ms`));
+        reject(new AiMcpError('mcp.host.requestTimedOut', { method, id, timeoutMs: this.requestTimeoutMs }));
       }, this.requestTimeoutMs);
 
       this.pendingRequests.set(id, { serverName, resolve, reject, timer });
@@ -277,7 +278,7 @@ export class McpHost {
 
       if (msg.error) {
         pending.reject(
-          new Error(`MCP error ${msg.error.code}: ${msg.error.message}`)
+          new AiMcpError('mcp.host.rpcError', { code: msg.error.code, message: msg.error.message })
         );
       } else {
         pending.resolve(msg.result);

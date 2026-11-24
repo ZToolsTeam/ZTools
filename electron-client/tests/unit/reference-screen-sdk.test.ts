@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
 import { createReferenceScreenHandlers } from '../../src/main/ipc/reference-screen-handlers.js'
 import type { CallerIdentity } from '../../src/contracts/capabilities.js'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 const id = 'a'.repeat(43), reference = { grantId: id, kind: 'file', displayName: 'screen.png', operations: ['read'] }
 function fixture(sys?: unknown) {
   const methods = Object.fromEntries(['screen_capture', 'filesystem_read_file', 'filesystem_revoke', 'screen_get_cursor_pos', 'screen_get_all_displays'].map(name => [name, () => {}]))
-  const capabilitySource = fs.readFileSync('../frontend/public/js/cef-ipc/src/api/runtime-capability.js', 'utf8').replace(/^export /gm, '')
-  const source = capabilitySource + String.fromCharCode(10) + ['fs-reference', 'screen'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^import .+$/mg, '').replace(/^export .+$/mg, '')).join(String.fromCharCode(10))
+  const source = loadCefIpcSources(['api/runtime-capability', 'api/fs-reference', 'api/screen'])
   const Constructor = vm.runInNewContext(source + String.fromCharCode(10) + 'ScreenAPI', { window: { __ztoolsElectron: { contractVersion: 2, transport: { methods, cancellations: methods } } }, TextEncoder, Uint8Array, atob, btoa }) as new (transport: unknown, sys?: unknown) => { capture(rect?: unknown, callback?: unknown, options?: unknown): Promise<string>; captureReference(rect?: unknown, options?: unknown): Promise<{ reference: unknown; fileUrl: string }>; getCursorScreenPoint(): Promise<unknown>; getAllDisplays(): Promise<unknown> }
   const calls: { method: string; params: unknown; options: unknown }[] = []
   let capture = { success: true, reference, fileUrl: 'ztools://file/' + id + '/screen.png', size: 3, width: 1, height: 1 }

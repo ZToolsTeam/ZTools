@@ -16,7 +16,7 @@ export interface PortSnapshot { data: PortSummary[]; source: 'darwin-netstat' | 
 export interface PortDiscoveryAdapter { list(signal: AbortSignal): Promise<PortSnapshot> }
 type Execute = (file: string, args: string[], options: { encoding: 'utf8'; shell: false; timeout: number; maxBuffer: number; signal: AbortSignal; windowsHide: true }) => Promise<{ stdout: string; stderr?: string }>
 const execute: Execute = promisify(execFile)
-const invalid = () => new ZToolsError(errorCodes.processError, '端口列表无效或未完整返回')
+const invalid = () => new ZToolsError(errorCodes.processError, 'Port list is invalid or incomplete')
 const MAX_BYTES = 4 * 1024 * 1024, MAX_ROWS = 20000
 function boundedOutput(value: string) { if (typeof value !== 'string' || Buffer.byteLength(value) > MAX_BYTES) throw invalid() }
 function lsofExitOneStdout(error: unknown): string | undefined {
@@ -166,7 +166,7 @@ export function parseMacosNetstatPorts(output: string): PortSummary[] {
 }
 
 export function createPlatformPortDiscoveryAdapter(platform: NodeJS.Platform, run: Execute = execute): PortDiscoveryAdapter {
-  if (platform !== 'win32' && platform !== 'darwin') throw new ZToolsError(errorCodes.notSupported, '当前平台未提供端口查询')
+  if (platform !== 'win32' && platform !== 'darwin') throw new ZToolsError(errorCodes.notSupported, 'Port discovery is not available on this platform')
   return { async list(signal) {
     if (signal.aborted) throw signal.reason ?? invalid()
     if (platform === 'darwin') {

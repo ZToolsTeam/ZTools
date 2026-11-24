@@ -21,18 +21,18 @@ const jetbrains: Array<[RegExp, ProjectEditor, string]> = [
 ]
 function exists(file: string) { try { return fs.statSync(file).isFile() } catch (e) { if (isAbsent(e)) return false; throw e } }
 export function readRecentProjectsDatabase(file: string): string | null {
-  if (fs.statSync(file).size > 512 * 1024 * 1024) throw new Error('编辑器数据库超过 512 MiB')
+  if (fs.statSync(file).size > 512 * 1024 * 1024) throw new Error('Editor database exceeds 512 MiB')
   const db = new DatabaseSync(file, { readOnly: true, timeout: 1500, allowExtension: false, enableDoubleQuotedStringLiterals: false })
   try {
     db.exec('PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; PRAGMA cache_size=-2048; BEGIN')
     const table = db.prepare('SELECT type FROM pragma_table_list WHERE schema=? AND name=?').all('main', 'ItemTable')
-    if (table.length !== 1 || table[0]!.type !== 'table') throw new Error('编辑器数据库结构无效')
+    if (table.length !== 1 || table[0]!.type !== 'table') throw new Error('Invalid editor database structure')
     const columns = db.prepare('SELECT name, hidden FROM pragma_table_xinfo(?)').all('ItemTable')
-    if (columns.some(c => c.hidden !== 0) || !['key', 'value'].every(name => columns.some(c => c.name === name))) throw new Error('编辑器数据库列结构无效')
+    if (columns.some(c => c.hidden !== 0) || !['key', 'value'].every(name => columns.some(c => c.name === name))) throw new Error('Invalid editor database column structure')
     // 只取本地最近项目这一项，不查询账号、令牌或其他编辑器状态。
     const rows = db.prepare("SELECT typeof(value) AS type, length(CAST(value AS BLOB)) AS bytes, CASE WHEN typeof(value)='text' AND length(CAST(value AS BLOB))<=4194304 THEN value END AS value FROM ItemTable WHERE key=? LIMIT 2").all('history.recentlyOpenedPathsList')
     if (!rows.length) return null
-    if (rows.length !== 1 || typeof rows[0]!.value !== 'string') throw new Error('最近项目数据类型无效或超过 4 MiB')
+    if (rows.length !== 1 || typeof rows[0]!.value !== 'string') throw new Error('Recent projects data has invalid type or exceeds 4 MiB')
     return rows[0]!.value
   } finally { db.close() }
 }
@@ -40,7 +40,7 @@ export function scanRecentProjects(env: ProjectsEnvironment) {
   const warnings: string[] = [], results = new Map<string, RecentProject>(); let sourcesRead = 0, skippedRemote = 0
   const add = (source: ProjectSource, candidates: Parameters<typeof describeProject>[0][]) => {
     for (const candidate of candidates) {
-      if (results.size >= 5000) throw new Error('最近项目总数超过 5000 条')
+      if (results.size >= 5000) throw new Error('Total recent projects exceed 5000 entries')
       const item = describeProject(candidate, source, warnings), previous = results.get(item.id)
       if (!previous || (item.lastOpenedMs ?? 0) > (previous.lastOpenedMs ?? 0)) results.set(item.id, item)
     }
@@ -72,7 +72,7 @@ export function scanRecentProjects(env: ProjectsEnvironment) {
   }
   const root = path.join(env.support, 'JetBrains')
   let dirs: string[] = []
-  try { dirs = fs.readdirSync(root); if (dirs.length > 256) throw new Error('JetBrains 配置目录超过 256 个') }
+  try { dirs = fs.readdirSync(root); if (dirs.length > 256) throw new Error('JetBrains configuration directories exceed 256') }
   catch (error) { if (!isAbsent(error)) warnings.push(`JetBrains：${projectError(error)}`); dirs = [] }
   for (const dir of dirs) {
     const editor = jetbrains.find(([prefix]) => prefix.test(dir))
@@ -85,6 +85,6 @@ export function scanRecentProjects(env: ProjectsEnvironment) {
   }
   // VS Code 未保存时间戳，保留其真实历史顺序；只按已有的 JetBrains 时间排序。
   const projects = [...results.values()].sort((a, b) => a.family === b.family && a.family === 'jetbrains' ? (b.lastOpenedMs ?? 0) - (a.lastOpenedMs ?? 0) : 0)
-  if (warnings.length > 256) throw new Error('项目读取错误超过 256 项，请检查编辑器配置权限')
+  if (warnings.length > 256) throw new Error('Project read errors exceed 256; check editor configuration permissions')
   return validateRecentProjectsScan({ success: true, projects, warnings, sourcesRead, skippedRemote })
 }

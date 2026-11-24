@@ -48,14 +48,14 @@ try {
     $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
     $stream=New-Object System.IO.MemoryStream
     try { $encoder.Save($stream); $png=[Convert]::ToBase64String($stream.ToArray()) } finally { $stream.Dispose() }
-    $coverageWarning=''
+    $coverageWarningCode=''
     for ($i=0; $i -lt $text.Length; $i++) {
       if ([Char]::IsWhiteSpace($text[$i])) { continue }
       $code=[Char]::ConvertToUtf32($text,$i)
       if ([Char]::IsHighSurrogate($text[$i])) { $i++ }
-      if (!$selectedGlyph.CharacterToGlyphMap.ContainsKey($code)) { $coverageWarning='所选字体缺少部分字符，预览可能显示替代字形或缺字符号'; break }
+      if (!$selectedGlyph.CharacterToGlyphMap.ContainsKey($code)) { $coverageWarningCode='MISSING_GLYPHS_GENERIC'; break }
     }
-    $result=@{ version=1; success=$true; id=$inputValue.id; png=$png; fallbacks=@(); coverageWarning=$coverageWarning;
+    $result=@{ version=1; success=$true; id=$inputValue.id; png=$png; fallbacks=@(); coverageWarning=''; coverageWarningCode=$coverageWarningCode;
       license=(NameValue $selectedGlyph.LicenseDescriptions); licenseUrl=''; copyright=(NameValue $selectedGlyph.Copyrights); manufacturer=(NameValue $selectedGlyph.ManufacturerNames) }
   }
   [Console]::Write(($result | ConvertTo-Json -Depth 6 -Compress))

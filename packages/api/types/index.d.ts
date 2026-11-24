@@ -338,6 +338,8 @@ export type SystemLocaleChangeEventType = 'system.LocaleChange'
 export interface LocaleChangeEvent {
   /** 变更后的有效语言（如 'zh-CN' | 'en-US'） */
   locale: string
+  /** 用户选择的语言偏好设置（'system' | 'zh-CN' | 'en-US'） */
+  setting?: 'system' | 'zh-CN' | 'en-US'
   /** 变更前的有效语言（可选） */
   previousLocale?: string
 }
@@ -656,12 +658,41 @@ export interface PluginFeature {
   cmds?: Array<string | AnyRecord>
 }
 
+/** 插件清单多语言条目中的功能本地化覆盖（与 plugin.schema.json $defs.i18nEntry.features 对齐） */
+export interface PluginManifestI18nFeature {
+  explain?: string
+  cmds?: Array<string | AnyRecord>
+}
+
+/** 插件清单多语言条目中的截图本地化声明（与 plugin.schema.json $defs.i18nEntry.screenshots 对齐） */
+export interface PluginManifestI18nScreenshot {
+  file: string
+  /** 截图说明文字（最长 60 字符） */
+  title?: string
+}
+
+/** 插件清单多语言元数据条目（与 plugin.schema.json $defs.i18nEntry 对齐） */
+export interface PluginManifestI18nEntry {
+  name?: string
+  description?: string
+  keywords?: string[]
+  revokedReason?: string
+  features?: Record<string, PluginManifestI18nFeature>
+  screenshots?: PluginManifestI18nScreenshot[]
+}
+
 export interface PluginManifest {
   id: string
   name: string
   version: string
   description: string
+  /** 插件清单默认语言标签（BCP-47，如 'zh-CN' | 'en-US'） */
+  defaultLocale?: string
   category?: string[]
+  /** 插件标准分类英文 slug（支持单个主分类或 1-2 项数组） */
+  categoryId?: string | string[]
+  /** 多语言元数据映射（按 BCP-47 locale 键声明） */
+  i18n?: Record<string, PluginManifestI18nEntry>
   author: string
   entry: string
   keyword: string

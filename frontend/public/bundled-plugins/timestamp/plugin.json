@@ -97,7 +97,18 @@
             "global time"
           ]
         }
-      }
+      },
+      "screenshots": [
+        {
+          "file": "screenshots/en-US/01.png",
+          "title": "Timestamp & Date Conversion"
+        }
+      ]
     }
-  }
+  },
+  "screenshots": [
+    {
+      "path": "screenshots/02-action-panel.png"
+    }
+  ]
 }

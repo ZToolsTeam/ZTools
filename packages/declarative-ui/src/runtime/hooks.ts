@@ -1,5 +1,15 @@
 import { currentInstance, isEvaluatingChildElement, EffectCallback } from "./context.js";
-import { getLocale, onLocaleChange } from "./locale.js";
+import {
+  DEFAULT_LOCALE,
+  createTranslator,
+  getLocale,
+  onLocaleChange,
+  resolveLocale,
+  type CreateTranslatorOptions,
+  type MessageCatalog,
+  type SupportedLocale,
+  type Translator
+} from "./locale.js";
 
 function areDepsEqual(prevDeps?: readonly unknown[], nextDeps?: readonly unknown[]): boolean {
   if (!prevDeps || !nextDeps) return false;
@@ -242,4 +252,56 @@ export function useLocale(): string {
   }, []);
 
   return locale;
+}
+
+export interface UseI18nResult<K extends string = string> {
+  locale: SupportedLocale;
+  t: Translator<K>;
+  formatNumber: (value: number, options?: Intl.NumberFormatOptions) => string;
+  formatDate: (value: Date | number | string, options?: Intl.DateTimeFormatOptions) => string;
+}
+
+/**
+ * 声明式多语言组合 Hook: useI18n
+ * 组合 useLocale() 与 createTranslator()，并提供绑定当前响应式 locale 的 Intl 数字/日期格式化函数。
+ */
+export function useI18n<T extends Record<string, string> = Record<string, string>>(
+  messages: Record<string, MessageCatalog<T>>,
+  options?: CreateTranslatorOptions
+): UseI18nResult<Extract<keyof T, string>> {
+  const rawLocale = useLocale();
+  const locale = resolveLocale(rawLocale, DEFAULT_LOCALE);
+  const defaultLocale = options?.defaultLocale;
+
+  return useMemo(() => {
+    const t = createTranslator<T>(
+      messages,
+      defaultLocale !== undefined ? { defaultLocale } : undefined
+    );
+
+    const formatNumber = (value: number, formatOptions?: Intl.NumberFormatOptions): string => {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        return String(value);
+      }
+      return new Intl.NumberFormat(locale, formatOptions).format(value);
+    };
+
+    const formatDate = (
+      value: Date | number | string,
+      formatOptions?: Intl.DateTimeFormatOptions
+    ): string => {
+      const date = value instanceof Date ? value : new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return "";
+      }
+      return new Intl.DateTimeFormat(locale, formatOptions).format(date);
+    };
+
+    return {
+      locale,
+      t,
+      formatNumber,
+      formatDate
+    };
+  }, [locale, messages, defaultLocale]);
 }

@@ -204,7 +204,7 @@ test('真实装配集成：读权限校验、路径规范化、符号链接拒�
     pinned: true
   }) as { success: boolean; error?: string }
   assert.equal(unauthorizedRes.success, false)
-  assert.match(String(unauthorizedRes.error), /未由当前窗口授权/)
+  assert.match(String(unauthorizedRes.error), /未由当前窗口授权|not authorized for the current window/i)
 
   // 2. 授予 mainCaller 读取 allowedFile 的权限后，通过含 .. 的路径固定，入库路径必须规范化
   await files.grantResultPaths(mainCaller, [{ path: allowedFile, isDir: false }], 'search')

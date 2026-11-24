@@ -9,15 +9,15 @@ function owner(caller: CallerIdentity) { return JSON.stringify([caller.webConten
 function jsonLines(text: string): unknown[] { return text.trim() ? text.trim().split(/\r?\n/).map(line => JSON.parse(line) as unknown) : [] }
 function required(row: Record<string, unknown>, key: string) {
   const value = row[key]
-  if (typeof value !== 'string' || value.length > 10000) throw new Error(`Docker 返回的 ${key} 字段无效`)
+  if (typeof value !== 'string' || value.length > 10000) throw new Error(`Invalid ${key} field returned by Docker`)
   return value
 }
 export function parseDockerContainers(text: string): DockerContainer[] {
   const rows = jsonLines(text).map(raw => {
-    if (!dockerRecord(raw) || !validContainerId(raw.ID) || !['created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead'].includes(String(raw.State))) throw new Error('Docker 返回的容器记录无效')
+    if (!dockerRecord(raw) || !validContainerId(raw.ID) || !['created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead'].includes(String(raw.State))) throw new Error('Invalid container record returned by Docker')
     return { id: raw.ID, name: required(raw, 'Names'), image: required(raw, 'Image'), state: String(raw.State), status: required(raw, 'Status'), ports: required(raw, 'Ports'), createdAt: required(raw, 'CreatedAt'), cpu: null, memory: null }
   })
-  if (rows.length > 1000 || new Set(rows.map(r => r.id)).size !== rows.length) throw new Error('Docker 容器列表过大或包含重复编号')
+  if (rows.length > 1000 || new Set(rows.map(r => r.id)).size !== rows.length) throw new Error('Docker container list is too large or contains duplicate IDs')
   return rows
 }
 export class DockerManagerService {
@@ -36,13 +36,13 @@ export class DockerManagerService {
   async handle(value: unknown, caller: CallerIdentity, signal: AbortSignal): Promise<unknown> {
     try {
       validateDockerRequest(value); signal.throwIfAborted()
-      if (this.#stopped) throw new Error('Docker 服务已停止')
+      if (this.#stopped) throw new Error('Docker service has stopped')
       if (value.action === 'cancel') {
         const active = this.#active
         if (active?.owner === owner(caller)) { active.controller.abort(); await active.promise.catch(error => console.warn('Docker 请求已停止', message(error))) }
         return { success: true, cancelRequested: active?.owner === owner(caller) }
       }
-      if (this.#active) throw new Error('Docker 操作正在进行，请等待完成')
+      if (this.#active) throw new Error('A Docker operation is already in progress; please wait for it to finish')
       const controller = new AbortController(), key = owner(caller)
       const combined = AbortSignal.any([signal, controller.signal, AbortSignal.timeout(180000)])
       const promise = this.#execute(value, key, combined)
@@ -53,7 +53,7 @@ export class DockerManagerService {
   async #daemon(connection: DockerConnection, signal: AbortSignal) {
     const result = await this.cli.run(connection, ['info', '--format', '{{json .ID}}'], signal)
     const value: unknown = JSON.parse(result.stdout)
-    if (typeof value !== 'string' || !value.trim() || value.length > 200) throw new Error('Docker 引擎未返回有效身份，请确认已启动')
+    if (typeof value !== 'string' || !value.trim() || value.length > 200) throw new Error('Docker engine did not return a valid identity; please verify it is running')
     return value
   }
   async #list(key: string, signal: AbortSignal) {
@@ -63,7 +63,7 @@ export class DockerManagerService {
     const running = containers.filter(c => c.state === 'running'), statsError = await this.#stats(connection, running, signal)
     signal.throwIfAborted()
     const id = randomUUID()
-    if (this.#sessions.size >= 32) throw new Error('Docker 会话过多，请关闭其他插件窗口后重试')
+    if (this.#sessions.size >= 32) throw new Error('Too many Docker sessions; please close other plugin windows and retry')
     this.#sessions.set(id, { id, owner: key, connection, daemon, containers, created: Date.now() })
     return { success: true, sessionId: id, context: connection.context, containers, statsError }
   }
@@ -73,36 +73,36 @@ export class DockerManagerService {
       const output = await this.cli.run(connection, ['container', 'stats', '--no-stream', '--format', '{{json .}}', ...running.map(c => c.id)], signal)
       const seen = new Set<string>()
       for (const raw of jsonLines(output.stdout)) {
-        if (!dockerRecord(raw) || typeof raw.Container !== 'string') throw new Error('资源采样返回无效记录')
+        if (!dockerRecord(raw) || typeof raw.Container !== 'string') throw new Error('Resource stats sampling returned an invalid record')
         const row = running.find(c => c.id === raw.Container)
-        if (!row || seen.has(row.id) || typeof raw.CPUPerc !== 'string' || !/^\d+(?:\.\d+)?%$/.test(raw.CPUPerc) || typeof raw.MemUsage !== 'string' || !raw.MemUsage.trim()) throw new Error('资源采样数据不完整')
+        if (!row || seen.has(row.id) || typeof raw.CPUPerc !== 'string' || !/^\d+(?:\.\d+)?%$/.test(raw.CPUPerc) || typeof raw.MemUsage !== 'string' || !raw.MemUsage.trim()) throw new Error('Resource stats sampling data is incomplete')
         row.cpu = raw.CPUPerc; row.memory = raw.MemUsage; seen.add(row.id)
       }
-      return seen.size === running.length ? null : '部分容器未返回资源采样，状态可能已变化'
+      return seen.size === running.length ? null : 'Some containers did not return resource stats; their state may have changed'
     } catch (error) {
       signal.throwIfAborted()
       for (const row of running) { row.cpu = null; row.memory = null }
-      return `资源采样失败：${message(error)}`
+      return `Resource stats sampling failed: ${message(error)}`
     }
   }
   async #session(id: string, key: string, signal: AbortSignal) {
     const session = this.#sessions.get(id)
-    if (!session || session.owner !== key || Date.now() - session.created > 900000) throw new Error('容器列表已过期，请刷新后再操作')
+    if (!session || session.owner !== key || Date.now() - session.created > 900000) throw new Error('Container list has expired; please refresh and retry')
     const current = await this.cli.connect(signal)
     if (current.endpoint !== session.connection.endpoint || current.context !== session.connection.context || current.executable !== session.connection.executable || await this.#daemon(session.connection, signal) !== session.daemon) {
-      this.#sessions.delete(id); throw new Error('Docker 上下文或引擎已变化，请刷新后再操作')
+      this.#sessions.delete(id); throw new Error('Docker context or engine has changed; please refresh and retry')
     }
     return session
   }
   async #inspect(session: Session, id: string, signal: AbortSignal) {
-    if (!session.containers.some(c => c.id === id)) throw new Error('此容器不在已读取的列表中')
+    if (!session.containers.some(c => c.id === id)) throw new Error('This container is not in the loaded list')
     const raw: unknown = JSON.parse((await this.cli.run(session.connection, ['container', 'inspect', id], signal)).stdout)
-    if (!Array.isArray(raw) || raw.length !== 1 || !dockerRecord(raw[0]) || raw[0].Id !== id || !dockerRecord(raw[0].State) || typeof raw[0].State.Status !== 'string' || typeof raw[0].State.Running !== 'boolean') throw new Error('Docker 未返回可核对的容器状态')
+    if (!Array.isArray(raw) || raw.length !== 1 || !dockerRecord(raw[0]) || raw[0].Id !== id || !dockerRecord(raw[0].State) || typeof raw[0].State.Status !== 'string' || typeof raw[0].State.Running !== 'boolean') throw new Error('Docker did not return a verifiable container state')
     return raw[0].State
   }
   async #execute(request: DockerRequest, key: string, signal: AbortSignal): Promise<unknown> {
     if (request.action === 'list') return this.#list(key, signal)
-    if (request.action === 'cancel') throw new Error('取消请求不能进入容器操作')
+    if (request.action === 'cancel') throw new Error('Cancel request cannot enter container execution')
     const session = await this.#session(request.sessionId, key, signal)
     if (request.action === 'logs') {
       await this.#inspect(session, request.id, signal)
@@ -113,32 +113,32 @@ export class DockerManagerService {
       if (request.action === 'remove') return await this.#remove(session, request.ids, signal)
       const before = await this.#inspect(session, request.id, signal)
       const expected = session.containers.find(c => c.id === request.id)!.state
-      if (before.Status !== expected) throw new Error('容器状态已变化，请刷新后再操作')
-      if (request.operation === 'start' ? !stoppedDockerStates.has(String(before.Status)) : before.Status !== 'running') throw new Error('当前状态不支持此操作，请刷新容器列表')
+      if (before.Status !== expected) throw new Error('Container state has changed; please refresh and retry')
+      if (request.operation === 'start' ? !stoppedDockerStates.has(String(before.Status)) : before.Status !== 'running') throw new Error('Current container state does not support this operation; please refresh the container list')
       signal.throwIfAborted()
       await this.cli.run(session.connection, ['container', request.operation, request.id], signal, 60000)
       const after = await this.#inspect(session, request.id, signal)
       const verified = request.operation === 'stop' ? after.Running === false && stoppedDockerStates.has(String(after.Status)) : after.Running === true && after.Status === 'running'
-      if (!verified) throw new Error(`命令已返回，但容器当前状态为 ${String(after.Status)}，请检查日志`)
+      if (!verified) throw new Error(`Command returned, but container state is ${String(after.Status)}; please check the logs`)
       return { success: true, id: request.id, state: after.Status }
     } finally { this.#sessions.delete(session.id) }
   }
   async #remove(session: Session, ids: string[], signal: AbortSignal) {
-    if (!ids.every(id => session.containers.some(c => c.id === id && stoppedDockerStates.has(c.state)))) throw new Error('清理清单包含未确认停止的容器，请刷新')
+    if (!ids.every(id => session.containers.some(c => c.id === id && stoppedDockerStates.has(c.state)))) throw new Error('Removal list contains containers that are not confirmed stopped; please refresh')
     const removed: string[] = [], failures: Array<{ id: string; error: string }> = []
     for (const id of ids) {
       if (signal.aborted) break
       try {
         const before = await this.#inspect(session, id, signal)
-        if (before.Running || !stoppedDockerStates.has(String(before.Status))) throw new Error('容器已启动或状态改变，已跳过')
+        if (before.Running || !stoppedDockerStates.has(String(before.Status))) throw new Error('Container has started or changed state; skipped')
         // 不传 --force / --volumes：Docker 自身拒绝并发启动的容器，保留挂载的数据卷。
         await this.cli.run(session.connection, ['container', 'rm', id], signal)
         const remaining = (await this.cli.run(session.connection, ['container', 'ls', '--all', '--no-trunc', '--quiet', '--filter', `id=${id}`], signal)).stdout.trim()
-        if (remaining) throw new Error('删除后仍可查到容器，未确认清理成功')
+        if (remaining) throw new Error('Container is still present after removal; cleanup could not be confirmed')
         removed.push(id)
       } catch (error) { failures.push({ id, error: message(error) }); if (signal.aborted) break }
     }
-    for (const id of ids) if (!removed.includes(id) && !failures.some(f => f.id === id)) failures.push({ id, error: '操作中断，未执行清理' })
+    for (const id of ids) if (!removed.includes(id) && !failures.some(f => f.id === id)) failures.push({ id, error: 'Operation interrupted; cleanup was not executed' })
     return { success: true, removed, failures }
   }
 }

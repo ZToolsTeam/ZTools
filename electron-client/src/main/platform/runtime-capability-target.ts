@@ -11,17 +11,17 @@ export function getRuntimeCapabilityTarget(
       ? 'macos'
       : undefined
   if (!publicPlatform) {
-    throw new ZToolsError(errorCodes.notSupported, '当前系统不支持运行时能力查询')
+    throw new ZToolsError(errorCodes.notSupported, 'Runtime capability query is not supported on this operating system')
   }
 
   if (publicPlatform === 'windows' && arch !== 'ia32' && arch !== 'x64') {
-    throw new ZToolsError(errorCodes.notSupported, '当前 Windows Electron 进程架构不支持运行时能力查询')
+    throw new ZToolsError(errorCodes.notSupported, 'Runtime capability query is not supported on this Windows Electron architecture')
   }
   if (arch !== 'ia32' && arch !== 'x64' && arch !== 'arm64') {
-    throw new ZToolsError(errorCodes.notSupported, '当前 Electron 进程架构不支持运行时能力查询')
+    throw new ZToolsError(errorCodes.notSupported, 'Runtime capability query is not supported on this Electron architecture')
   }
   if (publicPlatform === 'macos' && arch === 'ia32') {
-    throw new ZToolsError(errorCodes.notSupported, 'macOS Electron 不支持 ia32 进程架构')
+    throw new ZToolsError(errorCodes.notSupported, 'macOS Electron does not support ia32 architecture')
   }
 
   return { platform: publicPlatform, runtime: 'electron', arch }

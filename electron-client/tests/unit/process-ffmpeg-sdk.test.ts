@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import test from 'node:test'
 import vm from 'node:vm'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 
 test('reserved FFmpeg SDK rejects promptly before any task or subscription can start', async () => {
-  const source = fs.readFileSync('../frontend/public/js/cef-ipc/src/api/process.js', 'utf8').replace(/^export .+$/mg, '')
+  const source = loadCefIpcSources(['api/process'])
   const Api = vm.runInNewContext(source + '\nProcessAPI', { window: {}, console }) as new (transport: unknown) => {
     runFFmpeg(args: string[], onProgress?: () => void): Promise<void>
   }
@@ -18,7 +18,7 @@ test('reserved FFmpeg SDK rejects promptly before any task or subscription can s
 })
 
 test('repeated unsupported FFmpeg calls settle independently and do not invent kill/quit handles', async () => {
-  const source = fs.readFileSync('../frontend/public/js/cef-ipc/src/api/process.js', 'utf8').replace(/^export .+$/mg, '')
+  const source = loadCefIpcSources(['api/process'])
   const Api = vm.runInNewContext(source + '\nProcessAPI', { window: {}, console }) as new (transport: unknown) => {
     runFFmpeg(args: string[]): Promise<void> & { kill?: unknown; quit?: unknown }
   }

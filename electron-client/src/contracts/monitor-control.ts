@@ -4,12 +4,12 @@ export type MonitorRequest = { action: 'list' } | { action: 'sleep' } | { action
 export interface MonitorDisplay {
   id: string; name: string; isPrimary: boolean; builtIn: boolean; width: number; height: number
   protocol: 'apple' | 'ddcci' | 'wmi' | 'unsupported'; canBrightness: boolean; canContrast: boolean
-  brightness?: number; contrast?: number; reason?: string
+  brightness?: number; contrast?: number; reason?: string; reasonCode?: string; fallbackDisplayIndex?: number
 }
 export const monitorRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const percent = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100
 export function validateMonitorRequest(value: unknown): asserts value is MonitorRequest {
-  const invalid = () => { throw new ZToolsError(errorCodes.invalidRequest, '显示器请求参数无效') }
+  const invalid = () => { throw new ZToolsError(errorCodes.invalidRequest, 'Invalid monitor control request parameters') }
   if (!monitorRecord(value) || typeof value.action !== 'string' || !['list', 'set', 'sleep'].includes(value.action)) return invalid()
   const keys = value.action === 'set' ? ['action', 'topology', 'changes'] : ['action']
   if (Object.keys(value).some(k => !keys.includes(k))) return invalid()
@@ -22,8 +22,10 @@ export function validateMonitorRequest(value: unknown): asserts value is Monitor
   }
 }
 export function parseMonitorDisplay(value: unknown): MonitorDisplay {
-  if (!monitorRecord(value) || typeof value.id !== 'string' || !/^(?:mac|win):[A-Fa-f0-9-]{36}$/.test(value.id) || typeof value.name !== 'string' || !value.name || !['isPrimary', 'builtIn', 'canBrightness', 'canContrast'].every(k => typeof value[k] === 'boolean') || typeof value.protocol !== 'string' || !['apple', 'ddcci', 'wmi', 'unsupported'].includes(value.protocol) || !Number.isSafeInteger(value.width) || Number(value.width) < 1 || !Number.isSafeInteger(value.height) || Number(value.height) < 1) throw new ZToolsError(errorCodes.screenError, '显示器组件返回的设备信息无效')
-  for (const [name, capability] of [['brightness', 'canBrightness'], ['contrast', 'canContrast']] as const) if ((value[name] !== undefined && !percent(value[name])) || (value[capability] && !percent(value[name]))) throw new ZToolsError(errorCodes.screenError, '显示器组件未返回真实控制状态')
-  if (value.reason !== undefined && typeof value.reason !== 'string') throw new ZToolsError(errorCodes.screenError, '显示器状态说明无效')
+  if (!monitorRecord(value) || typeof value.id !== 'string' || !/^(?:mac|win):[A-Fa-f0-9-]{36}$/.test(value.id) || typeof value.name !== 'string' || !value.name || !['isPrimary', 'builtIn', 'canBrightness', 'canContrast'].every(k => typeof value[k] === 'boolean') || typeof value.protocol !== 'string' || !['apple', 'ddcci', 'wmi', 'unsupported'].includes(value.protocol) || !Number.isSafeInteger(value.width) || Number(value.width) < 1 || !Number.isSafeInteger(value.height) || Number(value.height) < 1) throw new ZToolsError(errorCodes.screenError, 'Monitor helper returned invalid display metadata')
+  for (const [name, capability] of [['brightness', 'canBrightness'], ['contrast', 'canContrast']] as const) if ((value[name] !== undefined && !percent(value[name])) || (value[capability] && !percent(value[name]))) throw new ZToolsError(errorCodes.screenError, 'Monitor helper did not return valid control state')
+  if (value.reason !== undefined && typeof value.reason !== 'string') throw new ZToolsError(errorCodes.screenError, 'Invalid monitor status reason')
+  if (value.reasonCode !== undefined && (typeof value.reasonCode !== 'string' || !value.reasonCode || value.reasonCode.length > 128)) throw new ZToolsError(errorCodes.screenError, 'Invalid monitor status reasonCode')
+  if (value.fallbackDisplayIndex !== undefined && (!Number.isSafeInteger(value.fallbackDisplayIndex) || Number(value.fallbackDisplayIndex) < 0)) throw new ZToolsError(errorCodes.screenError, 'Invalid monitor fallback display index')
   return value as unknown as MonitorDisplay
 }

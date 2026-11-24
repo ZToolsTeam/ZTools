@@ -18,14 +18,14 @@ export async function initializeDefaultAutostart(
 
   // Windows 可能把非目录路径报为 ENOENT，开启登录项前先确认配置目录确实可用。
   if (!(await fs.stat(dataRoot)).isDirectory()) {
-    throw Object.assign(new Error('配置根路径不是目录'), { code: 'ENOTDIR' })
+    throw Object.assign(new Error('Config root path is not a directory'), { code: 'ENOTDIR' })
   }
 
   const previous = loginItem.getEnabled()
   try {
     if (!previous) loginItem.setEnabled(true)
     if (!loginItem.getEnabled()) {
-      throw new ZToolsError(errorCodes.notSupported, '系统未确认开机自动启动已开启')
+      throw new ZToolsError(errorCodes.notSupported, 'System did not confirm launch-at-login is enabled')
     }
     await config.set('user_settings.json', 'system.autostart', 'true', true)
   } catch (error) {
@@ -33,7 +33,7 @@ export async function initializeDefaultAutostart(
       try {
         loginItem.setEnabled(false)
       } catch (rollbackError) {
-        throw new AggregateError([error, rollbackError], '初始化开机自动启动失败，且无法恢复系统登录项')
+        throw new AggregateError([error, rollbackError], 'Failed to initialize launch-at-login and rollback failed')
       }
     }
     throw error
@@ -96,7 +96,7 @@ export class AutostartService {
 
   #requireWindows(): void {
     if (this.#platform !== 'win32') {
-      throw new ZToolsError(errorCodes.notSupported, '当前平台不支持 Windows 自启动')
+      throw new ZToolsError(errorCodes.notSupported, 'Windows autostart is not supported on this platform')
     }
   }
 }

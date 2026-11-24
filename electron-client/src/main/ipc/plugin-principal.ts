@@ -51,7 +51,7 @@ export async function requirePluginPermission(
 ): Promise<PluginPrincipal> {
   const principal = resolvePluginPrincipal(caller)
   if (!principal) {
-    throw new ZToolsError(errorCodes.pluginIdentityRequired, '该能力需要由已安装插件调用')
+    throw new ZToolsError(errorCodes.pluginIdentityRequired, 'This capability must be invoked by an installed plugin')
   }
   if (principal.kind === 'window') {
     if (isInternalPlugin(principal.pluginId)) return principal
@@ -59,7 +59,7 @@ export async function requirePluginPermission(
     if (!Array.isArray(permissions) || !permissions.includes(permission)) {
       throw new ZToolsError(
         errorCodes.pluginPermissionRequired,
-        `插件需要在 plugin.json 声明 "${permission}" 权限`,
+        `Plugin must declare the "${permission}" permission in plugin.json`,
         { public: { permission } }
       )
     }
@@ -68,7 +68,7 @@ export async function requirePluginPermission(
   if (!caller.attributedPlugin?.permissions.has(permission)) {
     throw new ZToolsError(
       errorCodes.pluginPermissionRequired,
-      `插件需要在 plugin.json 声明 "${permission}" 权限`,
+      `Plugin must declare the "${permission}" permission in plugin.json`,
       { public: { permission } }
     )
   }

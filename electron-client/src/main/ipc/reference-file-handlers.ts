@@ -9,7 +9,7 @@ import type { ReferenceHandler } from './reference-endpoint.js'
 
 function params(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype ||
-      Object.keys(value).some(key => !keys.includes(key))) throw new ZToolsError(errorCodes.invalidRequest, '文件请求字段无效')
+      Object.keys(value).some(key => !keys.includes(key))) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid file request fields')
   return value as Record<string, unknown>
 }
 const id = (value: unknown) => grantId(params(value, ['grantId']).grantId)
@@ -24,7 +24,7 @@ export function createReferenceFileHandlers(files: AnchoredFileSystemService, ca
         (result as { success?: unknown }).success === false &&
         (result as { code?: unknown }).code === errorCodes.fileWriteOutcomeUnknown) return
     const reference = (result as { reference?: PathGrantRef })?.reference
-    if (!reference) throw new ZToolsError(errorCodes.fileError, '未交付文件引用无效')
+    if (!reference) throw new ZToolsError(errorCodes.fileError, 'Invalid undelivered file reference')
     await files.revoke(reference.grantId, caller)
   }
   const producer = (execute: ReferenceHandler['execute']): ReferenceHandler => ({ execute, disposeUndelivered })
@@ -45,12 +45,12 @@ export function createReferenceFileHandlers(files: AnchoredFileSystemService, ca
     filesystem_create_directory: handler((value, caller, signal) => files.createDirectory(value, caller, signal)),
     filesystem_delete_file: handler((value, caller, signal) => {
       const v = params(value, ['directoryGrantId', 'relativePath', 'isDirectory'])
-      if (v.isDirectory !== false) throw new ZToolsError(errorCodes.invalidRequest, '文件删除不接受目录')
+      if (v.isDirectory !== false) throw new ZToolsError(errorCodes.invalidRequest, 'File delete does not accept directories')
       return files.remove(value, caller, signal)
     }),
     filesystem_delete_directory: handler((value, caller, signal) => {
       const v = params(value, ['directoryGrantId', 'relativePath', 'isDirectory'])
-      if (v.isDirectory !== true) throw new ZToolsError(errorCodes.invalidRequest, '目录删除只接受空目录')
+      if (v.isDirectory !== true) throw new ZToolsError(errorCodes.invalidRequest, 'Directory delete only accepts empty directories')
       return files.remove(value, caller, signal)
     }),
     filesystem_find_files: handler((value, caller, signal) => files.find(value, caller, false, signal)),

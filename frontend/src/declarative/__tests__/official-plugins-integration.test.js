@@ -112,8 +112,8 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
   })
 
   describe('1. 注册表完整性与规范断言 (Registry Completeness)', () => {
-    it('保留的旧内置应用定义字段完备合规', () => {
-      // 内置原版与市场真实插件另行验证，不能要求它们继续返回旧示例实现。
+    it('保留的历史官方元数据字段完备合规，且不再绑定任何旧示例实现', () => {
+      // 内置原版与市场真实插件另行验证；历史官方元数据表不再包含旧示例 command 实现。
       const requiredBenchmarkIds = [
         'github',
         'google-translate',
@@ -123,10 +123,12 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       ]
 
       expect(OFFICIAL_PLUGINS_LIST.length).toBeGreaterThanOrEqual(10)
+      expect(getOfficialPluginsList()).toEqual([])
 
       for (const id of requiredBenchmarkIds) {
         expect(isOfficialPlugin(id)).toBe(true)
-        const def = getOfficialPlugin(id)
+        expect(getOfficialPlugin(id)).toBeUndefined()
+        const def = OFFICIAL_PLUGINS_MAP[id]
         expect(def).toBeDefined()
         expect(def.pluginId).toBe(id)
         expect(def.name).toBeTruthy()
@@ -138,7 +140,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
         expect(resolvePluginGlyph(id)).not.toBe('')
         expect(def.isBuiltin).toBe(true)
         expect(def.isDeclarative).toBe(true)
-        expect(typeof def.command).toBe('function')
+        expect(def.command).toBeUndefined()
       }
     })
 
@@ -153,12 +155,13 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(getOfficialPluginsList().some((p) => BUNDLED_PLUGIN_IDS.includes(p.pluginId))).toBe(false)
     })
 
-    it('大小写不敏感与首尾空白容错', () => {
+    it('大小写不敏感与首尾空白容错，且 getOfficialPlugin 始终返回 undefined', () => {
       expect(isOfficialPlugin('  KILL-PROCESS  ')).toBe(true)
-      expect(getOfficialPlugin('  GITHUB  ')).toBeDefined()
-      expect(getOfficialPlugin('  GITHUB  ').pluginId).toBe('github')
-      // 插件市场分发的真实插件（kill-process、cleaner）不再返回同名的旧示例实现，大小写与空白同样处理
-      for (const id of ['kill-process', '  KILL-PROCESS  ', 'cleaner']) expect(getOfficialPlugin(id)).toBeUndefined()
+      expect(isOfficialPlugin('  GITHUB  ')).toBe(true)
+      // 客户端已彻底移除旧示例实现，所有 ID（含大小写与空白）均返回 undefined
+      for (const id of ['github', '  GITHUB  ', 'kill-process', '  KILL-PROCESS  ', 'cleaner']) {
+        expect(getOfficialPlugin(id)).toBeUndefined()
+      }
     })
   })
 
@@ -399,15 +402,24 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(wrapper.find('.declarative-error-back-btn').exists()).toBe(true)
     })
 
-    it('点击返回工作台按钮触发路由后退', async () => {
+    it('点击顶栏或底栏返回工作台按钮均触发路由返回工作台', async () => {
       const wrapper = mount(DeclarativePage, {
         props: { pluginId: 'qr-code' }
       })
 
       await settle()
 
-      // 返回入口只有底栏「返回工作台 Esc」一个，顶栏不再重复放返回按钮
-      expect(wrapper.find('button[title*="返回我的插件"]').exists()).toBe(false)
+      // 主窗口内嵌态：顶栏左上角提供「← 返回工作台」导航，明确当前属于主窗口子页而非独立窗口
+      const headerBackBtn = wrapper.find('[data-decl-header-back]')
+      expect(headerBackBtn.exists()).toBe(true)
+      expect(headerBackBtn.element.tagName).toBe('BUTTON')
+      expect(headerBackBtn.text()).toContain('返回工作台')
+      await headerBackBtn.trigger('click')
+      expect(mockPush).toHaveBeenCalledWith({ name: 'my' })
+
+      mockPush.mockClear()
+
+      // 底栏 Esc 快捷提示按钮同样可点击返回工作台
       const backBtns = wrapper.findAll('[data-decl-exit]')
       expect(backBtns).toHaveLength(1)
       expect(backBtns[0].element.tagName).toBe('BUTTON')
@@ -472,6 +484,8 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(wrapper.find('.declarative-pin-btn').exists()).toBe(true)
       expect(wrapper.find('.declarative-dock-btn').exists()).toBe(true)
       expect(wrapper.find('.declarative-popout-btn').exists()).toBe(false)
+      // 独立窗口模式不应展示顶栏「返回工作台」按钮（由右侧「收回工作台」承担）
+      expect(wrapper.find('[data-decl-header-back]').exists()).toBe(false)
       // Esc 只清空搜索的提示只在底栏出现一处，灰阶显示；不再有返回工作台入口
       const hints = wrapper.findAll('[data-decl-popout-hint]')
       expect(hints).toHaveLength(1)

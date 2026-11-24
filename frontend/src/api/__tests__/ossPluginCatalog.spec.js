@@ -96,7 +96,9 @@ describe('开源版插件市场：只读 CDN 静态插件目录', () => {
       size: 1024
     })
 
-    expect(await plugins.getCategories()).toEqual([{ id: '系统工具', name: '系统工具', slug: '系统工具', pluginsCount: 2 }])
+    expect(await plugins.getCategories()).toEqual([
+      { id: 'system', name: '系统工具', slug: 'system', labelKey: 'categories.system', pluginsCount: 2 }
+    ])
     // 浏览共用缓存，安装前再读取一次目录；全程不访问后台接口
     expect(fetchMock).toHaveBeenCalledTimes(2)
     for (const url of requestedUrls(fetchMock)) {

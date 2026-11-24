@@ -15,7 +15,7 @@ interface Owned { owner: string; window: number; created: number }
 interface Session extends Owned { states: Partial<Record<ProxyTool, EnvironmentState>>; sshRevision?: string; hosts: SshProfile[] }
 interface Plan extends Owned { tool: ProxyTool; before: EnvironmentState; after: EnvironmentState; summary: string }
 const owner = (c: CallerIdentity) => JSON.stringify([c.webContentsId, c.pluginId, c.pluginInstanceId, c.attributedPlugin?.sessionId])
-const message = (error: unknown) => (error instanceof Error ? error.message : '操作失败').slice(0, 2000)
+const message = (error: unknown) => (error instanceof Error ? error.message : 'Operation failed').slice(0, 2000)
 /** Windows 自带 OpenSSH 的系统配置位于 %ProgramData%\ssh\ssh_config，用户配置同为 ~/.ssh/config。 */
 const defaultSshOptions = (): SshReadOptions => process.platform === 'win32'
   ? { home: os.homedir(), systemDirectory: path.win32.join(process.env.ProgramData || 'C:\\ProgramData', 'ssh') } : { home: os.homedir() }
@@ -36,7 +36,7 @@ export class SshProxyService {
   async handle(value: unknown, caller: CallerIdentity, signal: AbortSignal): Promise<unknown> {
     try {
       validateSshProxyRequest(value); signal.throwIfAborted()
-      if (this.#stopped || (this.platform !== 'darwin' && this.platform !== 'win32')) throw new Error('此平台的主机与代理服务不可用')
+      if (this.#stopped || (this.platform !== 'darwin' && this.platform !== 'win32')) throw new Error('Host and proxy service is unavailable on this platform')
       const who = { owner: owner(caller), window: caller.webContentsId, created: Date.now() }
       if (value.action === 'cancel') {
         const active = this.#active
@@ -44,7 +44,7 @@ export class SshProxyService {
         if (active?.owner === who.owner) { active.controller.abort(); await Promise.allSettled([active.task]) }
         return { success: true, cancelRequested: active?.owner === who.owner }
       }
-      if (this.#active) throw new Error('主机与代理操作正在进行，请稍候')
+      if (this.#active) throw new Error('Another host and proxy operation is already in progress')
       for (const map of [this.#sessions, this.#plans]) for (const [id, item] of map) if (Date.now() - item.created > 900000) map.delete(id)
       const controller = new AbortController(), combined = AbortSignal.any([signal, controller.signal, AbortSignal.timeout(60000)])
       const task = this.#execute(value, who, combined)
@@ -54,7 +54,7 @@ export class SshProxyService {
   }
   async #scan(who: Owned, signal: AbortSignal) {
     for (const map of [this.#sessions, this.#plans]) for (const [id, item] of map) if (item.owner === who.owner) map.delete(id)
-    if (this.#sessions.size >= 16) throw new Error('插件窗口过多，请先关闭部分窗口')
+    if (this.#sessions.size >= 16) throw new Error('Too many plugin windows open; close some windows and retry')
     const session: Session = { ...who, states: {}, hosts: [] }
     let ssh: { status: 'ready' | 'error'; userConfigExists?: boolean; hosts: SshProfile[]; warnings: string[]; error?: string }
     try {
@@ -73,8 +73,8 @@ export class SshProxyService {
     let backups: Array<{ id: string; createdAt: string; summary: string; tool: string | undefined }> = [], backupError = ''
     try {
       backups = (await this.backups.list()).filter(item => Object.values(session.states).some(state => state?.location === item.location)).map(({ id, createdAt, summary, location }) => ({ id, createdAt, summary, tool: Object.entries(session.states).find(([, state]) => state?.location === location)?.[0] }))
-    } catch { backupError = '备份列表无法读取或校验，原备份已保留；恢复功能暂不可用' }
-    signal.throwIfAborted(); if (this.#stopped) throw new Error('服务已停止')
+    } catch { backupError = 'Failed to read or verify backups; original backups were preserved and restore is temporarily unavailable' }
+    signal.throwIfAborted(); if (this.#stopped) throw new Error('Service stopped')
     const sessionId = randomUUID(); this.#sessions.set(sessionId, session)
     return { success: true, sessionId, ssh, proxies, backups, backupError }
   }
@@ -82,48 +82,48 @@ export class SshProxyService {
     if (request.action === 'scan') return this.#scan(who, signal)
     if (request.action === 'terminal-proxy') return this.terminal.launch('proxy', this.platform === 'win32' ? windowsProxyTerminalArguments(request.port) : proxyTerminalArguments(request.port), signal)
     if (request.action === 'apply') return this.#apply(request.planId, who, signal)
-    if (!('sessionId' in request)) throw new Error('操作缺少会话')
+    if (!('sessionId' in request)) throw new Error('Operation requires a session')
     const session = this.#sessions.get(request.sessionId)
-    if (!session || session.owner !== who.owner) throw new Error('读取结果已过期或不属于当前插件，请刷新')
+    if (!session || session.owner !== who.owner) throw new Error('Scan session expired or does not belong to this plugin; please refresh')
     if (request.action === 'prepare') {
       const before = session.states[request.tool]
-      if (!before || environmentRevision(await this.provider.read(request.tool, signal)) !== environmentRevision(before)) throw new Error('配置读取失败或已变化，请重新读取')
+      if (!before || environmentRevision(await this.provider.read(request.tool, signal)) !== environmentRevision(before)) throw new Error('Configuration read failed or changed; please re-read')
       let after: EnvironmentState, summary: string
       if (request.change.kind === 'restore') {
-        const backup = await this.backups.load(request.change.backupId).catch(() => { throw new Error('备份读取或校验失败，未修改配置') })
-        if (environmentRevision(backup.after) !== environmentRevision(before) || backup.before.location !== before.location) throw new Error('当前配置已不是该备份对应的版本，停止恢复以保留后续修改')
-        after = backup.before; summary = `恢复 ${request.tool.toUpperCase()} 在 ${backup.createdAt} 修改前的配置`
+        const backup = await this.backups.load(request.change.backupId).catch(() => { throw new Error('Backup read or verification failed; configuration not modified') })
+        if (environmentRevision(backup.after) !== environmentRevision(before) || backup.before.location !== before.location) throw new Error('Current configuration no longer matches this backup; restore aborted to preserve later edits')
+        after = backup.before; summary = `Restore ${request.tool.toUpperCase()} configuration from backup created at ${backup.createdAt}`
       } else {
         const proxy = request.change.kind === 'set' ? `http://127.0.0.1:${request.change.port}` : null
         after = await this.provider.change(request.tool, before, proxy, signal)
-        summary = proxy ? `将 ${request.tool.toUpperCase()} 此文件中的通用代理设为 ${proxy}` : `清除 ${request.tool.toUpperCase()} 此文件中的通用代理`
+        summary = proxy ? `Set general ${request.tool.toUpperCase()} proxy in this file to ${proxy}` : `Clear general ${request.tool.toUpperCase()} proxy in this file`
       }
-      if (environmentRevision(before) === environmentRevision(after)) throw new Error('配置没有变化，无需写入')
+      if (environmentRevision(before) === environmentRevision(after)) throw new Error('Configuration unchanged; no write needed')
       const previous = await this.provider.inspect(request.tool, before, signal), next = await this.provider.inspect(request.tool, after, signal)
       signal.throwIfAborted()
-      if (this.#plans.size >= 16) throw new Error('待执行的代理修改过多，请先处理已有操作')
+      if (this.#plans.size >= 16) throw new Error('Too many pending proxy change plans; handle existing plans first')
       const planId = randomUUID(); this.#plans.set(planId, { ...who, tool: request.tool, before, after, summary })
       return { success: true, planId, summary, location: before.location, before: previous.values, after: next.values, notices: next.notices }
     }
-    if (!session.sshRevision || !session.hosts.some(host => host.alias === request.alias)) throw new Error('主机未成功读取或不属于当前列表，请刷新')
-    if ((await readSshDocuments(this.sshOptions, signal)).revision !== session.sshRevision) throw new Error('SSH 配置已变化，请刷新后连接')
+    if (!session.sshRevision || !session.hosts.some(host => host.alias === request.alias)) throw new Error('Host was not read successfully or is not in the current list; please refresh')
+    if ((await readSshDocuments(this.sshOptions, signal)).revision !== session.sshRevision) throw new Error('SSH configuration changed; refresh before connecting')
     signal.throwIfAborted()
     return this.terminal.launch('ssh', sshArguments(request.alias, request.action === 'tunnel' ? request.tunnel : undefined), signal)
   }
   async #apply(id: string, who: Owned, signal: AbortSignal) {
     const plan = this.#plans.get(id)
-    if (!plan || plan.owner !== who.owner) throw new Error('修改计划已过期或不属于当前插件，请重新预览')
+    if (!plan || plan.owner !== who.owner) throw new Error('Change plan expired or does not belong to this plugin; please preview again')
     this.#plans.delete(id)
-    if (environmentRevision(await this.provider.read(plan.tool, signal)) !== environmentRevision(plan.before)) throw new Error('确认期间配置已变化，未写入')
-    const backup = await this.backups.save(plan.before, plan.after, plan.summary).catch(() => { throw new Error('无法写入并验证原配置备份，未修改配置') })
-    signal.throwIfAborted(); if (this.#stopped) throw new Error('服务已停止，未写入')
+    if (environmentRevision(await this.provider.read(plan.tool, signal)) !== environmentRevision(plan.before)) throw new Error('Configuration changed during confirmation; not written')
+    const backup = await this.backups.save(plan.before, plan.after, plan.summary).catch(() => { throw new Error('Failed to write and verify original configuration backup; configuration not modified') })
+    signal.throwIfAborted(); if (this.#stopped) throw new Error('Service stopped; not written')
     let recoveryPath: string | undefined
     try {
       recoveryPath = await this.provider.write(plan.tool, plan.before, plan.after, signal)
       const current = await this.provider.read(plan.tool, AbortSignal.timeout(15000))
-      if (environmentRevision(current) !== environmentRevision(plan.after)) throw new Error('写入后核验不一致，或文件又被其他程序修改')
+      if (environmentRevision(current) !== environmentRevision(plan.after)) throw new Error('Post-write verification mismatch or file was modified externally')
       return { success: true, verified: true, summary: plan.summary, backupId: backup.id, recoveryPath }
-    } catch (error) { throw new Error(`${recoveryPath ? `写入后核验未完成；原文件保留于 ${recoveryPath}；` : ''}原配置备份 ${backup.id} 已保留，请刷新后检查；${message(error)}`) }
+    } catch (error) { throw new Error(`${recoveryPath ? `Post-write verification incomplete; original file retained at ${recoveryPath}; ` : ''}original backup ${backup.id} preserved, please refresh and inspect; ${message(error)}`) }
     finally { this.#sessions.clear(); this.#plans.clear() }
   }
 }

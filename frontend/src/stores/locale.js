@@ -45,8 +45,7 @@ export const useLocaleStore = defineStore('locale', {
     locale: getCurrentLocale(),
     _initialized: false,
     _revision: 0,
-    _storageHandler: null,
-    _systemEventHandler: null
+    _storageHandler: null
   }),
 
   actions: {
@@ -62,26 +61,30 @@ export const useLocaleStore = defineStore('locale', {
           }
         }
         window.addEventListener?.('storage', this._storageHandler)
-
-        if (window.ztools?.events?.on) {
-          this._systemEventHandler = (envelope) => {
-            this.handleSystemLocaleChange(envelope)
-          }
-          window.ztools.events.subscribe?.('system.LocaleChange')?.catch?.((err) => {
-            console.warn('[LocaleStore] 订阅 system.LocaleChange 失败:', err)
-          })
-          window.ztools.events.on('system.LocaleChange', this._systemEventHandler)
-        }
       }
 
       const electronInitial = typeof window !== 'undefined' ? window.__ztoolsElectron?.initialLocale : null
-      if (typeof electronInitial === 'string' && electronInitial.trim() && this.setting === 'system') {
-        this.systemLocale = resolveLocale(electronInitial, this.systemLocale)
-      }
+      const hasElectronInitial = typeof electronInitial === 'string' && electronInitial.trim().length > 0
 
-      const localSetting = readStoredSetting()
+      let rawStored = null
+      try {
+        if (typeof localStorage !== 'undefined') {
+          rawStored = localStorage.getItem(LOCALE_STORAGE_KEY)
+        }
+      } catch {
+        rawStored = null
+      }
+      const hasStoredLocal = typeof rawStored === 'string' && rawStored.trim().length > 0
+      const localSetting = normalizeSetting(rawStored)
       this.setting = localSetting
-      this._applyLocale(resolveLocale(localSetting, this.systemLocale))
+
+      // 同步阶段与 i18n/index.js 的 detectInitialLocale 保持同一优先级：
+      // __ztoolsElectron.initialLocale > localStorage > systemLocale，避免首帧与 init 间二次闪屏；
+      // 同时在确认 user_settings.json 前不覆写 systemLocale，防止把显式设置误记为系统语言。
+      const initialDisplayLocale = hasElectronInitial
+        ? resolveLocale(electronInitial, this.systemLocale)
+        : resolveLocale(localSetting, this.systemLocale)
+      this._applyLocale(initialDisplayLocale)
 
       try {
         if (typeof window !== 'undefined' && typeof window.ztools?.config?.get === 'function') {
@@ -90,12 +93,18 @@ export const useLocaleStore = defineStore('locale', {
           if (typeof savedSetting === 'string' && savedSetting.trim()) {
             const normalized = normalizeSetting(savedSetting)
             this.setting = normalized
+            if (normalized === 'system' && hasElectronInitial) {
+              this.systemLocale = resolveLocale(electronInitial, this.systemLocale)
+            }
             try {
               localStorage.setItem(LOCALE_STORAGE_KEY, normalized)
             } catch (err) {
               console.warn('[LocaleStore] 同步本地语言缓存失败:', err)
             }
             this._applyLocale(resolveLocale(normalized, this.systemLocale))
+          } else if (!hasStoredLocal && hasElectronInitial) {
+            this.systemLocale = resolveLocale(electronInitial, this.systemLocale)
+            this._applyLocale(resolveLocale(this.setting, this.systemLocale))
           }
         }
       } catch (err) {
@@ -143,8 +152,11 @@ export const useLocaleStore = defineStore('locale', {
         ? envelope.payload
         : envelope
 
+      let explicitDisplayLocale = ''
+
       if (typeof payload === 'string' && payload.trim()) {
-        this.systemLocale = resolveLocale(payload, this.systemLocale)
+        // 裸字符串仅视为宿主推送的当前显示语言，不篡改已探测的真实 systemLocale
+        explicitDisplayLocale = payload.trim()
       } else if (payload && typeof payload === 'object') {
         if (typeof payload.systemLocale === 'string' && payload.systemLocale.trim()) {
           this.systemLocale = resolveLocale(payload.systemLocale, this.systemLocale)
@@ -157,12 +169,19 @@ export const useLocaleStore = defineStore('locale', {
           } catch (err) {
             console.warn('[LocaleStore] 同步本地语言缓存失败:', err)
           }
+          if (payload.setting === 'system' && !payload.systemLocale && typeof payload.locale === 'string' && payload.locale.trim()) {
+            explicitDisplayLocale = payload.locale.trim()
+          }
         } else if (typeof payload.locale === 'string' && payload.locale.trim() && !payload.systemLocale) {
-          this.systemLocale = resolveLocale(payload.locale, this.systemLocale)
+          // payload.locale 为当前生效显示语言，绝不覆写 systemLocale
+          explicitDisplayLocale = payload.locale.trim()
         }
       }
 
-      this._applyLocale(resolveLocale(this.setting, this.systemLocale))
+      const nextLocale = explicitDisplayLocale && this.setting === 'system'
+        ? resolveLocale(explicitDisplayLocale, this.systemLocale)
+        : resolveLocale(this.setting, this.systemLocale)
+      this._applyLocale(nextLocale)
     },
 
     _applyLocale(resolved) {
@@ -177,10 +196,6 @@ export const useLocaleStore = defineStore('locale', {
         if (this._storageHandler) {
           window.removeEventListener?.('storage', this._storageHandler)
           this._storageHandler = null
-        }
-        if (this._systemEventHandler && window.ztools?.events?.off) {
-          window.ztools.events.off('system.LocaleChange', this._systemEventHandler)
-          this._systemEventHandler = null
         }
       }
     }

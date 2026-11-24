@@ -72,7 +72,7 @@ function newItem(content, level, title) {
         title: title || content.slice(0, 40),
         content,
         level,
-        createdAt: new Date().toLocaleString()
+        createdAt: new Date().toLocaleString(getLocale())
     };
 }
 /**
@@ -93,9 +93,10 @@ export function WifiQrForm({ onCreated }) {
             payload = buildWifiPayload(ssid, password, security, hidden);
         }
         catch (err) {
+            const code = err && typeof err === "object" && "code" in err ? String(err.code || "") : "";
             const message = err instanceof Error ? err.message : String(err);
             // 密码相关的错误显示在密码框下，名称相关的显示在名称框下
-            if (/密码|password/i.test(message))
+            if (code === "WIFI_PASSWORD_INVALID")
                 setPasswordError(message);
             else
                 setError(message);

@@ -9,6 +9,7 @@ import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { fileCapabilityResponse } from '../../src/main/protocol/file-capability.js'
 import { fileFailure, FileSystemService } from '../../src/main/services/file-system-service.js'
 import { FileDropService } from '../../src/main/services/file-drop-service.js'
+import { getLocaleSetting, getResolvedLocale, setLocale } from '../../src/main/i18n/index.js'
 import type { WindowRegistry } from '../../src/main/windows/window-registry.js'
 
 interface TestContext {
@@ -24,7 +25,7 @@ const popoutMainCaller: CallerIdentity = { type: 'main', webContentsId: 3 }
 test('unknown file failures keep a stable code without exposing native error details', () => {
   const error = fileFailure(new Error('EACCES: open /Users/alice/private/report.txt'))
   assert.equal(error.code, errorCodes.fileError)
-  assert.equal(error.message, '文件操作失败')
+  assert.equal(error.message, 'File operation failed')
   assert.equal(error.message.includes('/Users/alice'), false)
 })
 
@@ -479,7 +480,7 @@ test('另存为对话框确认替换：已有普通文件只允许单次原子�
     await fs.writeFile(swapped, 'old')
     await context.service.grantSavePath(swapped, mainCaller)
     await fs.rm(swapped); await fs.mkdir(swapped)
-    await assert.rejects(write(swapped, 'new', { replaceConfirmed: true }), /不是普通文件/)
+    await assert.rejects(write(swapped, 'new', { replaceConfirmed: true }), /no longer a regular file/)
     assert.equal((await fs.stat(swapped)).isDirectory(), true)
 
     // 5. 写入失败时许可恢复，重试仍可替换
@@ -516,7 +517,7 @@ test('另存为确认替换不能借符号链接或别名替换受保护的原�
     await context.service.grantSavePath(alias, mainCaller)
     await assert.rejects(
       context.service.writeFile({ path: alias, encoding: 'utf8', content: 'copy', overwrite: false }, mainCaller, undefined, { replaceConfirmed: true, protectedPath: source }),
-      (error) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest && /原文件/.test(error.message)
+      (error) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest && /original file/.test(error.message)
     )
     assert.equal(await fs.readFile(source, 'utf8'), 'original')
     assert.equal((await fs.lstat(alias)).isSymbolicLink(), true)
@@ -1038,4 +1039,31 @@ test('无效 UTF-8 明确提示编码限制，保留原字节且不泄露文件�
     await fs.writeFile(file, '中文\n')
     assert.equal((await context.service.readFile({ path: file, encoding: 'utf8' }, mainCaller)).content, '中文\n')
   } finally { await dispose(context) }
+})
+
+
+test('getDirectoryContents 的 lastModified 绑定主进程当前生效 locale', async () => {
+  const previousLocale = getLocaleSetting()
+  const context = await createContext()
+  try {
+    const dir = path.join(context.root, 'locale-dir')
+    await fs.mkdir(dir)
+    const file = path.join(dir, 'sample.txt')
+    await fs.writeFile(file, 'hello')
+    const stats = await fs.lstat(file)
+    await context.service.grantFolder(dir, mainCaller)
+
+    setLocale('en-US', 'zh-CN')
+    const enResult = await context.service.getDirectoryContents({ path: dir }, mainCaller)
+    assert.equal(enResult.files.length, 1)
+    assert.equal(enResult.files[0]?.lastModified, stats.mtime.toLocaleString(getResolvedLocale()))
+
+    setLocale('zh-CN', 'en-US')
+    const zhResult = await context.service.getDirectoryContents({ path: dir }, mainCaller)
+    assert.equal(zhResult.files.length, 1)
+    assert.equal(zhResult.files[0]?.lastModified, stats.mtime.toLocaleString(getResolvedLocale()))
+  } finally {
+    setLocale(previousLocale, 'zh-CN')
+    await dispose(context)
+  }
 })

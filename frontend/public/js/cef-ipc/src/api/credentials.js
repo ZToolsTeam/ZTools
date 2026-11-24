@@ -1,5 +1,26 @@
+import { resolveSdkText } from '../core/environment.js'
 const CREDENTIAL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const MAX_CREDENTIAL_VALUE_BYTES = 64 * 1024
+
+
+function getCredentialErrorMessage(code) {
+  switch (code) {
+    case 'INVALID_REQUEST':
+      return resolveSdkText('凭据请求格式无效', 'Invalid credential request format')
+    case 'PERMISSION_DENIED':
+      return resolveSdkText('当前插件实例无权访问凭据', 'Current plugin instance does not have permission to access credentials')
+    case 'NOT_SUPPORTED':
+      return resolveSdkText('宿主安全凭据存储不可用', 'Host secure credential storage is unavailable')
+    case 'FILE_TOO_LARGE':
+      return resolveSdkText('凭据超过 64 KiB 上限', 'Credential exceeds the 64 KiB limit')
+    case 'DATA_CORRUPT':
+      return resolveSdkText('安全凭据记录损坏或无法解密', 'Secure credential record is corrupted or cannot be decrypted')
+    case 'STORAGE_ERROR':
+      return resolveSdkText('安全凭据读写失败', 'Failed to read or write secure credential storage')
+    default:
+      return resolveSdkText('宿主安全凭据操作失败', 'Host secure credential operation failed')
+  }
+}
 
 function credentialError(code, message) {
   const error = new Error(message)
@@ -9,7 +30,7 @@ function credentialError(code, message) {
 
 function requireCredentialKey(key) {
   if (typeof key !== 'string' || !CREDENTIAL_KEY_PATTERN.test(key)) {
-    throw credentialError('INVALID_REQUEST', '凭据 key 格式无效')
+    throw credentialError('INVALID_REQUEST', resolveSdkText('凭据 key 格式无效', 'Invalid credential key format'))
   }
 }
 
@@ -22,15 +43,7 @@ function unwrapResponse(response) {
   if (response.success !== true) {
     const error = isRecord(response.error) ? response.error : {}
     const code = typeof error.code === 'string' ? error.code : 'INTERNAL_ERROR'
-    const messages = {
-      INVALID_REQUEST: '凭据请求格式无效',
-      PERMISSION_DENIED: '当前插件实例无权访问凭据',
-      NOT_SUPPORTED: '宿主安全凭据存储不可用',
-      FILE_TOO_LARGE: '凭据超过 64 KiB 上限',
-      DATA_CORRUPT: '安全凭据记录损坏或无法解密',
-      STORAGE_ERROR: '安全凭据读写失败'
-    }
-    throw credentialError(code, messages[code] || '宿主安全凭据操作失败')
+    throw credentialError(code, getCredentialErrorMessage(code))
   }
   return Object.hasOwn(response, 'data') ? response.data : response
 }
@@ -48,16 +61,16 @@ class CredentialStoreV1API {
         ['encryption-unavailable', 'insecure-backend', 'backend-unknown'].includes(result.reason)) {
       return { status: 'unavailable', reason: result.reason }
     }
-    throw credentialError('INTERNAL_ERROR', '凭据存储状态响应无效')
+    throw credentialError('INTERNAL_ERROR', resolveSdkText('凭据存储状态响应无效', 'Invalid credential store status response'))
   }
 
   async set(key, value) {
     requireCredentialKey(key)
     if (typeof value !== 'string' || new TextEncoder().encode(value).byteLength > MAX_CREDENTIAL_VALUE_BYTES) {
-      throw credentialError('INVALID_REQUEST', '凭据必须是 64 KiB 以内的字符串')
+      throw credentialError('INVALID_REQUEST', resolveSdkText('凭据必须是 64 KiB 以内的字符串', 'Credential value must be a string within 64 KiB'))
     }
     const result = await this.call('credential_v1_set', { key, value })
-    if (result !== 'OK') throw credentialError('INTERNAL_ERROR', '凭据写入结果无效')
+    if (result !== 'OK') throw credentialError('INTERNAL_ERROR', resolveSdkText('凭据写入结果无效', 'Invalid credential write result'))
     return true
   }
 
@@ -67,13 +80,13 @@ class CredentialStoreV1API {
     if (isRecord(result) && result.status === 'missing') return null
     if (isRecord(result) && result.status === 'present' && typeof result.value === 'string' &&
         new TextEncoder().encode(result.value).byteLength <= MAX_CREDENTIAL_VALUE_BYTES) return result.value
-    throw credentialError('DATA_CORRUPT', '凭据读取结果无效')
+    throw credentialError('DATA_CORRUPT', resolveSdkText('凭据读取结果无效', 'Invalid credential read result'))
   }
 
   async delete(key) {
     requireCredentialKey(key)
     const result = await this.call('credential_v1_delete', { key })
-    if (result !== 'OK') throw credentialError('INTERNAL_ERROR', '凭据删除结果无效')
+    if (result !== 'OK') throw credentialError('INTERNAL_ERROR', resolveSdkText('凭据删除结果无效', 'Invalid credential delete result'))
     return true
   }
 
@@ -82,17 +95,9 @@ class CredentialStoreV1API {
       return unwrapResponse(await this.transport.call(method, params))
     } catch (error) {
       if (typeof error?.code === 'string') {
-        const messages = {
-          INVALID_REQUEST: '凭据请求格式无效',
-          PERMISSION_DENIED: '当前插件实例无权访问凭据',
-          NOT_SUPPORTED: '宿主安全凭据存储不可用',
-          FILE_TOO_LARGE: '凭据超过 64 KiB 上限',
-          DATA_CORRUPT: '安全凭据记录损坏或无法解密',
-          STORAGE_ERROR: '安全凭据读写失败'
-        }
-        throw credentialError(error.code, messages[error.code] || '宿主安全凭据操作失败')
+        throw credentialError(error.code, getCredentialErrorMessage(error.code))
       }
-      throw credentialError('INTERNAL_ERROR', '宿主安全凭据操作失败')
+      throw credentialError('INTERNAL_ERROR', getCredentialErrorMessage('INTERNAL_ERROR'))
     }
   }
 }

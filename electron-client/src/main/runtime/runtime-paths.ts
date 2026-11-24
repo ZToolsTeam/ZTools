@@ -26,7 +26,7 @@ export interface RuntimePathsOptions {
 }
 
 function requireAbsolute(name: string, value: string): string {
-  if (!path.isAbsolute(value)) throw new Error(`${name} 必须是绝对路径`)
+  if (!path.isAbsolute(value)) throw new Error(`${name} must be an absolute path`)
   return path.normalize(value)
 }
 

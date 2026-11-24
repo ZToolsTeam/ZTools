@@ -18,7 +18,7 @@ const modelDirectory = process.argv[2] ?? ''
 let models: Promise<LoadedModels> | undefined
 
 async function loadModels(): Promise<LoadedModels> {
-  if (!modelDirectory) throw new Error('没有指定识别模型目录')
+  if (!modelDirectory) throw new Error('OCR model directory is not specified')
   configureOnnxRuntime(ort)
   const [det, rec, dictionaryText] = await Promise.all([
     fs.readFile(path.join(modelDirectory, PADDLE_OCR_MODEL_FILES.detection)),
@@ -30,7 +30,7 @@ async function loadModels(): Promise<LoadedModels> {
   const dictionary = parseCharacterDictionary(dictionaryText)
   const output = (result: ort.InferenceSession.OnnxValueMapType, session: ort.InferenceSession) => {
     const tensor = result[session.outputNames[0]!]
-    if (!tensor || !(tensor.data instanceof Float32Array)) throw new Error('识别模型输出格式无效')
+    if (!tensor || !(tensor.data instanceof Float32Array)) throw new Error('Invalid OCR model output format')
     return tensor
   }
   return {
@@ -44,7 +44,7 @@ async function loadModels(): Promise<LoadedModels> {
         const result = await recognition.run({ [recognition.inputNames[0]!]: new ort.Tensor('float32', input, [batch, 3, height, width]) })
         const tensor = output(result, recognition)
         const [, steps, classes] = tensor.dims
-        if (tensor.dims.length !== 3 || !steps || !classes) throw new Error('识别模型输出维度无效')
+        if (tensor.dims.length !== 3 || !steps || !classes) throw new Error('Invalid OCR model output dimensions')
         return { data: tensor.data as Float32Array, steps, classes }
       }
     }
@@ -63,4 +63,4 @@ async function handle(request: PaddleOcrWorkerRequest): Promise<PaddleOcrWorkerR
   }
 }
 
-serveRequests<PaddleOcrWorkerResponse>('文字识别', handle)
+serveRequests<PaddleOcrWorkerResponse>('Text OCR', handle)

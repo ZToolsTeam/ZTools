@@ -11,12 +11,12 @@ export interface ReferenceImageFactory {
   createFromBitmap(bytes: Buffer, options: { width: number; height: number; scaleFactor: number }): Image
 }
 const maximumBytes = 16 * 1024 * 1024, maximumPixels = 8 * 1024 * 1024
-const invalid = () => new ZToolsError(errorCodes.invalidRequest, '图片处理参数无效')
-const failed = () => new ZToolsError(errorCodes.fileError, '图片处理失败或输入格式不受当前处理器支持')
+const invalid = () => new ZToolsError(errorCodes.invalidRequest, 'Invalid image processing parameters')
+const failed = () => new ZToolsError(errorCodes.fileError, 'Image processing failed or input format is not supported by the current processor')
 function dimensions(width: unknown, height: unknown): { width: number; height: number } {
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || Number(width) <= 0 || Number(height) <= 0 ||
       Number(width) > 8192 || Number(height) > 8192 || Number(width) * Number(height) > maximumPixels) {
-    throw new ZToolsError(errorCodes.fileTooLarge, '图片尺寸超过当前处理器上限')
+    throw new ZToolsError(errorCodes.fileTooLarge, 'Image dimensions exceed the current processor limit')
   }
   return { width: Number(width), height: Number(height) }
 }
@@ -26,7 +26,7 @@ function record(value: unknown, keys: readonly string[]): Record<string, unknown
   return value as Record<string, unknown>
 }
 export function imageHeader(bytes: Buffer): { format: 'png' | 'jpg'; width: number; height: number } {
-  if (bytes.length > maximumBytes) throw new ZToolsError(errorCodes.fileTooLarge, '图片文件超过16MiB')
+  if (bytes.length > maximumBytes) throw new ZToolsError(errorCodes.fileTooLarge, 'Image file exceeds 16 MiB')
   if (bytes.length >= 33 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
     if (bytes.readUInt32BE(8) !== 13 || bytes.toString('ascii', 12, 16) !== 'IHDR') throw failed()
     const size = dimensions(bytes.readUInt32BE(16), bytes.readUInt32BE(20))
@@ -100,7 +100,7 @@ export class ReferenceImageService {
     if (operation === 'rotate' && (typeof params.angle !== 'number' || !Number.isFinite(params.angle) || Math.abs(params.angle) > 36000)) throw invalid()
     if (operation === 'flip' && !['horizontal', 'vertical'].includes(String(params.direction))) throw invalid()
     return this.#run(caller, signal, async () => {
-      if (cacheOutput && !this.cache) throw new ZToolsError(errorCodes.methodNotFound, '图片缓存处理器尚未接线')
+      if (cacheOutput && !this.cache) throw new ZToolsError(errorCodes.methodNotFound, 'Image cache processor is not wired')
       let { image } = await this.#load(input, caller, signal)
       const original = dimensions(image.getSize().width, image.getSize().height)
       if (operation === 'resize' && requestedSize) {
@@ -120,35 +120,35 @@ export class ReferenceImageService {
       if (image.isEmpty()) throw failed()
       const size = dimensions(image.getSize().width, image.getSize().height)
       const bytes = params.format === 'png' ? image.toPNG({ scaleFactor: 1 }) : image.toJPEG(Number(params.quality ?? 85))
-      if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > maximumBytes) throw new ZToolsError(errorCodes.fileTooLarge, '处理后图片超过16MiB')
+      if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > maximumBytes) throw new ZToolsError(errorCodes.fileTooLarge, 'Processed image exceeds 16 MiB')
       // Give cancellation/owner teardown an event-loop turn before starting a file write.
       await new Promise<void>(resolve => setImmediate(resolve)); this.#active(signal)
       if (cacheOutput) {
         const result = await this.cache!.writeGeneratedCacheFile(bytes, caller, String(params.format), signal)
         if (this.#stopped || signal.aborted) {
           try { await this.cache!.revokeReference(result.reference, caller) }
-          finally { throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '预览缓存已写入，但结果未交付') }
+          finally { throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Preview cache written, but result was not delivered') }
         }
         return { success: true as const, reference: result.reference, fileUrl: result.fileUrl, size: result.size, ...size, format: params.format }
       }
       if (!output) throw invalid()
       const receipt = await this.grants.save(caller.webContentsId, output, bytes, params.replace === true, signal)
-      if (this.#stopped || signal.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '图片保存结果未交付，需核实目标文件')
+      if (this.#stopped || signal.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Image save result was not delivered; verify the target file')
       return { success: true as const, status: receipt.status, size: receipt.bytesWritten, ...size, format: params.format }
     })
   }
   async encodeBase64(value: unknown, caller: CallerIdentity, signal: AbortSignal) {
     const params = record(value, ['fileGrantId']), input = grantId(params.fileGrantId)
     return this.#run(caller, signal, async () => {
-      if (!this.cache) throw new ZToolsError(errorCodes.methodNotFound, '图片缓存处理器尚未接线')
+      if (!this.cache) throw new ZToolsError(errorCodes.methodNotFound, 'Image cache processor is not wired')
       const { bytes, header } = await this.#load(input, caller, signal)
       const encodedLength = Math.ceil(bytes.length / 3) * 4
-      if (encodedLength > maximumBytes) throw new ZToolsError(errorCodes.fileTooLarge, 'Base64编码结果超过16MiB')
+      if (encodedLength > maximumBytes) throw new ZToolsError(errorCodes.fileTooLarge, 'Base64-encoded result exceeds 16 MiB')
       await new Promise<void>(resolve => setImmediate(resolve)); this.#active(signal)
       const result = await this.cache.writeGeneratedCacheFile(Buffer.from(bytes.toString('base64'), 'ascii'), caller, 'b64', signal)
       if (this.#stopped || signal.aborted) {
         await this.cache.revokeReference(result.reference, caller)
-        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Base64缓存已写入，但结果未交付')
+        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Base64 cache written, but result was not delivered')
       }
       return { success: true as const, reference: result.reference, fileUrl: result.fileUrl,
         size: result.size, mimeType: header.format === 'png' ? 'image/png' : 'image/jpeg' }
@@ -179,7 +179,7 @@ export class ReferenceImageService {
       if (!Buffer.isBuffer(encodedImage) || !encodedImage.length || encodedImage.length > maximumBytes) throw failed()
       await new Promise<void>(resolve => setImmediate(resolve)); this.#active(signal)
       const receipt = await this.grants.save(caller.webContentsId, output, encodedImage, params.replace === true, signal)
-      if (this.#stopped || signal.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '图片保存结果未交付，需核实目标文件')
+      if (this.#stopped || signal.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Image save result was not delivered; verify the target file')
       return { success: true as const, status: receipt.status, size: receipt.bytesWritten, ...size, format: params.format }
     })
   }
@@ -226,13 +226,13 @@ export class ReferenceImageService {
     return { bytes, header, image }
   }
   #active(signal: AbortSignal): void {
-    if (this.#stopped || signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '图片处理已取消')
+    if (this.#stopped || signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Image processing cancelled')
   }
   async #run<T>(caller: CallerIdentity, signal: AbortSignal, execute: () => Promise<T>): Promise<T> {
     this.#active(signal)
     if (!Number.isSafeInteger(caller.webContentsId) || caller.webContentsId <= 0 || !['main', 'plugin'].includes(caller.type)) throw invalid()
     const owned = this.#pending.get(caller.webContentsId) ?? 0
-    if (owned >= 1 || [...this.#pending.values()].reduce((sum, count) => sum + count, 0) >= 2) throw new ZToolsError(errorCodes.fileTooLarge, '图片处理任务已达上限')
+    if (owned >= 1 || [...this.#pending.values()].reduce((sum, count) => sum + count, 0) >= 2) throw new ZToolsError(errorCodes.fileTooLarge, 'Image processing concurrency limit reached')
     this.#pending.set(caller.webContentsId, owned + 1)
     try { return await execute() }
     catch (error) { if (error instanceof ZToolsError) throw error; throw failed() }

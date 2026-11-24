@@ -15,15 +15,17 @@ import {
   buildCatalogUpdateInfo,
   loadStaticCatalogMap
 } from './pluginCatalog'
+import { resolveErrorMessage } from '../utils/errorMessage'
+import { t } from '@/i18n'
 
 export { buildCatalogUpdateInfo } from './pluginCatalog'
 
 /** 点击更新时重新确认发布状态，展示时保存的地址不能绕过下架与兼容检查。 */
 export async function downloadPluginUpdate(pluginId) {
-  if (isBundledPlugin(pluginId)) throw new Error('内置插件随客户端更新')
+  if (isBundledPlugin(pluginId)) throw new Error(t('pluginUpdate.bundledWithClient'))
   const info = await getDownloadSign(pluginId)
   const result = await nativeDownloadPluginUpdate(pluginId, { ...info, fileSize: info.size })
-  if (!result || result.success === false) throw new Error(result?.error || '插件更新启动失败')
+  if (!result || result.success === false) throw new Error(resolveErrorMessage(result, 'pluginUpdate.startFailed'))
   return result
 }
 
@@ -40,12 +42,12 @@ export async function checkPluginUpdate(pluginId, params = {}) {
   const currentVersion = params.current_version || '1.0.0'
 
   // 内置插件跟随客户端一起更新，不单独检查
-  if (isBundledPlugin(pluginId)) return noUpdate(pluginId, '内置插件随客户端更新')
+  if (isBundledPlugin(pluginId)) return noUpdate(pluginId, t('pluginUpdate.bundledWithClient'))
 
   const catalog = await loadStaticCatalogMap()
   const entry = catalog?.get(normalizeCatalogId(pluginId))
   if (entry) return buildCatalogUpdateInfo(entry, currentVersion, platform)
-  return noUpdate(pluginId, '插件市场未收录该插件')
+  return noUpdate(pluginId, t('pluginUpdate.notInCatalog'))
 }
 
 /**
@@ -68,13 +70,13 @@ export async function batchCheckPlugins(data = {}) {
   const catalog = requested.some((item) => !isBundledPlugin(item.id)) ? await loadStaticCatalogMap() : null
   for (const item of requested) {
     if (isBundledPlugin(item.id)) {
-      updates[item.id] = noUpdate(item.id, '内置插件随客户端更新')
+      updates[item.id] = noUpdate(item.id, t('pluginUpdate.bundledWithClient'))
       continue
     }
     const entry = catalog?.get(normalizeCatalogId(item.id))
     updates[item.id] = entry
       ? buildCatalogUpdateInfo(entry, item.version || '1.0.0', platform)
-      : noUpdate(item.id, '插件市场未收录该插件')
+      : noUpdate(item.id, t('pluginUpdate.notInCatalog'))
   }
   return updates
 }

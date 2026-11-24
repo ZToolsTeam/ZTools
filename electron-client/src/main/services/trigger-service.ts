@@ -3,7 +3,7 @@ import type { CallerIdentity } from '../../contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import {
   doubleModifierOf,
-  getGlobalHotkeyBlacklistReason,
+  getGlobalHotkeyBlacklistPlatform,
   isDoubleModifier,
   normalizedAccelerator,
   type NativeMouseAction,
@@ -70,6 +70,8 @@ export interface TriggerServiceOptions {
   shortcuts: GlobalShortcutAdapter
   events: Pick<EventService, 'publishHost'> & Partial<Pick<EventService, 'onSubscriptionChanged'>>
   toggleMainWindow(): void
+  /** 独立悬浮条快捷键触发的显示/隐藏回调（与 toggleMainWindow 完全解耦） */
+  toggleLauncher?(): void
   openPlugin(params: PluginOpenParams): Promise<unknown>
   forwardHotkeyToRecorder?(accelerator: string): Promise<boolean> | boolean
   store?: TriggerDocumentStore
@@ -78,6 +80,8 @@ export interface TriggerServiceOptions {
   mouse?: MouseTriggerAdapter
   /** 冷启动时若 triggers.json 尚未建立任何记录，则用该值自动初始化全局唤醒触发器 */
   initialWakeHotkey?: string
+  /** 冷启动或老版本升级且未显式关闭悬浮条快捷键时，用于自动初始化独立悬浮条触发器 */
+  initialLauncherHotkey?: string
   /** 运行平台（测试中可覆盖为 darwin/win32 验证跨平台规则） */
   platform?: NodeJS.Platform
 }
@@ -116,18 +120,18 @@ function isIdentifier(value: unknown): value is string {
 
 function parseStoredTrigger(value: unknown): StoredTrigger {
   if (!isRecord(value) || !isIdentifier(value.id) || !isIdentifier(value.pluginId)) {
-    throw new ZToolsError(errorCodes.dataCorrupt, '触发器配置包含无效标识')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Trigger configuration contains an invalid identifier')
   }
   const type = value.type ?? 'hotkey'
   if (!['hotkey', 'timer', 'hook', 'clipboard', 'network'].includes(String(type))) {
-    throw new ZToolsError(errorCodes.dataCorrupt, '触发器类型无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid trigger type')
   }
   const config = value.config === undefined ? {} : value.config
-  if (!isRecord(config)) throw new ZToolsError(errorCodes.dataCorrupt, '触发器 config 无效')
+  if (!isRecord(config)) throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid trigger config')
 
   const nestedAction = isRecord(value.action) ? value.action : undefined
   if (value.action !== undefined && nestedAction === undefined) {
-    throw new ZToolsError(errorCodes.dataCorrupt, '触发器 action 无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid trigger action')
   }
   const mode = nestedAction?.mode ?? value.actionMode ?? 'builtin'
   const target = nestedAction?.target ?? value.actionTarget ?? ''
@@ -137,16 +141,16 @@ function parseStoredTrigger(value: unknown): StoredTrigger {
     typeof target !== 'string' ||
     !isRecord(params)
   ) {
-    throw new ZToolsError(errorCodes.dataCorrupt, '触发器 action 无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid trigger action')
   }
   if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
-    throw new ZToolsError(errorCodes.dataCorrupt, '触发器 enabled 无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid trigger enabled flag')
   }
   if (value.priority !== undefined && !Number.isInteger(value.priority)) {
-    throw new ZToolsError(errorCodes.dataCorrupt, '触发器 priority 无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid trigger priority')
   }
   if (value.createTime !== undefined && typeof value.createTime !== 'string') {
-    throw new ZToolsError(errorCodes.dataCorrupt, '触发器 createTime 无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid trigger createTime')
   }
   return {
     id: value.id,
@@ -260,7 +264,8 @@ const DOUBLE_MODIFIER_ACCELERATORS: Record<NativeKeyboardModifier, string> = {
 
 /** 冲突提示里展示占用者：系统内置触发器用功能名，其余显示插件 ID */
 const SYSTEM_TRIGGER_NAME_KEYS: Record<string, string> = {
-  global_wake_hotkey: 'trigger.owner.globalWake'
+  global_wake_hotkey: 'trigger.owner.globalWake',
+  global_launcher_hotkey: 'trigger.owner.globalLauncher'
 }
 
 /** 旧超级面板键盘热键的触发器 ID：超级面板已移除，加载时清理遗留记录 */
@@ -286,7 +291,10 @@ function triggerOwnerName(trigger: StoredTrigger): string {
 
 function hasRuntimeAction(trigger: StoredTrigger): boolean {
   if (trigger.action.mode === 'window') return isIdentifier(trigger.action.target)
-  return trigger.action.mode === 'builtin' && trigger.action.target === 'toggle_main_window'
+  return (
+    trigger.action.mode === 'builtin' &&
+    (trigger.action.target === 'toggle_main_window' || trigger.action.target === 'toggle_launcher')
+  )
 }
 
 /**
@@ -389,6 +397,16 @@ export class TriggerService {
 
   getGlobalWakeHotkey(): { exists: boolean; enabled: boolean; key: string } {
     const trigger = this.#triggers.get('global_wake_hotkey')
+    if (!trigger) return { exists: false, enabled: false, key: '' }
+    return {
+      exists: true,
+      enabled: trigger.enabled,
+      key: acceleratorOf(trigger) ?? ''
+    }
+  }
+
+  getGlobalLauncherHotkey(): { exists: boolean; enabled: boolean; key: string } {
+    const trigger = this.#triggers.get('global_launcher_hotkey')
     if (!trigger) return { exists: false, enabled: false, key: '' }
     return {
       exists: true,
@@ -733,7 +751,7 @@ export class TriggerService {
     const isUninitializedDocument = document.triggers === undefined
     const values = document.triggers ?? []
     if (!Array.isArray(values)) {
-      throw new ZToolsError(errorCodes.dataCorrupt, 'triggers.json 缺少 triggers 数组')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'triggers.json is missing the triggers array')
     }
     const loaded = new Map<string, StoredTrigger>()
     const order: TriggerOrderItem[] = []
@@ -746,7 +764,7 @@ export class TriggerService {
           continue
         }
         if (loaded.has(trigger.id)) {
-          throw new ZToolsError(errorCodes.dataCorrupt, `触发器 ID 重复: ${trigger.id}`)
+          throw new ZToolsError(errorCodes.dataCorrupt, `Duplicate trigger ID: ${trigger.id}`)
         }
         loaded.set(trigger.id, trigger)
         order.push({ triggerId: trigger.id })
@@ -762,7 +780,7 @@ export class TriggerService {
         const wakeValid = isDoubleModifier(wakeKey)
           ? this.#keyboardAdapter !== undefined
           : isValidElectronAccelerator(wakeKey) &&
-            getGlobalHotkeyBlacklistReason(wakeKey, this.#platform) === null
+            getGlobalHotkeyBlacklistPlatform(wakeKey, this.#platform) === null
         if (wakeValid) {
           const defaultWakeTrigger: StoredTrigger = {
             id: 'global_wake_hotkey',
@@ -782,9 +800,49 @@ export class TriggerService {
         }
       }
     }
+    let seededDefaultLauncher = false
+    if (typeof this.options.initialLauncherHotkey === 'string') {
+      const launcherKey = this.options.initialLauncherHotkey.trim()
+      if (launcherKey && !loaded.has('global_launcher_hotkey')) {
+        const launcherValid = isDoubleModifier(launcherKey)
+          ? this.#keyboardAdapter !== undefined
+          : isValidElectronAccelerator(launcherKey) &&
+            getGlobalHotkeyBlacklistPlatform(launcherKey, this.#platform) === null
+        if (launcherValid) {
+          const launcherModifier = doubleModifierOf(launcherKey)
+          const launcherNormalized = normalizedAccelerator(launcherKey, this.#platform)
+          // 老用户升级或冷启动播种时避让任何已有启用触发器，避免强行占用或破坏用户既有配置
+          const conflictsExisting = [...loaded.values()].some((existing) => {
+            if (!existing.enabled) return false
+            const existingKey = acceleratorOf(existing)
+            if (!existingKey) return false
+            return launcherModifier !== undefined
+              ? doubleModifierOf(existingKey) === launcherModifier
+              : normalizedAccelerator(existingKey, this.#platform) === launcherNormalized
+          })
+          if (!conflictsExisting) {
+            const defaultLauncherTrigger: StoredTrigger = {
+              id: 'global_launcher_hotkey',
+              pluginId: 'system',
+              type: 'hotkey',
+              config: { key: launcherKey },
+              action: { mode: 'builtin', target: 'toggle_launcher', params: {} },
+              enabled: true,
+              priority: 0,
+              createTime: new Date().toISOString(),
+              raw: {},
+              actionShape: 'nested'
+            }
+            loaded.set(defaultLauncherTrigger.id, defaultLauncherTrigger)
+            order.push({ triggerId: defaultLauncherTrigger.id })
+            seededDefaultLauncher = true
+          }
+        }
+      }
+    }
     this.#document = document
     this.#order = order
-    if (retiredFound || seededDefaultWake) {
+    if (retiredFound || seededDefaultWake || seededDefaultLauncher) {
       try {
         await this.#persist(loaded)
       } catch (error) {
@@ -810,7 +868,7 @@ export class TriggerService {
         (isDoubleModifier(accelerator)
           ? !this.#keyboardAdapter
           : !isValidElectronAccelerator(accelerator) ||
-            getGlobalHotkeyBlacklistReason(accelerator, this.#platform) !== null) ||
+            getGlobalHotkeyBlacklistPlatform(accelerator, this.#platform) !== null) ||
         !hasRuntimeAction(trigger) ||
         !(await this.#isPluginEnabled(trigger.pluginId))
       ) continue
@@ -890,7 +948,7 @@ export class TriggerService {
   #serialize<T>(operation: () => Promise<T>): Promise<T> {
     const current = this.#queue.catch(() => undefined).then(async () => {
       await this.#ready
-      if (this.#stopping) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+      if (this.#stopping) throw new ZToolsError(errorCodes.appStopping, t('trigger.error.appStopping'))
       return operation()
     })
     this.#queue = current
@@ -935,7 +993,7 @@ export class TriggerService {
 
   #reportInvalidRecord(index: number, error: unknown): void {
     const code = error instanceof ZToolsError ? error.code : errorCodes.dataCorrupt
-    const message = error instanceof Error ? error.message : '触发器记录无效'
+    const message = error instanceof Error ? error.message : 'Invalid trigger record'
     console.warn(`忽略损坏的触发器记录: index=${index}, code=${code}, message=${message}`)
     try {
       this.options.events.publishHost('trigger_config_invalid', { index, code, message })
@@ -956,13 +1014,13 @@ export class TriggerService {
 
   async #requirePluginEnabled(pluginId: string): Promise<void> {
     if (!(await this.#isPluginEnabled(pluginId))) {
-      throw new ZToolsError(errorCodes.pluginNotFound, '插件已禁用')
+      throw new ZToolsError(errorCodes.pluginNotFound, t('trigger.error.pluginDisabled'))
     }
   }
 
   #requireTrigger(triggerId: string): StoredTrigger {
     const trigger = this.#triggers.get(triggerId)
-    if (!trigger) throw new ZToolsError(errorCodes.triggerNotFound, '触发器不存在')
+    if (!trigger) throw new ZToolsError(errorCodes.triggerNotFound, t('trigger.error.notFound'))
     return trigger
   }
 
@@ -983,24 +1041,24 @@ export class TriggerService {
     // 1. 插件调用方严格权限收敛：仅允许普通 hotkey 且动作只能打开自己的窗口
     if (caller?.type === 'plugin') {
       if (trigger.type !== 'hotkey') {
-        throw new ZToolsError(errorCodes.permissionDenied, '插件只允许注册普通快捷键触发器')
+        throw new ZToolsError(errorCodes.permissionDenied, t('trigger.error.pluginHotkeyOnly'))
       }
       const pluginAccelerator = acceleratorOf(trigger)
       if (pluginAccelerator && isDoubleModifier(pluginAccelerator)) {
-        throw new ZToolsError(errorCodes.permissionDenied, '插件不允许注册双击修饰键触发器')
+        throw new ZToolsError(errorCodes.permissionDenied, t('trigger.error.pluginNoDoubleModifier'))
       }
       if (
         trigger.action.mode !== 'window' ||
         trigger.action.target.toLowerCase() !== trigger.pluginId.toLowerCase()
       ) {
-        throw new ZToolsError(errorCodes.permissionDenied, '插件只能打开自己的窗口动作')
+        throw new ZToolsError(errorCodes.permissionDenied, t('trigger.error.pluginOwnWindowOnly'))
       }
     }
 
     // 2. 分类型校验支持情况、参数合法性与黑名单
     if (trigger.type === 'hook') {
       if (!this.#mouseAdapter) {
-        throw new ZToolsError(errorCodes.notSupported, '鼠标触发器需要 NativeHost32 输入适配器')
+        throw new ZToolsError(errorCodes.notSupported, t('trigger.error.mouseAdapterRequired'))
       }
       if (
         trigger.config.kind === 'mouse' &&
@@ -1010,39 +1068,43 @@ export class TriggerService {
         throw new ZToolsError(errorCodes.invalidRequest, t('trigger.error.rightButtonLongPressOnly'))
       }
       if (!parseMouseHookConfig(trigger.config)) {
-        throw new ZToolsError(errorCodes.invalidRequest, '鼠标触发器配置无效')
+        throw new ZToolsError(errorCodes.invalidRequest, t('trigger.error.invalidMouseConfig'))
       }
       if (!hasRuntimeAction(trigger)) {
-        throw new ZToolsError(errorCodes.notSupported, '该触发动作当前不受支持')
+        throw new ZToolsError(errorCodes.notSupported, t('trigger.error.unsupportedAction'))
       }
       return
     }
 
     const accelerator = acceleratorOf(trigger)
     if (trigger.type !== 'hotkey') {
-      throw new ZToolsError(errorCodes.notSupported, '当前阶段只支持全局快捷键与鼠标触发器')
+      throw new ZToolsError(errorCodes.notSupported, t('trigger.error.unsupportedTriggerType'))
     }
     if (!accelerator) {
-      throw new ZToolsError(errorCodes.invalidRequest, '快捷键不能为空')
+      throw new ZToolsError(errorCodes.invalidRequest, t('trigger.error.emptyHotkey'))
     }
     if (trigger.config.fullscreenDnd !== undefined && typeof trigger.config.fullscreenDnd !== 'boolean') {
-      throw new ZToolsError(errorCodes.invalidRequest, 'fullscreenDnd 必须是布尔值')
+      throw new ZToolsError(errorCodes.invalidRequest, t('trigger.error.invalidFullscreenDnd'))
     }
     if (isDoubleModifier(accelerator)) {
       if (!this.#keyboardAdapter) {
-        throw new ZToolsError(errorCodes.notSupported, '双击修饰键触发器需要 NativeHost32 输入适配器')
+        throw new ZToolsError(errorCodes.notSupported, t('trigger.error.keyboardAdapterRequired'))
       }
     } else {
       if (!isValidElectronAccelerator(accelerator)) {
-        throw new ZToolsError(errorCodes.invalidRequest, '快捷键 Electron accelerator 格式无效')
+        throw new ZToolsError(errorCodes.invalidRequest, t('trigger.error.invalidAccelerator'))
       }
-      const blacklistReason = getGlobalHotkeyBlacklistReason(accelerator, this.#platform)
-      if (blacklistReason) {
-        throw new ZToolsError(errorCodes.invalidRequest, blacklistReason)
+      const blockedPlatform = getGlobalHotkeyBlacklistPlatform(accelerator, this.#platform)
+      if (blockedPlatform) {
+        const key = accelerator.trim()
+        throw new ZToolsError(
+          errorCodes.invalidRequest,
+          t(blockedPlatform === 'darwin' ? 'trigger.error.blacklistedMac' : 'trigger.error.blacklistedWin', { key })
+        )
       }
     }
     if (!hasRuntimeAction(trigger)) {
-      throw new ZToolsError(errorCodes.notSupported, '该触发动作当前不受支持')
+      throw new ZToolsError(errorCodes.notSupported, t('trigger.error.unsupportedAction'))
     }
   }
 
@@ -1093,14 +1155,14 @@ export class TriggerService {
   #assertPluginAccess(pluginId: string, caller: CallerIdentity): void {
     if (caller.type === 'main') return
     if (!caller.pluginId || caller.pluginId.toLowerCase() !== pluginId.toLowerCase()) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件只能管理自己的触发器')
+      throw new ZToolsError(errorCodes.permissionDenied, t('trigger.error.pluginManageOwnOnly'))
     }
   }
 
   #effectivePluginId(requested: string, caller: CallerIdentity): string {
     if (caller.type === 'main') return requested
     if (!caller.pluginId || (requested !== '' && requested.toLowerCase() !== caller.pluginId.toLowerCase())) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件只能查询自己的触发器')
+      throw new ZToolsError(errorCodes.permissionDenied, t('trigger.error.pluginQueryOwnOnly'))
     }
     return caller.pluginId
   }
@@ -1166,7 +1228,7 @@ export class TriggerService {
       return true
     }
     if (!isValidElectronAccelerator(accelerator)) {
-      throw new ZToolsError(errorCodes.invalidRequest, '快捷键 Electron accelerator 格式无效')
+      throw new ZToolsError(errorCodes.invalidRequest, t('trigger.error.invalidAccelerator'))
     }
     const registered = this.options.shortcuts.register(accelerator, () => this.#fire(triggerId))
     if (registered) this.#registered.set(triggerId, accelerator)
@@ -1401,6 +1463,8 @@ export class TriggerService {
     }
     if (trigger.action.mode === 'builtin' && trigger.action.target === 'toggle_main_window') {
       this.options.toggleMainWindow()
+    } else if (trigger.action.mode === 'builtin' && trigger.action.target === 'toggle_launcher') {
+      this.options.toggleLauncher?.()
     } else if (trigger.action.mode === 'window') {
       try {
         void this.options.openPlugin({
@@ -1418,7 +1482,7 @@ export class TriggerService {
       this.options.events.publishHost('hotkey_action_failed', {
         id: trigger.id,
         target: trigger.action.target,
-        message: error instanceof Error ? error.message.slice(0, 512) : '快捷键动作执行失败'
+        message: error instanceof Error ? error.message.slice(0, 512) : t('trigger.error.actionFailed')
       })
     } catch {
       // Action failures must not break the global shortcut callback.

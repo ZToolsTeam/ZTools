@@ -14,11 +14,11 @@ function validateIconUrl(source: string): URL {
   try {
     url = new URL(source)
   } catch {
-    throw new ZToolsError(errorCodes.invalidRequest, '图标地址无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid icon URL')
   }
   const loopback = url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1'
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) || url.username || url.password) {
-    throw new ZToolsError(errorCodes.permissionDenied, '图标下载只允许 HTTPS 或本机测试地址')
+    throw new ZToolsError(errorCodes.permissionDenied, 'Icon download only allows HTTPS or local test URLs')
   }
   return url
 }
@@ -30,7 +30,7 @@ function iconSuffix(contentType: string): string {
   if (normalized === 'image/svg+xml') return '.svg'
   if (normalized === 'image/webp') return '.webp'
   if (normalized === 'image/x-icon' || normalized === 'image/vnd.microsoft.icon') return '.ico'
-  throw new ZToolsError(errorCodes.notSupported, '图标格式暂不支持')
+  throw new ZToolsError(errorCodes.notSupported, 'Icon format is not supported')
 }
 
 export class PluginIconService {
@@ -71,19 +71,19 @@ export class PluginIconService {
     try {
       response = await this.fetchImpl(url, { signal: AbortSignal.timeout(ICON_DOWNLOAD_TIMEOUT_MS) })
     } catch {
-      throw new ZToolsError(errorCodes.networkError, '下载插件图标失败')
+      throw new ZToolsError(errorCodes.networkError, 'Failed to download plugin icon')
     }
-    if (!response.ok) throw new ZToolsError(errorCodes.networkError, '下载插件图标失败')
+    if (!response.ok) throw new ZToolsError(errorCodes.networkError, 'Failed to download plugin icon')
     const contentType = response.headers.get('content-type') ?? ''
     const suffix = iconSuffix(contentType)
     let bytes: Buffer
     try {
       bytes = Buffer.from(await response.arrayBuffer())
     } catch {
-      throw new ZToolsError(errorCodes.networkError, '下载插件图标失败')
+      throw new ZToolsError(errorCodes.networkError, 'Failed to download plugin icon')
     }
     if (bytes.length === 0 || bytes.length > MAX_ICON_BYTES) {
-      throw new ZToolsError(errorCodes.fileTooLarge, '插件图标超过大小限制')
+      throw new ZToolsError(errorCodes.fileTooLarge, 'Plugin icon exceeds size limit')
     }
     return this.manifests.withPluginDirectory(pluginId, async (manifest, pluginRoot) => {
       const target = path.join(pluginRoot, `icon${suffix}`)

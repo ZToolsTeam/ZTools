@@ -6,6 +6,7 @@ import {
   getHotkeyRuleDescription,
   getHotkeyUnsupportedText,
   getShellReserveWarning,
+  interpretRecorderKeydown,
   isSafeShortcutKeysCombo,
   parseSupportedHotkeyEvent,
   resetHotkeyRecorderState
@@ -527,6 +528,26 @@ describe('notifyHotkeyRecorderActive 真实 Events 与主进程 IPC 契约', () 
       expect(formatHotkeyForPlatform('DoubleCtrl', 'windows', true)).toBe('Double Ctrl')
       expect(formatHotkeyForPlatform('DoubleCtrl', 'macos', false)).toBe('DoubleCtrl (Unsupported by host)')
       expect(isSafeShortcutKeysCombo('DoubleCtrl (Unsupported by host)', 'windows', true)).toBe(false)
+      // 过滤不含中文也不含括号的纯英文提示词与状态文案，防止被误渲染成快捷键帽
+      expect(isSafeShortcutKeysCombo('Press shortcut', 'windows', true)).toBe(false)
+      expect(isSafeShortcutKeysCombo('Press shortcut...', 'windows', true)).toBe(false)
+      expect(isSafeShortcutKeysCombo(getHotkeyUnsupportedText('windows', false), 'windows', true)).toBe(false)
+      expect(isSafeShortcutKeysCombo('Shortcut Ctrl+C is reserved by Windows', 'windows', true)).toBe(false)
+      expect(isSafeShortcutKeysCombo('Ctrl+...', 'windows', true)).toBe(false)
+      expect(isSafeShortcutKeysCombo('Ctrl+Shift+Z', 'windows', false)).toBe(true)
+      expect(isSafeShortcutKeysCombo('⌘+⇧+Z', 'macos', false)).toBe(true)
+
+      // interpretRecorderKeydown 仅对纯修饰键前缀（如 Ctrl+... / ⌘+...）标记 isKeys=true，英文提示不误标
+      expect(
+        interpretRecorderKeydown(createEvent({ key: 'Control', ctrlKey: true }), { platform: 'windows' })
+      ).toMatchObject({ action: 'pending', text: 'Ctrl+...', isKeys: true })
+      expect(
+        interpretRecorderKeydown(createEvent({ key: 'Control', ctrlKey: false }), { platform: 'windows' })
+      ).toMatchObject({ action: 'pending', isKeys: false })
+      expect(
+        interpretRecorderKeydown(createEvent({ key: '1', ctrlKey: true }), { platform: 'windows' })
+      ).toMatchObject({ action: 'invalid', isKeys: false })
+
       expect(getShellReserveWarning('Ctrl+K')).toContain('built-in ZTools shortcut')
 
       expect(getPluginPlatformLabel({ platforms: ['windows', 'macos'] })).toBe('Cross-platform')

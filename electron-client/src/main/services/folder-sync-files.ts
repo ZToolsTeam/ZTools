@@ -9,11 +9,11 @@ export interface SyncFile { size: number; modified: number; hash: string }
 export interface SyncTree { files: Map<string, SyncFile>; directories: Set<string> }
 export interface SyncRoot { object: AnchoredPathObject; path: string }
 export const segmentsOf = (relative: string) => relative.split('/')
-export function changed(): Error { return new Error('文件或目录已变化，请重新比对；本次操作已停止') }
+export function changed(): Error { return new Error('File or directory changed; compare again, operation aborted') }
 
 export async function fingerprint(adapter: PathAccessAdapter, object: AnchoredPathObject, signal: AbortSignal): Promise<SyncFile> {
   const before = await adapter.describe(object, signal)
-  if (before.isDirectory || before.size > MAX_BYTES) throw new Error('当前同步仅支持不超过 2 GiB 的普通文件')
+  if (before.isDirectory || before.size > MAX_BYTES) throw new Error('Folder sync only supports regular files up to 2 GiB')
   const hash = createHash('sha256')
   for (let offset = 0; offset < before.size;) {
     signal.throwIfAborted()
@@ -37,12 +37,12 @@ export async function scanTree(adapter: PathAccessAdapter, root: SyncRoot, ignor
   const tree: SyncTree = { files: new Map(), directories: new Set() }
   let count = 0
   const walk = async (segments: string[]) => {
-    if (segments.length > 48) throw new Error('目录层级超过 48 层，请缩小同步范围')
+    if (segments.length > 48) throw new Error('Directory nesting exceeds 48 levels; narrow the sync scope')
     const entries = await adapter.list(root.object, segments, signal, true)
     for (const entry of entries) {
-      if (++count > 5000) throw new Error('目录条目超过 5000 项，请缩小同步范围')
+      if (++count > 5000) throw new Error('Directory entries exceed 5000 items; narrow the sync scope')
       if (!segments.length && entry.name === SYNC_BACKUPS) {
-        if (!entry.isDirectory) throw new Error('备份目录名称被文件占用')
+        if (!entry.isDirectory) throw new Error('Backup directory name is occupied by a file')
         continue
       }
       if (ignoreJunk && ['node_modules', '.git', '.DS_Store', 'Thumbs.db'].includes(entry.name)) continue
@@ -65,12 +65,12 @@ export function buildSyncDiffs(source: SyncTree, target: SyncTree, mode: SyncMod
   const aliases = new Map<string, string>()
   for (const name of [...source.files.keys(), ...target.files.keys(), ...source.directories, ...target.directories]) {
     const key = name.normalize('NFC').toLowerCase(), previous = aliases.get(key)
-    if (previous && previous !== name) throw new Error(`存在大小写或 Unicode 名称冲突，请先处理：${previous} / ${name}`)
+    if (previous && previous !== name) throw new Error(`Case or Unicode normalization name conflict detected; resolve first: ${previous} / ${name}`)
     aliases.set(key, name)
   }
   const result: SyncDiff[] = []
   for (const name of [...new Set([...source.files.keys(), ...target.files.keys()])].sort()) {
-    if (source.directories.has(name) || target.directories.has(name)) throw new Error(`同一路径一边是文件、一边是目录：${name}`)
+    if (source.directories.has(name) || target.directories.has(name)) throw new Error(`Path is a file on one side and a directory on the other: ${name}`)
     const src = source.files.get(name), dst = target.files.get(name)
     if (src && dst && src.hash === dst.hash) continue
     let direction: SyncDiff['direction'] = 'src-to-dst', diffType: SyncDiff['diffType'] = dst ? 'modified' : 'added'
@@ -82,9 +82,9 @@ export function buildSyncDiffs(source: SyncTree, target: SyncTree, mode: SyncMod
       if (Math.abs(src.modified - dst.modified) <= 2000) { direction = 'conflict'; diffType = 'conflict' }
       else if (dst.modified > src.modified) direction = 'dst-to-src'
     }
-    const badge = direction === 'delete-dst' ? '移入废纸篓' : direction === 'conflict' ? '需手动处理' : direction === 'dst-to-src' ? '目标 → 源' : '源 → 目标'
+    const badge = direction === 'delete-dst' ? 'Move to Trash' : direction === 'conflict' ? 'Manual Review' : direction === 'dst-to-src' ? 'Target -> Source' : 'Source -> Target'
     result.push({ relPath: name, direction, diffType, actionBadge: badge,
-      reasonText: direction === 'conflict' ? '内容不同但修改时间接近；不会自动选择覆盖方向' : direction === 'delete-dst' ? '源端没有此文件；先备份，再移入废纸篓' : src && dst ? '内容不同；覆盖前保留并校验原文件备份' : '新增文件；不会覆盖执行期间出现的同名文件',
+      reasonText: direction === 'conflict' ? 'Content differs with close modification times; overwrite direction is not chosen automatically' : direction === 'delete-dst' ? 'Missing on source; back up first, then move to Trash' : src && dst ? 'Content differs; preserve and verify original backup before overwriting' : 'New file; will not overwrite an existing file created during execution',
       sizeBytes: (direction === 'dst-to-src' || !src ? dst : src)!.size,
       sourceFullPath: src ? path.join(roots[0].path, name) : '', targetFullPath: dst ? path.join(roots[1].path, name) : '' })
   }
@@ -116,7 +116,7 @@ export async function verifiedCopy(adapter: PathAccessAdapter, source: SyncRoot,
       await adapter.streamSave(output, expected.size, chunks(), false, signal)
     } finally { await adapter.release(output) }
     const copied = await readFingerprint(adapter, destination, to, signal)
-    if (copied.hash !== expected.hash || copied.size !== expected.size) throw new Error('副本校验失败；未开始覆盖或移除原文件')
+    if (copied.hash !== expected.hash || copied.size !== expected.size) throw new Error('Copy verification failed; original file was neither overwritten nor removed')
   } finally { await adapter.release(input) }
 }
 

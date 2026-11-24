@@ -69,20 +69,20 @@ export const WINDOWS_BATTERY_STATUS_SCRIPT = [
 
 function byteField(row: Record<string, unknown>, key: string): number {
   const value = row[key]
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 255) throw new Error(`电源状态字段 ${key} 无效`)
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 255) throw new Error(`Invalid battery status field: ${key}`)
   return value
 }
 
 /** 解析 WINDOWS_BATTERY_STATUS_SCRIPT 的输出；格式不对直接抛错，不猜默认值 */
 export function parseWindowsBatteryStatusOutput(stdout: string): SystemBatteryStatus {
   let value: unknown
-  try { value = JSON.parse(stdout.replace(/^\uFEFF/, '').trim()) } catch { throw new Error('电源状态输出不是有效 JSON') }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('电源状态输出格式无效')
+  try { value = JSON.parse(stdout.replace(/^\uFEFF/, '').trim()) } catch { throw new Error('Battery status output is not valid JSON') }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid battery status output format')
   const row = value as Record<string, unknown>
   const acLine = byteField(row, 'acLineStatus'), flag = byteField(row, 'batteryFlag'), rawPercent = byteField(row, 'percent')
   const lifeTime = row.lifeTime, count = row.batteryCount
-  if (typeof lifeTime !== 'number' || !Number.isSafeInteger(lifeTime) || lifeTime < -1) throw new Error('电池剩余时间字段无效')
-  if (typeof count !== 'number' || !Number.isInteger(count) || count < -1) throw new Error('电池数量字段无效')
+  if (typeof lifeTime !== 'number' || !Number.isSafeInteger(lifeTime) || lifeTime < -1) throw new Error('Invalid battery lifeTime field')
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < -1) throw new Error('Invalid battery count field')
   // BatteryFlag：128 = 没有系统电池，255 = 未知；BatteryLifePercent：255 = 未知
   const flagKnown = flag !== 255, flagNoBattery = flagKnown && (flag & 128) !== 0
   const percent = rawPercent <= 100 ? rawPercent : UNKNOWN_BATTERY_PERCENT
@@ -108,7 +108,7 @@ export function parseMacBatteryStatusOutput(stdout: string): SystemBatteryStatus
   const powerSource: SystemPowerSource = !source ? 'unknown' : /AC Power/i.test(source) ? 'ac' : /Battery Power/i.test(source) ? 'battery' : 'unknown'
   const batteryLine = text.split(/\r?\n/).find(line => /InternalBattery/i.test(line))
   if (!batteryLine) {
-    if (!source) throw new Error('pmset 输出无法识别')
+    if (!source) throw new Error('Unrecognized pmset output')
     return { percent: UNKNOWN_BATTERY_PERCENT, isCharging: powerSource === 'ac', timeRemaining: -1, batteryState: 'absent', powerSource }
   }
   const percentMatch = /(\d{1,3})%/.exec(batteryLine)
@@ -123,10 +123,10 @@ export function parseMacBatteryStatusOutput(stdout: string): SystemBatteryStatus
 /** 把子进程错误转成用户看得懂的原因（超时 / 退出码 / 无法启动） */
 export function describeBatteryCommandError(error: unknown): string {
   const err = error as { killed?: boolean; signal?: string | null; code?: unknown; stderr?: unknown; message?: unknown }
-  if (err?.killed || err?.code === 'ETIMEDOUT') return '读取超时'
+  if (err?.killed || err?.code === 'ETIMEDOUT') return 'read timed out'
   const stderr = typeof err?.stderr === 'string' ? err.stderr.trim().split(/\r?\n/)[0]?.slice(0, 200) : ''
-  if (typeof err?.code === 'number') return `命令退出码 ${err.code}${stderr ? `：${stderr}` : ''}`
-  if (typeof err?.code === 'string') return `无法启动命令（${err.code}）`
+  if (typeof err?.code === 'number') return `command exited with code ${err.code}${stderr ? `: ${stderr}` : ''}`
+  if (typeof err?.code === 'string') return `failed to launch command (${err.code})`
   return typeof err?.message === 'string' && err.message ? err.message.slice(0, 200) : String(error)
 }
 
@@ -141,12 +141,12 @@ const defaultRunner: BatteryCommandRunner = (file, args) => new Promise((resolve
 export async function readSystemBatteryStatus(platform: NodeJS.Platform = process.platform, run: BatteryCommandRunner = defaultRunner): Promise<SystemBatteryStatus> {
   if (platform === 'darwin') {
     let stdout: string
-    try { stdout = await run('/usr/bin/pmset', ['-g', 'batt']) } catch (error) { return unknownStatus(`电源状态${describeBatteryCommandError(error)}`) }
+    try { stdout = await run('/usr/bin/pmset', ['-g', 'batt']) } catch (error) { return unknownStatus(`Battery status: ${describeBatteryCommandError(error)}`) }
     try { return parseMacBatteryStatusOutput(stdout) } catch (error) { return unknownStatus(error instanceof Error ? error.message : String(error)) }
   }
-  if (platform !== 'win32') return unknownStatus('当前平台不支持读取电源状态')
+  if (platform !== 'win32') return unknownStatus('Battery status is not supported on this platform')
   const executable = path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   let stdout: string
-  try { stdout = await run(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', WINDOWS_BATTERY_STATUS_SCRIPT]) } catch (error) { return unknownStatus(`电源状态${describeBatteryCommandError(error)}`) }
+  try { stdout = await run(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', WINDOWS_BATTERY_STATUS_SCRIPT]) } catch (error) { return unknownStatus(`Battery status: ${describeBatteryCommandError(error)}`) }
   try { return parseWindowsBatteryStatusOutput(stdout) } catch (error) { return unknownStatus(error instanceof Error ? error.message : String(error)) }
 }

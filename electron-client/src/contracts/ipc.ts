@@ -76,29 +76,29 @@ function serializedSize(value: unknown): number {
   try {
     return Buffer.byteLength(JSON.stringify(value), 'utf8')
   } catch {
-    throw new ZToolsError(errorCodes.invalidRequest, 'params 必须可序列化')
+    throw new ZToolsError(errorCodes.invalidRequest, 'params must be serializable')
   }
 }
 
 export function parseRequest(value: unknown): ZToolsRequest {
-  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, '请求必须是对象')
+  if (!isRecord(value)) throw new ZToolsError(errorCodes.invalidRequest, 'Request must be an object')
   const allowedKeys = new Set(['messageId', 'method', 'params', 'timeoutMs', 'pluginSession'])
   if (Object.keys(value).some((key) => !allowedKeys.has(key))) {
-    throw new ZToolsError(errorCodes.invalidRequest, '请求包含未知字段')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Request contains unknown fields')
   }
   if (typeof value.messageId !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(value.messageId)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'messageId 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid messageId')
   }
   if (typeof value.method !== 'string' || !/^[a-z][a-z0-9_]{0,127}$/.test(value.method)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'method 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid method')
   }
   if (!Object.hasOwn(value, 'params')) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'params 字段缺失')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Missing params field')
   }
   const pluginSession = value.pluginSession
   if (pluginSession !== undefined &&
       (typeof pluginSession !== 'string' || !PLUGIN_SESSION_TOKEN_PATTERN.test(pluginSession))) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'pluginSession 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid pluginSession')
   }
   // 系统文件对话框等待用户选择或取消，不能被普通 IPC 的 10 秒默认超时截断。
   // 调用方显式设置的时限仍按原规则校验并保留。
@@ -117,16 +117,16 @@ export function parseRequest(value: unknown): ZToolsRequest {
     timeoutMs !== INFINITE_TIMEOUT &&
     (typeof timeoutMs !== 'number' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > maxTimeoutMs)
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'timeoutMs 超出范围')
+    throw new ZToolsError(errorCodes.invalidRequest, 'timeoutMs is out of range')
   }
   if (timeoutMs === INFINITE_TIMEOUT && !infiniteTimeoutMethods.has(value.method)) {
-    throw new ZToolsError(errorCodes.invalidRequest, '该方法不允许无限等待')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Infinite timeout is not allowed for this method')
   }
   const requestLimit = largeRequestMethods.has(value.method)
     ? MAX_FILE_REQUEST_BYTES
     : clipboardTextMethods.has(value.method) ? MAX_CLIPBOARD_TEXT_REQUEST_BYTES : MAX_REQUEST_BYTES
   if (serializedSize(value.params) > requestLimit) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'params 超过大小上限')
+    throw new ZToolsError(errorCodes.invalidRequest, 'params exceeds maximum size limit')
   }
   return {
     messageId: value.messageId,
@@ -149,7 +149,7 @@ export const IPC_EXTENSION_CALLBACK_CHANNEL = 'extension:callback' as const
 
 export interface ExtensionHostRequest {
   id: string
-  action: 'initialize' | 'nativeCallback' | 'terminate' | 'ping'
+  action: 'initialize' | 'nativeCallback' | 'updateLocale' | 'terminate' | 'ping'
   payload: Record<string, unknown>
 }
 

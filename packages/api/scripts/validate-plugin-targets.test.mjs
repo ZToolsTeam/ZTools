@@ -188,7 +188,7 @@ test('legacy Windows manifest remains valid and does not imply macOS support', (
 
   const result = runValidator(pluginDir)
   assert.equal(result.status, 0, result.stdout + result.stderr)
-  assert.match(result.stderr, /不推断 macOS 支持/)
+  assert.match(result.stderr, /macOS support is not implied/)
 })
 
 test('target-only validation ignores unrelated entry HTML SDK rules but still rejects invalid targets', (t) => {
@@ -201,7 +201,7 @@ test('target-only validation ignores unrelated entry HTML SDK rules but still re
 
   const fullResult = runValidator(pluginDir)
   assert.equal(fullResult.status, 1)
-  assert.match(fullResult.stderr, /入口 HTML 必须引入/)
+  assert.match(fullResult.stderr, /Entry HTML must include/)
 
   const targetResult = runValidator(pluginDir, { targetsOnly: true })
   assert.equal(targetResult.status, 0, targetResult.stdout + targetResult.stderr)
@@ -212,7 +212,7 @@ test('target-only validation ignores unrelated entry HTML SDK rules but still re
   })
   const invalidResult = runValidator(invalidDir, { targetsOnly: true })
   assert.equal(invalidResult.status, 1)
-  assert.match(invalidResult.stderr, /unexpected 不是支持的目标字段/)
+  assert.match(invalidResult.stderr, /unexpected is not a supported target field/)
 })
 
 test('unknown root fields are rejected only for explicit target manifests', (t) => {
@@ -227,7 +227,7 @@ test('unknown root fields are rejected only for explicit target manifests', (t) 
   })
   const targetResult = runValidator(targetDir, { targetsOnly: true })
   assert.equal(targetResult.status, 1)
-  assert.match(targetResult.stderr, /plugin\.json\.minSdkContractVresion 不是支持的顶层字段/)
+  assert.match(targetResult.stderr, /plugin\.json\.minSdkContractVresion is not a supported root field/)
 })
 
 test('explicit Windows and macOS targets validate as separate declarations', (t) => {
@@ -253,7 +253,7 @@ test('rejects a 32-bit Mac target even when the architecture name is otherwise k
 
   const result = runValidator(pluginDir, { targetsOnly: true })
   assert.equal(result.status, 1)
-  assert.match(result.stderr, /targets\[0\]\.arch 值不受支持/)
+  assert.match(result.stderr, /targets\[0\]\.arch has unsupported value/)
 })
 
 test('rejects the shared macOS ia32 target fixture', (t) => {
@@ -262,14 +262,14 @@ test('rejects the shared macOS ia32 target fixture', (t) => {
   const result = runValidator(pluginDir, { targetsOnly: true })
 
   assert.equal(result.status, 1)
-  assert.match(result.stderr, /targets\[0\]\.arch 值不受支持/)
+  assert.match(result.stderr, /targets\[0\]\.arch has unsupported value/)
 })
 
 test('targets must be non-empty and each declaration must include id, platform, runtime, and arch', (t) => {
   const emptyTargetsDir = withPlugin(t, { targets: [], nativeComponents: [] })
   const emptyTargetsResult = runValidator(emptyTargetsDir)
   assert.equal(emptyTargetsResult.status, 1)
-  assert.match(emptyTargetsResult.stderr, /targets 至少要声明一个目标/)
+  assert.match(emptyTargetsResult.stderr, /targets must declare at least one target/)
 
   const missingFieldsDir = withPlugin(t, {
     targets: [{ platform: 'macos', arch: 'arm64' }],
@@ -305,7 +305,7 @@ test('plugin validator rejects the shared wrong-type minimum contract version fi
   const result = runValidator(pluginDir)
 
   assert.equal(result.status, 1)
-  assert.match(result.stderr, /targets\[0\]\.minSdkContractVersion 类型不正确/)
+  assert.match(result.stderr, /targets\[0\]\.minSdkContractVersion has invalid type/)
 })
 
 test('plugin validator accepts a valid v2 minimum declaration while v1 runtime negotiation remains incompatible', (t) => {
@@ -327,8 +327,8 @@ test('exact duplicates and overlapping architecture selectors are rejected as am
   })
   const duplicateResult = runValidator(duplicateDir)
   assert.equal(duplicateResult.status, 1)
-  assert.match(duplicateResult.stderr, /匹配范围重叠/)
-  assert.match(duplicateResult.stderr, /targets\.id 必须唯一/)
+  assert.match(duplicateResult.stderr, /overlap/)
+  assert.match(duplicateResult.stderr, /targets\.id must be unique/)
 
   const overlapDir = withPlugin(t, {
     targets: [
@@ -339,7 +339,7 @@ test('exact duplicates and overlapping architecture selectors are rejected as am
   })
   const overlapResult = runValidator(overlapDir)
   assert.equal(overlapResult.status, 1)
-  assert.match(overlapResult.stderr, /匹配范围重叠/)
+  assert.match(overlapResult.stderr, /overlap/)
 })
 
 test('distinct ABI declarations disambiguate otherwise matching targets', (t) => {
@@ -359,12 +359,12 @@ test('explicit JavaScript-only targets require an explicit empty component list'
   const missingComponentsDir = withPlugin(t, { targets: [windowsElectron] })
   const missingComponentsResult = runValidator(missingComponentsDir)
   assert.equal(missingComponentsResult.status, 1)
-  assert.match(missingComponentsResult.stderr, /nativeComponents 必须是数组/)
+  assert.match(missingComponentsResult.stderr, /nativeComponents must be an array/)
 
   const unboundComponentsDir = withPlugin(t, { nativeComponents: [] })
   const unboundComponentsResult = runValidator(unboundComponentsDir)
   assert.equal(unboundComponentsResult.status, 1)
-  assert.match(unboundComponentsResult.stderr, /nativeComponents 必须通过显式 targets/)
+  assert.match(unboundComponentsResult.stderr, /nativeComponents requires explicit targets/)
 })
 
 test('native components bind by unique targetId and require exact architecture plus an independent ABI', (t) => {
@@ -385,15 +385,15 @@ test('native component schema rejects missing fields, duplicate IDs, dangling ta
   const cases = [
     {
       components: [{ ...windowsNativeComponent, kind: undefined }],
-      expected: /nativeComponents\[0\]\.kind 为必填字段/
+      expected: /nativeComponents\[0\]\.kind is required/
     },
     {
       components: [windowsNativeComponent, { ...windowsNativeComponent, entry: 'native/win32/other' }],
-      expected: /nativeComponents\[1\]\.id 重复/
+      expected: /nativeComponents\[1\]\.id is duplicated/
     },
     {
       components: [{ ...windowsNativeComponent, targetId: 'missing-target' }],
-      expected: /targetId 必须唯一引用一个 targets 项/
+      expected: /targetId must uniquely reference one targets entry/
     },
     {
       components: [{ ...windowsNativeComponent, abi: 'unversioned-abi' }],
@@ -416,7 +416,7 @@ test('native component architecture matches the target except for the explicit N
   })
   const mismatchResult = runValidator(mismatchDir)
   assert.equal(mismatchResult.status, 1)
-  assert.match(mismatchResult.stderr, /arch 必须与 targets\[0\]\.arch 精确相等/)
+  assert.match(mismatchResult.stderr, /arch must exactly equal targets\[0\]\.arch/)
 
   const universalDir = withPlugin(t, {
     targets: [macosElectronUniversal],
@@ -428,7 +428,7 @@ test('native component architecture matches the target except for the explicit N
   })
   const universalResult = runValidator(universalDir)
   assert.equal(universalResult.status, 1)
-  assert.match(universalResult.stderr, /arch 必须与 targets\[0\]\.arch 精确相等/)
+  assert.match(universalResult.stderr, /arch must exactly equal targets\[0\]\.arch/)
 })
 
 test('accepts an x64 target with an ia32 NativeHost32 DLL and explicitly bound ia32 PE dependency', (t) => {
@@ -439,7 +439,7 @@ test('accepts an x64 target with an ia32 NativeHost32 DLL and explicitly bound i
 
   const result = runValidator(pluginDir)
   assert.equal(result.status, 0, result.stdout + result.stderr)
-  assert.match(result.stderr, /尚未生成/)
+  assert.match(result.stderr, /has not been built yet/)
 })
 
 const payloadHash = 'a'.repeat(64)
@@ -487,17 +487,17 @@ test('accepts NativeHost payload PE architecture independent of its x64 target a
 
 test('rejects invalid payload owner, missing owner or bound dependency hashes, including empty payload arrays', t => {
   const cases = [
-    { host: { ...payloadHost, sha256: undefined }, expected: /sha256 在声明 payloadFiles 时必填/ },
-    { host: { ...payloadHost, sha256: payloadHash.toUpperCase() }, expected: /sha256 必须是64位小写/ },
-    { host: { ...payloadHost, payloadFiles: [], sha256: undefined }, expected: /声明 payloadFiles 时必填/ },
-    { host: { ...payloadHost, payloadFiles: null }, expected: /payloadFiles 必须是数组/ },
-    { host: { ...payloadHost, kind: 'worker' }, expected: /payloadFiles 仅适用于/ },
-    { host: { ...payloadHost, kind: 'shared-library' }, expected: /payloadFiles 仅适用于/ },
-    { host: { ...payloadHost, abi: 'custom-host/v1' }, expected: /payloadFiles 仅适用于/ },
-    { host: { ...payloadHost, arch: 'x64' }, expected: /payloadFiles 仅适用于/ },
-    { host: { ...payloadHost, protocolVersion: 2 }, expected: /payloadFiles 仅适用于/ },
-    { host: payloadHost, dependency: windowsPeDependencyComponent, expected: /绑定含 payloadFiles 的 Host 时必填/ },
-    { host: { ...payloadHost, targetId: macosElectronUniversal.id }, target: macosElectronUniversal, expected: /payloadFiles 仅适用于/ }
+    { host: { ...payloadHost, sha256: undefined }, expected: /sha256 is required when payloadFiles is declared/ },
+    { host: { ...payloadHost, sha256: payloadHash.toUpperCase() }, expected: /sha256 must be a 64-character lowercase/ },
+    { host: { ...payloadHost, payloadFiles: [], sha256: undefined }, expected: /required when payloadFiles is declared/ },
+    { host: { ...payloadHost, payloadFiles: null }, expected: /payloadFiles must be an array/ },
+    { host: { ...payloadHost, kind: 'worker' }, expected: /payloadFiles is only supported for/ },
+    { host: { ...payloadHost, kind: 'shared-library' }, expected: /payloadFiles is only supported for/ },
+    { host: { ...payloadHost, abi: 'custom-host/v1' }, expected: /payloadFiles is only supported for/ },
+    { host: { ...payloadHost, arch: 'x64' }, expected: /payloadFiles is only supported for/ },
+    { host: { ...payloadHost, protocolVersion: 2 }, expected: /payloadFiles is only supported for/ },
+    { host: payloadHost, dependency: windowsPeDependencyComponent, expected: /required when bound to a Host component declaring payloadFiles/ },
+    { host: { ...payloadHost, targetId: macosElectronUniversal.id }, target: macosElectronUniversal, expected: /payloadFiles is only supported for/ }
   ]
   for (const { host, dependency, target, expected } of cases) {
     const pluginDir = withPlugin(t, {
@@ -556,7 +556,7 @@ test('payload and component paths are unique per target and shared target inputs
     })
     const result = runValidator(pluginDir)
     assert.equal(result.status, 1)
-    assert.match(result.stderr, /同一 target.*重复|跨 target 复用/)
+    assert.match(result.stderr, /duplicates a native file path within the same target|reused across targets/)
   }
   const matchingDir = withPlugin(t, {
     targets: [windowsElectronX64, windowsElectron], nativeComponents: [payloadHost, otherHost]
@@ -569,27 +569,27 @@ test('rejects unbound, misbound, or falsely described x64 NativeHost32 component
   const cases = [
     {
       components: [{ ...nativeHost32DllComponent, abi: 'unknown-dll/v1' }],
-      expected: /arch 必须与 targets\[0\]\.arch 精确相等/
+      expected: /arch must exactly equal targets\[0\]\.arch/
     },
     {
       components: [{ ...nativeHost32DllComponent, arch: 'x64' }],
-      expected: /真实 ia32 架构/
+      expected: /concrete ia32 architecture/
     },
     {
       components: [{ ...nativeHost32DllComponent, protocolVersion: 2 }],
-      expected: /protocolVersion 使用 ztools-native-host\/v1 时必须显式等于 1/
+      expected: /protocolVersion must explicitly equal 1 when using ztools-native-host\/v1/
     },
     {
       components: [{ ...nativeHost32DllComponent, protocolVersion: undefined }],
-      expected: /protocolVersion 使用 ztools-native-host\/v1 时必须显式等于 1/
+      expected: /protocolVersion must explicitly equal 1 when using ztools-native-host\/v1/
     },
     {
       components: [{ ...nativeHost32DllComponent, kind: 'shared-library' }],
-      expected: /仅支持 Windows Electron kind=dll/
+      expected: /only supported for Windows Electron kind=dll/
     },
     {
       components: [{ ...nativeHost32DllComponent, kind: 'worker', entry: 'native/worker.exe' }],
-      expected: /仅支持 Windows Electron kind=dll/
+      expected: /only supported for Windows Electron kind=dll/
     },
     {
       components: [{
@@ -597,7 +597,7 @@ test('rejects unbound, misbound, or falsely described x64 NativeHost32 component
         hostComponentId: undefined,
         abi: 'unknown-pe/v1'
       }],
-      expected: /arch 必须与 targets\[0\]\.arch 精确相等/
+      expected: /arch must exactly equal targets\[0\]\.arch/
     },
     {
       components: [{
@@ -606,19 +606,19 @@ test('rejects unbound, misbound, or falsely described x64 NativeHost32 component
         kind: 'worker',
         entry: 'native/worker.exe'
       }],
-      expected: /仅支持 Windows Electron kind=shared-library/
+      expected: /only supported for Windows Electron kind=shared-library/
     },
     {
       components: [{ ...windowsPeDependencyComponent, hostComponentId: undefined }, nativeHost32DllComponent],
-      expected: /arch 必须与 targets\[0\]\.arch 精确相等/
+      expected: /arch must exactly equal targets\[0\]\.arch/
     },
     {
       components: [{ ...windowsPeDependencyComponent, hostComponentId: 'missing-host' }, nativeHost32DllComponent],
-      expected: /hostComponentId 引用了未知组件/
+      expected: /hostComponentId references unknown component/
     },
     {
       components: [{ ...windowsPeDependencyComponent, entry: 'lib/MediaService.node' }, nativeHost32DllComponent],
-      expected: /使用 windows-pe\/v1 时必须是 \.dll/
+      expected: /must end with \.dll when using windows-pe\/v1/
     },
     {
       components: [
@@ -626,7 +626,7 @@ test('rejects unbound, misbound, or falsely described x64 NativeHost32 component
         { ...windowsPeDependencyComponent, id: 'media-chain', hostComponentId: nativeHost32DllComponent.id },
         nativeHost32DllComponent
       ],
-      expected: /hostComponentId 必须引用 ia32 ztools-native-host\/v1 DLL/
+      expected: /hostComponentId must reference an ia32 ztools-native-host\/v1 DLL/
     }
   ]
 
@@ -649,7 +649,7 @@ test('rejects unbound, misbound, or falsely described x64 NativeHost32 component
   })
   const wrongTargetResult = runValidator(wrongTargetPlugin)
   assert.equal(wrongTargetResult.status, 1)
-  assert.match(wrongTargetResult.stderr, /hostComponentId 必须引用同一 target 的 DLL/)
+  assert.match(wrongTargetResult.stderr, /hostComponentId must reference a DLL bound to the same target/)
 })
 
 test('native component paths use the same traversal and realpath checks', (t) => {
@@ -659,7 +659,7 @@ test('native component paths use the same traversal and realpath checks', (t) =>
   })
   const traversalResult = runValidator(traversalDir)
   assert.equal(traversalResult.status, 1)
-  assert.match(traversalResult.stderr, /nativeComponents\[0\]\.entry 必须是插件目录内的安全相对路径/)
+  assert.match(traversalResult.stderr, /nativeComponents\[0\]\.entry must be a safe relative path within the plugin directory/)
 
   const anyArchDir = withPlugin(t, {
     targets: [{ ...windowsElectron, arch: 'any' }],
@@ -667,7 +667,7 @@ test('native component paths use the same traversal and realpath checks', (t) =>
   })
   const anyArchResult = runValidator(anyArchDir)
   assert.equal(anyArchResult.status, 1)
-  assert.match(anyArchResult.stderr, /原生组件必须声明实际架构/)
+  assert.match(anyArchResult.stderr, /native components must declare a concrete architecture/)
 })
 
 test('legacy Windows-only fields cannot be combined with an explicit macOS target', (t) => {
@@ -685,7 +685,7 @@ test('legacy Windows-only fields cannot be combined with an explicit macOS targe
 
   const result = runValidator(pluginDir)
   assert.equal(result.status, 1)
-  assert.match(result.stderr, /仅适用于 Windows/)
+  assert.match(result.stderr, /Windows-only/)
 })
 
 test('explicit dllloader requires a matching Windows DLL component', (t) => {
@@ -700,7 +700,7 @@ test('explicit dllloader requires a matching Windows DLL component', (t) => {
   })
   const mismatchedResult = runValidator(mismatchedDir)
   assert.equal(mismatchedResult.status, 1)
-  assert.match(mismatchedResult.stderr, /entry 与 dllloader 完全一致/)
+  assert.match(mismatchedResult.stderr, /entry matches dllloader exactly/)
 
   const matchingDir = withPlugin(t, {
     dllloader: 'lib/Legacy.dll',
@@ -722,7 +722,7 @@ test('requireAdmin needs a Windows DLL component, and DLL components cannot targ
   })
   const missingDllResult = runValidator(missingDllDir)
   assert.equal(missingDllResult.status, 1)
-  assert.match(missingDllResult.stderr, /requireAdmin=true 时必须声明绑定到 Windows target 的 kind=dll 组件/)
+  assert.match(missingDllResult.stderr, /requireAdmin=true requires a kind=dll component bound to a Windows target/)
 
   const macDllDir = withPlugin(t, {
     targets: [macosElectronUniversal],
@@ -738,7 +738,7 @@ test('requireAdmin needs a Windows DLL component, and DLL components cannot targ
   })
   const macDllResult = runValidator(macDllDir)
   assert.equal(macDllResult.status, 1)
-  assert.match(macDllResult.stderr, /kind=dll 只能绑定 Windows target/)
+  assert.match(macDllResult.stderr, /kind=dll can only bind to a Windows target/)
 })
 
 test('legacy Delphi runtime is rejected for macOS', (t) => {
@@ -762,13 +762,13 @@ test('absolute, traversing, drive-qualified, and symlink-escaping plugin paths a
     const maliciousPathDir = withPlugin(t, overrides)
     const maliciousPathResult = runValidator(maliciousPathDir)
     assert.equal(maliciousPathResult.status, 1)
-    assert.match(maliciousPathResult.stderr, /必须是插件目录内的安全相对路径/)
+    assert.match(maliciousPathResult.stderr, /must be a safe relative path within the plugin directory/)
   }
 
   const driveDir = withPlugin(t, { dllloader: 'C:\\outside\\plugin.dll' })
   const driveResult = runValidator(driveDir)
   assert.equal(driveResult.status, 1)
-  assert.match(driveResult.stderr, /dllloader 必须是插件目录内的 \.dll 相对路径/)
+  assert.match(driveResult.stderr, /dllloader must be a \.dll relative path within the plugin directory/)
 
   let outsideDir
   let symlinkAvailable = true
@@ -790,5 +790,5 @@ test('absolute, traversing, drive-qualified, and symlink-escaping plugin paths a
   }
   const symlinkResult = runValidator(pluginDir)
   assert.equal(symlinkResult.status, 1)
-  assert.match(symlinkResult.stderr, /entry 必须是插件目录内的安全相对路径/)
+  assert.match(symlinkResult.stderr, /entry must be a safe relative path within the plugin directory/)
 })

@@ -50,17 +50,17 @@ interface ProxyCredentials {
 
 function networkFailure(error: unknown): ZToolsError {
   if (error instanceof ZToolsError) return error
-  return new ZToolsError(errorCodes.networkError, '网络请求失败')
+  return new ZToolsError(errorCodes.networkError, 'Network request failed')
 }
 
 function abortFailure(reason: unknown): ZToolsError {
   if (reason === errorCodes.requestTimeout) {
-    return new ZToolsError(errorCodes.requestTimeout, '调用超时')
+    return new ZToolsError(errorCodes.requestTimeout, 'Request timed out')
   }
   if (reason === errorCodes.appStopping) {
-    return new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    return new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
   }
-  return new ZToolsError(errorCodes.callerDestroyed, '调用者已销毁')
+  return new ZToolsError(errorCodes.callerDestroyed, 'Caller has been destroyed')
 }
 
 function requireRedirectUrl(value: string): URL {
@@ -68,14 +68,14 @@ function requireRedirectUrl(value: string): URL {
   try {
     parsed = new URL(value)
   } catch {
-    throw new ZToolsError(errorCodes.networkError, '服务器返回了无效重定向地址')
+    throw new ZToolsError(errorCodes.networkError, 'Server returned an invalid redirect URL')
   }
   if (
     (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
     parsed.username !== '' ||
     parsed.password !== ''
   ) {
-    throw new ZToolsError(errorCodes.networkError, '服务器重定向到不允许的 URL')
+    throw new ZToolsError(errorCodes.networkError, 'Server redirected to a disallowed URL')
   }
   return parsed
 }
@@ -167,7 +167,7 @@ export class NetworkService {
         return
       }
       deadline = setTimeout(() => {
-        fail(new ZToolsError(errorCodes.requestTimeout, '网络请求超时'))
+        fail(new ZToolsError(errorCodes.requestTimeout, 'Network request timed out'))
         abortRequest()
       }, params.timeout)
       signal.addEventListener('abort', onAbort, { once: true })
@@ -175,21 +175,21 @@ export class NetworkService {
       request.on('redirect', (_statusCode, _method, redirectUrl) => {
         try {
           if (params.method !== 'GET' && params.method !== 'HEAD') {
-            throw new ZToolsError(errorCodes.networkError, '拒绝自动重定向非 GET/HEAD 请求')
+            throw new ZToolsError(errorCodes.networkError, 'Automatic redirect rejected for non-GET/HEAD request')
           }
           redirects += 1
           if (redirects > MAX_REDIRECTS) {
-            throw new ZToolsError(errorCodes.networkError, 'HTTP 重定向次数超过上限')
+            throw new ZToolsError(errorCodes.networkError, 'HTTP redirect limit exceeded')
           }
           const nextUrl = requireRedirectUrl(redirectUrl)
           if (currentUrl.protocol === 'https:' && nextUrl.protocol !== 'https:') {
-            throw new ZToolsError(errorCodes.networkError, '拒绝 HTTPS 降级重定向')
+            throw new ZToolsError(errorCodes.networkError, 'HTTPS downgrade redirect rejected')
           }
           const hasSensitiveHeaders = Object.keys(params.headers ?? {}).some((name) =>
             name.toLowerCase() === 'authorization' || name.toLowerCase() === 'cookie'
           )
           if (currentUrl.origin !== nextUrl.origin && hasSensitiveHeaders) {
-            throw new ZToolsError(errorCodes.networkError, '拒绝携带敏感请求头的跨源重定向')
+            throw new ZToolsError(errorCodes.networkError, 'Cross-origin redirect with sensitive headers rejected')
           }
           currentUrl = nextUrl
           request.followRedirect()
@@ -212,13 +212,13 @@ export class NetworkService {
           if (settled) return
           responseBytes += chunk.byteLength
           if (responseBytes > this.#maxResponseBytes) {
-            fail(new ZToolsError(errorCodes.responseTooLarge, 'HTTP 响应体超过 16 MiB 上限'))
+            fail(new ZToolsError(errorCodes.responseTooLarge, 'HTTP response body exceeds the 16 MiB limit'))
             abortRequest()
             return
           }
           chunks.push(chunk)
         })
-        response.on('aborted', () => fail(new Error('响应流已中断')))
+        response.on('aborted', () => fail(new Error('Response stream aborted')))
         response.on('error', fail)
         response.on('end', () => {
           succeed({
@@ -323,11 +323,11 @@ export class NetworkService {
       requireRedirectUrl(params.url)
       const reference = grants.readReference(caller.webContentsId, params.fileGrantId)
       const metadata = await grants.describe(caller.webContentsId, params.fileGrantId, signal)
-      if (metadata.isDirectory || metadata.size > this.#maxUploadBytes) throw new ZToolsError(errorCodes.fileTooLarge, '上传文件超过大小上限')
+      if (metadata.isDirectory || metadata.size > this.#maxUploadBytes) throw new ZToolsError(errorCodes.fileTooLarge, 'Upload file exceeds size limit')
       const data = await grants.read(caller.webContentsId, params.fileGrantId, '', this.#maxUploadBytes, signal)
       const after = await grants.describe(caller.webContentsId, params.fileGrantId, signal)
       if (data.length !== metadata.size || after.size !== metadata.size || after.lastModifiedMs !== metadata.lastModifiedMs) {
-        throw new ZToolsError(errorCodes.fileError, '上传源文件在读取期间发生变化')
+        throw new ZToolsError(errorCodes.fileError, 'Upload source file changed while reading')
       }
       this.#throwIfAborted(signal)
       const form = new FormData()
@@ -337,7 +337,7 @@ export class NetworkService {
         ...(params.headers === undefined ? {} : { headers: params.headers })
       })
       const body = await this.#readResponseBody(response, signal)
-      if (response.status < 200 || response.status >= 300) throw new ZToolsError(errorCodes.networkError, '上传请求返回非成功HTTP状态')
+      if (response.status < 200 || response.status >= 300) throw new ZToolsError(errorCodes.networkError, 'Upload request returned a non-success HTTP status')
       return { success: true, data: { statusCode: response.status, statusText: response.statusText, body } }
     } catch (error) {
       if (signal.aborted) throw abortFailure(signal.reason)
@@ -359,14 +359,14 @@ export class NetworkService {
       const response = await this.#fetchDownload(params, caller, signal)
       if (response.status < 200 || response.status >= 300) {
         await response.body?.cancel()
-        throw new ZToolsError(errorCodes.networkError, `下载请求返回 HTTP ${response.status}`)
+        throw new ZToolsError(errorCodes.networkError, `Download request returned HTTP ${response.status}`)
       }
       const declaredSize = this.#contentLength(response)
       if (declaredSize !== undefined && declaredSize > this.#maxDownloadBytes) {
         await response.body?.cancel()
-        throw new ZToolsError(errorCodes.responseTooLarge, '下载文件超过 1 GiB 上限')
+        throw new ZToolsError(errorCodes.responseTooLarge, 'Downloaded file exceeds the 1 GiB limit')
       }
-      if (!response.body) throw new ZToolsError(errorCodes.networkError, '下载响应没有正文')
+      if (!response.body) throw new ZToolsError(errorCodes.networkError, 'Download response has no body')
 
       await fs.mkdir(path.dirname(target), { recursive: true })
       handle = await fs.open(temporary, 'wx')
@@ -376,7 +376,7 @@ export class NetworkService {
         const chunk = Buffer.from(value)
         size += chunk.byteLength
         if (size > this.#maxDownloadBytes) {
-          throw new ZToolsError(errorCodes.responseTooLarge, '下载文件超过 1 GiB 上限')
+          throw new ZToolsError(errorCodes.responseTooLarge, 'Downloaded file exceeds the 1 GiB limit')
         }
         await handle.write(chunk)
       }
@@ -412,9 +412,9 @@ export class NetworkService {
       this.#throwIfAborted(signal)
       handle = await fs.open(source, 'r')
       const stats = await handle.stat()
-      if (!stats.isFile()) throw new ZToolsError(errorCodes.fileError, '上传目标不是文件')
+      if (!stats.isFile()) throw new ZToolsError(errorCodes.fileError, 'Upload target is not a regular file')
       if (stats.size > this.#maxUploadBytes) {
-        throw new ZToolsError(errorCodes.fileTooLarge, '上传文件超过 16 MiB 上限')
+        throw new ZToolsError(errorCodes.fileTooLarge, 'Upload file exceeds the 16 MiB limit')
       }
       const data = await handle.readFile()
       await handle.close()
@@ -437,7 +437,7 @@ export class NetworkService {
       })
       const body = await this.#readResponseBody(response, signal)
       if (response.status < 200 || response.status >= 300) {
-        throw new ZToolsError(errorCodes.networkError, `上传请求返回 HTTP ${response.status}`)
+        throw new ZToolsError(errorCodes.networkError, `Upload request returned HTTP ${response.status}`)
       }
       return {
         success: true,
@@ -470,23 +470,23 @@ export class NetworkService {
       if (response.status < 300 || response.status >= 400) return response
       const location = response.headers.get('location')
       await response.body?.cancel()
-      if (!location) throw new ZToolsError(errorCodes.networkError, '重定向响应缺少 Location')
+      if (!location) throw new ZToolsError(errorCodes.networkError, 'Redirect response is missing Location header')
       if (redirects === MAX_REDIRECTS) {
-        throw new ZToolsError(errorCodes.networkError, 'HTTP 重定向次数超过上限')
+        throw new ZToolsError(errorCodes.networkError, 'HTTP redirect limit exceeded')
       }
       const nextUrl = requireRedirectUrl(new URL(location, currentUrl).href)
       if (currentUrl.protocol === 'https:' && nextUrl.protocol !== 'https:') {
-        throw new ZToolsError(errorCodes.networkError, '拒绝 HTTPS 降级重定向')
+        throw new ZToolsError(errorCodes.networkError, 'HTTPS downgrade redirect rejected')
       }
       const hasSensitiveHeaders = Object.keys(params.headers ?? {}).some((name) =>
         name.toLowerCase() === 'authorization' || name.toLowerCase() === 'cookie'
       )
       if (currentUrl.origin !== nextUrl.origin && hasSensitiveHeaders) {
-        throw new ZToolsError(errorCodes.networkError, '拒绝携带敏感请求头的跨源重定向')
+        throw new ZToolsError(errorCodes.networkError, 'Cross-origin redirect with sensitive headers rejected')
       }
       currentUrl = nextUrl
     }
-    throw new ZToolsError(errorCodes.networkError, 'HTTP 重定向状态异常')
+    throw new ZToolsError(errorCodes.networkError, 'Unexpected HTTP redirect state')
   }
 
   async #readResponseBody(response: Response, signal: AbortSignal): Promise<string> {
@@ -498,7 +498,7 @@ export class NetworkService {
       const chunk = Buffer.from(value)
       size += chunk.byteLength
       if (size > this.#maxResponseBytes) {
-        throw new ZToolsError(errorCodes.responseTooLarge, 'HTTP 响应体超过 16 MiB 上限')
+        throw new ZToolsError(errorCodes.responseTooLarge, 'HTTP response body exceeds the 16 MiB limit')
       }
       chunks.push(chunk)
     }
@@ -517,19 +517,19 @@ export class NetworkService {
   }
 
   #requirePathGrants(): NonNullable<NetworkServiceOptions['pathGrants']> {
-    if (!this.#pathGrants) throw new ZToolsError(errorCodes.notSupported, '原生文件引用传输尚未初始化')
+    if (!this.#pathGrants) throw new ZToolsError(errorCodes.notSupported, 'Native file reference transfer is not initialized')
     return this.#pathGrants
   }
 
   #requireFileService(): FileSystemService {
-    if (!this.#fileService) throw new ZToolsError(errorCodes.internalError, '文件服务未初始化')
+    if (!this.#fileService) throw new ZToolsError(errorCodes.internalError, 'File service is not initialized')
     return this.#fileService
   }
 
   #requireSession(caller: CallerIdentity): Session {
     const callerSession = this.#sessionResolver(caller)
     if (!callerSession) {
-      throw new ZToolsError(errorCodes.callerDestroyed, '调用者窗口已销毁')
+      throw new ZToolsError(errorCodes.callerDestroyed, 'Caller window has been destroyed')
     }
     return callerSession
   }

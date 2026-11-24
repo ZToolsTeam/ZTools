@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 
 interface NetworkSDK {
   download(url: string, ref: unknown, options?: unknown): Promise<unknown>
@@ -10,8 +10,7 @@ interface NetworkSDK {
 const file = { grantId: 'a'.repeat(43), kind: 'file', displayName: 'upload.txt', operations: ['read'] }
 const save = { grantId: 'b'.repeat(43), kind: 'save', displayName: 'download.txt', operations: ['write'] }
 function fixture() {
-  const source = ['fs.js', 'fs-reference.js', 'network.js', 'network-reference.js'].map(name =>
-    fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name, 'utf8').replace(/^export .+$/mg, '')).join('\n')
+  const source = loadCefIpcSources(['api/fs', 'api/fs-reference', 'api/network', 'api/network-reference'])
   const calls: { method: string; params: unknown; options: unknown }[] = []
   let result: unknown = { success: true, grantId: save.grantId, size: 3, statusCode: 200, statusText: 'OK' }
   const transport = { call: async (method: string, params: unknown, options: unknown) => { calls.push({ method, params: JSON.parse(JSON.stringify(params)), options: JSON.parse(JSON.stringify(options)) }); return result } }

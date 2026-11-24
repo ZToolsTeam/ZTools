@@ -18,44 +18,68 @@ import {
   isPluginFeatureHotkeyTriggerId
 } from '@/utils/pluginFeatureHotkeys'
 import { useAppI18n } from '@/i18n'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 
-const { t } = useAppI18n()
+const { t, locale } = useAppI18n()
 const router = useRouter()
 const visible = ref(false)
+// 仅保存结构化原始冲突字段，避免在 show() 中静态固化翻译文本导致热切换语言冻结
 const conflicts = ref([])
 
 const isSystemTarget = (item) => {
   const pid = String(item?.pluginId || '').trim().toLowerCase()
   const tid = String(item?.triggerId || '').trim()
-  return pid === 'system' || tid === 'global_wake_hotkey' || tid === 'mouse_wake_hook'
+  return (
+    pid === 'system' ||
+    tid === 'global_wake_hotkey' ||
+    tid === 'global_launcher_hotkey' ||
+    tid === 'mouse_wake_hook'
+  )
 }
 
-const resolveRawItemTitle = (item) => {
+/** 按当前 locale 实时解析冲突条目的显示名称 */
+const resolveDisplayItemTitle = (item) => {
+  if (item?.pluginNameRaw) return item.pluginNameRaw
   const tid = String(item?.triggerId || '').trim()
   if (tid === 'global_wake_hotkey') return t('modals.hotkeyConflict.globalWake')
+  if (tid === 'global_launcher_hotkey') return t('modals.hotkeyConflict.globalLauncher')
   if (tid === 'mouse_wake_hook') return t('modals.hotkeyConflict.mouseWake')
   const featureItem = tid ? getPluginFeatureHotkeyItemByTriggerId(tid) : null
   if (featureItem) return `${featureItem.pluginName} · ${featureItem.featureName}`
   if (String(item?.pluginId || '').trim().toLowerCase() === 'system') return t('modals.hotkeyConflict.systemHotkey')
-  if (item?.pluginName) return item.pluginName
   if (item?.pluginId) return item.pluginId
-  if (item?.type === 'mouse') return t('modals.hotkeyConflict.mouseWake')
-  if (item?.type === 'keyboard') return t('modals.hotkeyConflict.globalWake')
+  if (item?.rawType === 'mouse') return t('modals.hotkeyConflict.mouseWake')
+  if (item?.rawType === 'keyboard') return t('modals.hotkeyConflict.globalWake')
   return t('modals.hotkeyConflict.unknownTrigger')
 }
 
-/** 将不同来源的冲突记录归一化为统一展示结构 */
+/** 按当前 locale 实时解析冲突对象/占用方文案 */
+const resolveDisplayConflictWith = (item) => {
+  const fallbackKey =
+    item?.conflictType === 'system_occupied'
+      ? 'modals.hotkeyConflict.systemOrOtherApp'
+      : 'modals.hotkeyConflict.otherHotkey'
+  if (item?.conflictWithRaw) {
+    return item.conflictType === 'system_occupied'
+      ? resolveErrorMessage(item.conflictWithRaw, fallbackKey)
+      : item.conflictWithRaw
+  }
+  return t(fallbackKey)
+}
+
+/** 将不同来源的冲突记录归一化为与语言无关的结构化记录 */
 const normalizeConflictItem = (item) => {
   if (!item || typeof item !== 'object') return null
 
   // 兼容旧版系统冲突格式 { type: 'keyboard' | 'mouse', key }
   if ((item.type === 'keyboard' || item.type === 'mouse') && !('conflictType' in item)) {
     return {
-      pluginName: item.type === 'mouse' ? t('modals.hotkeyConflict.mouseWake') : t('modals.hotkeyConflict.globalWake'),
+      pluginNameRaw: '',
       pluginId: 'system',
+      rawType: item.type,
       key: item.key || '',
       conflictType: 'system_occupied',
-      conflictWith: t('modals.hotkeyConflict.systemOrOtherApp'),
+      conflictWithRaw: '',
       triggerId: item.type === 'mouse' ? 'mouse_wake_hook' : 'global_wake_hotkey',
       conflictTriggerId: ''
     }
@@ -64,11 +88,12 @@ const normalizeConflictItem = (item) => {
   // 兼容 Electron 宿主直推的 { type: 'system', key, pluginId, triggerId } 格式
   if (item.type === 'system' && !('conflictType' in item)) {
     return {
-      pluginName: resolveRawItemTitle(item),
+      pluginNameRaw: typeof item.pluginName === 'string' ? item.pluginName.trim() : '',
       pluginId: item.pluginId || '',
+      rawType: 'system',
       key: item.key || '',
       conflictType: 'system_occupied',
-      conflictWith: item.reason || t('modals.hotkeyConflict.systemOrOtherApp'),
+      conflictWithRaw: typeof item.reason === 'string' ? item.reason.trim() : '',
       triggerId: item.triggerId || '',
       conflictTriggerId: ''
     }
@@ -78,11 +103,12 @@ const normalizeConflictItem = (item) => {
     item.conflictType === 'duplicate' ? 'duplicate' : 'system_occupied'
 
   return {
-    pluginName: item.pluginName || resolveRawItemTitle(item),
+    pluginNameRaw: typeof item.pluginName === 'string' ? item.pluginName.trim() : '',
     pluginId: item.pluginId || '',
+    rawType: typeof item.type === 'string' ? item.type : '',
     key: item.key || '',
     conflictType: normalizedType,
-    conflictWith: item.conflictWith || (normalizedType === 'system_occupied' ? t('modals.hotkeyConflict.systemOrOtherApp') : t('modals.hotkeyConflict.otherHotkey')),
+    conflictWithRaw: typeof item.conflictWith === 'string' ? item.conflictWith.trim() : '',
     triggerId: item.triggerId || '',
     conflictTriggerId: item.conflictTriggerId || ''
   }
@@ -93,9 +119,10 @@ const buildConflictSignature = (item) =>
     item.conflictType,
     item.triggerId,
     item.pluginId,
-    item.pluginName,
+    item.pluginNameRaw,
     item.key,
-    item.conflictWith
+    item.conflictWithRaw,
+    item.conflictTriggerId
   ].join('|')
 
 /**
@@ -129,12 +156,21 @@ const close = () => {
   conflicts.value = []
 }
 
+const renderedConflicts = computed(() => {
+  void locale.value
+  return conflicts.value.map((item) => ({
+    ...item,
+    pluginName: resolveDisplayItemTitle(item),
+    conflictWith: resolveDisplayConflictWith(item)
+  }))
+})
+
 const systemOccupiedConflicts = computed(() =>
-  conflicts.value.filter((item) => item.conflictType === 'system_occupied')
+  renderedConflicts.value.filter((item) => item.conflictType === 'system_occupied')
 )
 
 const duplicateConflicts = computed(() =>
-  conflicts.value.filter((item) => item.conflictType === 'duplicate')
+  renderedConflicts.value.filter((item) => item.conflictType === 'duplicate')
 )
 
 const hasSystemWakeConflict = computed(() =>

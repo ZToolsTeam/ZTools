@@ -116,7 +116,7 @@ export class FrameSyncManager {
    */
   attach(window: ManagedWindow): void {
     if (this.#disposed) {
-      throw new Error('FrameSyncManager 已销毁，无法重新绑定')
+      throw new Error('FrameSyncManager has been disposed and cannot reattach')
     }
     if (this.#window) {
       this.detach()
@@ -184,7 +184,7 @@ export class FrameSyncManager {
         try {
           this.#window.removeListener(event, listener)
         } catch {
-          this.#log('WARN', '移除窗口监听器失败')
+          this.#log('WARN', 'Failed to remove window listener')
         }
       }
       this.#listeners.length = 0
@@ -200,7 +200,7 @@ export class FrameSyncManager {
    */
   showWindow(): Promise<void> {
     if (!this.#window || this.#window.isDestroyed()) {
-      return Promise.reject(new Error('受管窗口未挂载或已销毁'))
+      return Promise.reject(new Error('Managed window is not attached or has been destroyed'))
     }
 
     const win = this.#window
@@ -251,7 +251,7 @@ export class FrameSyncManager {
           try {
             await this.#onResume(win)
           } catch (callbackErr) {
-            this.#log('WARN', 'onResume 回调执行异常', callbackErr)
+            this.#log('WARN', 'onResume callback threw an error', callbackErr)
           }
         }
       }
@@ -312,7 +312,7 @@ export class FrameSyncManager {
         await this.#trimMemory()
       }
     } catch (trimErr) {
-      this.#log('WARN', '内存深度瘦身执行异常', trimErr)
+      this.#log('WARN', 'Memory trim execution failed', trimErr)
     }
 
     if (this.#disposed || this.#window !== win || win.isDestroyed() || win.isVisible() || this.#state !== 'suspended') return
@@ -322,7 +322,7 @@ export class FrameSyncManager {
       try {
         await this.#onSuspend(win)
       } catch (err) {
-        this.#log('WARN', 'onSuspend 回调执行异常', err)
+        this.#log('WARN', 'onSuspend callback threw an error', err)
       }
     }
   }
@@ -340,7 +340,7 @@ export class FrameSyncManager {
     this.#suspendTimer = setTimeout(() => {
       this.#suspendTimer = null
       void this.suspend().catch((err) => {
-        this.#log('ERROR', '执行挂起释放失败', err)
+        this.#log('ERROR', 'Failed to execute suspend release', err)
       })
     }, this.#suspendTimeoutMs)
   }
@@ -387,7 +387,7 @@ export class FrameSyncManager {
 
     try {
       const jsPromise = webContents.executeJavaScript(frameScript).catch((error: unknown) => {
-        this.#log('WARN', '首帧确认失败，使用原生窗口呈现', error)
+        this.#log('WARN', 'First frame confirmation failed; falling back to native window presentation', error)
       })
       await Promise.race([jsPromise, timeoutPromise])
     } finally {

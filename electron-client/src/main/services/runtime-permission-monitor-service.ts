@@ -82,7 +82,7 @@ export class RuntimePermissionMonitorService {
   ) {
     const timeout = options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS
     if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 60_000) {
-      throw new TypeError('权限状态查询超时必须是 1 到 60000 毫秒的整数')
+      throw new TypeError('Permission status query timeout must be an integer between 1 and 60000 ms')
     }
     this.#queryTimeoutMs = timeout
   }

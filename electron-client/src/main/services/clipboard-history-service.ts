@@ -347,12 +347,12 @@ export class ClipboardHistoryService {
 
     const formatType: ClipboardFormatType = input.format_type || 'text'
     if (formatType !== 'text' && formatType !== 'html' && Buffer.byteLength(content, 'utf8') > 16 * 1024 * 1024) {
-      throw new ZToolsError(errorCodes.fileTooLarge, '剪贴板历史内容超过 16 MiB 上限')
+      throw new ZToolsError(errorCodes.fileTooLarge, 'Clipboard history content exceeds the 16 MiB limit')
     }
 
     // 2. 长文本截断保护（防止恶意写入百兆长文本打爆内存）
     if ((formatType === 'text' || formatType === 'html') && content.length > this.maxTextBytes) {
-      content = content.slice(0, this.maxTextBytes) + `\n... [已自动截断，原长 ${charCount} 字符]`
+      content = content.slice(0, this.maxTextBytes) + `\n... [truncated automatically, original length ${charCount} chars]`
       charCount = content.length
     }
 
@@ -361,7 +361,7 @@ export class ClipboardHistoryService {
     // 3. 高熵密码与机密识别脱敏
     let preview = input.text_preview || content.slice(0, this.maxPreviewChars)
     if (isHighEntropyPassword(content)) {
-      preview = '•••••••••••••••• [高熵敏感机密已脱敏]'
+      preview = '•••••••••••••••• [high-entropy secret redacted]'
     } else if (preview.length > this.maxPreviewChars) {
       preview = preview.slice(0, this.maxPreviewChars) + '...'
     }
@@ -432,7 +432,7 @@ export class ClipboardHistoryService {
   /** 采集器的文本、图片原始 data URL、文件列表统一写入当前历史库。 */
   public recordClipboardEntry(entry: ClipboardHistoryEntry, now = Date.now()): ClipboardItemRecord | null {
     if (entry.type === 'text') return this.recordItem({ content: entry.text, format_type: 'text' }, now)
-    if (entry.type === 'image') return this.recordItem({ content: entry.image, format_type: 'image', text_preview: '图片' }, now)
+    if (entry.type === 'image') return this.recordItem({ content: entry.image, format_type: 'image', text_preview: 'Image' }, now)
     // 只记录当前平台的本机绝对路径；全部不合格（例如其它系统的路径）时不记录
     const files = entry.files.filter((file) => isNativeAbsoluteFilePath(file, this.platform))
     if (files.length === 0) return null
@@ -445,16 +445,16 @@ export class ClipboardHistoryService {
   public getEntry(id: string): ClipboardHistoryEntry {
     if (!this.db) throw new Error('Database is closed')
     const item = this.db.prepare('SELECT * FROM clipboard_items WHERE id = ?').get(id) as unknown as (ClipboardItemRecord & { captured_from_system: number }) | undefined
-    if (!item) throw new ZToolsError(errorCodes.fileError, '剪贴板历史记录已不存在，请刷新列表')
+    if (!item) throw new ZToolsError(errorCodes.fileError, 'Clipboard history entry no longer exists; please refresh the list')
     if (item.format_type === 'image') return { type: 'image', image: item.content }
     if (item.format_type === 'files') {
-      if (item.captured_from_system !== 1) throw new ZToolsError(errorCodes.permissionDenied, '此文件历史并非系统剪贴板采集，请重新复制文件')
+      if (item.captured_from_system !== 1) throw new ZToolsError(errorCodes.permissionDenied, 'This file history entry was not captured from the system clipboard; please copy the file again')
       const parsed: unknown = JSON.parse(item.content)
       if (!Array.isArray(parsed) || parsed.length === 0 || !parsed.every((file): file is string => typeof file === 'string' && file.length > 0)) {
-        throw new ZToolsError(errorCodes.invalidRequest, '剪贴板文件历史记录损坏')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Clipboard file history record is corrupted')
       }
       if (!parsed.every((file) => isNativeAbsoluteFilePath(file, this.platform))) {
-        throw new ZToolsError(errorCodes.invalidRequest, '此文件历史包含不是本机的文件路径，无法恢复到剪贴板')
+        throw new ZToolsError(errorCodes.invalidRequest, 'This file history entry contains a non-native file path and cannot be restored to the clipboard')
       }
       return { type: 'files', files: parsed }
     }
@@ -601,7 +601,7 @@ export class ClipboardHistoryService {
         item: null,
         sequenceIndex: 0,
         total: 0,
-        message: '剪贴板历史为空'
+        message: 'Clipboard history is empty'
       }
     }
 
@@ -618,7 +618,7 @@ export class ClipboardHistoryService {
         item: null,
         sequenceIndex: -1,
         total: allItems.length,
-        message: '未找到指定条目'
+        message: 'Specified clipboard entry not found'
       }
     }
     const previousLastId = this.sequenceLastId
@@ -636,7 +636,7 @@ export class ClipboardHistoryService {
         // 粘贴失败时指针回退，保证下次重试的仍是同一条，且如实返回失败
         this.sequencePointer = currentIndex
         this.sequenceLastId = previousLastId
-        const message = err instanceof Error && err.message ? err.message : '流水粘贴失败'
+        const message = err instanceof Error && err.message ? err.message : 'Sequential paste failed'
         return {
           success: false,
           item: currentItem,

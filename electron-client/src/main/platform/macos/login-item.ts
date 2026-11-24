@@ -37,10 +37,10 @@ const validStatuses = new Set<MacosLoginItemStatus>([
 
 function requireMacosPackaged(options: MacosLoginItemAdapterOptions): void {
   if (options.platform !== 'darwin') {
-    throw new ZToolsError(errorCodes.notSupported, '登录启动设置仅支持 macOS')
+    throw new ZToolsError(errorCodes.notSupported, 'Login item settings are only supported on macOS')
   }
   if (!options.isPackaged) {
-    throw new ZToolsError(errorCodes.notSupported, '开发态不修改 macOS 登录启动设置')
+    throw new ZToolsError(errorCodes.notSupported, 'macOS login item settings are not modified in development mode')
   }
 }
 
@@ -51,7 +51,7 @@ function normalizeState(value: ReturnType<ElectronMacosLoginItemApp['getLoginIte
     typeof value.wasOpenedAtLogin !== 'boolean' ||
     !validStatuses.has(value.status as MacosLoginItemStatus)
   ) {
-    throw new ZToolsError(errorCodes.notSupported, 'macOS 登录启动状态无效')
+    throw new ZToolsError(errorCodes.notSupported, 'Invalid macOS login item state')
   }
   return Object.freeze({
     openAtLogin: value.openAtLogin,
@@ -68,7 +68,7 @@ export function createMacosLoginItemAdapter(options: MacosLoginItemAdapterOption
       return normalizeState(options.app.getLoginItemSettings())
     } catch (error) {
       if (error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.notSupported, '读取 macOS 登录启动设置失败')
+      throw new ZToolsError(errorCodes.notSupported, 'Failed to read macOS login item settings')
     }
   }
 
@@ -76,17 +76,17 @@ export function createMacosLoginItemAdapter(options: MacosLoginItemAdapterOption
     get: read,
     setEnabled(enabled) {
       if (typeof enabled !== 'boolean') {
-        throw new ZToolsError(errorCodes.invalidRequest, '登录启动状态必须是布尔值')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Login item enabled state must be a boolean')
       }
       requireMacosPackaged(options)
       try {
         options.app.setLoginItemSettings({ openAtLogin: enabled })
       } catch {
-        throw new ZToolsError(errorCodes.notSupported, '设置 macOS 登录启动状态失败')
+        throw new ZToolsError(errorCodes.notSupported, 'Failed to update macOS login item settings')
       }
       const state = read()
       if (state.openAtLogin !== enabled) {
-        throw new ZToolsError(errorCodes.notSupported, 'macOS 未确认登录启动设置已生效')
+        throw new ZToolsError(errorCodes.notSupported, 'macOS did not confirm the login item setting change')
       }
       return state
     }

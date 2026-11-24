@@ -14,6 +14,8 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { shell } from 'electron'
 import type { ClipboardHistoryService } from './clipboard-history-service.js'
+import { t } from '../i18n/index.js'
+import { CUSTOM_GAME_PINYIN_MAP, DEFAULT_STEAM_GAME_ENTRIES } from './geek-tools-service.zh-data.js'
 
 export interface InstalledGame {
   id: string
@@ -62,23 +64,30 @@ export interface GeekToolsServiceOptions {
   clipboardHistory?: ClipboardHistoryService | null | undefined
 }
 
-const DEFAULT_TYPING_CHALLENGES: TypingChallenge[] = [
+interface TypingChallengeDefinition {
+  id: string
+  language: TypingChallenge['language']
+  titleKey: string
+  codeSnippet: string
+}
+
+const DEFAULT_TYPING_CHALLENGES: readonly TypingChallengeDefinition[] = [
   {
     id: 'ts-1',
     language: 'typescript',
-    title: 'TypeScript 泛型接口',
+    titleKey: 'geekTools.typing.ts1.title',
     codeSnippet: 'export interface Result<T, E = Error> { readonly success: boolean; readonly data?: T; readonly error?: E; }'
   },
   {
     id: 'rust-1',
     language: 'rust',
-    title: 'Rust 模式匹配与所有权',
+    titleKey: 'geekTools.typing.rust1.title',
     codeSnippet: 'pub fn process_event<T>(msg: Message<T>) -> Result<(), AppError> { match msg { Message::Ping => Ok(()), _ => Err(AppError::Invalid) } }'
   },
   {
     id: 'python-1',
     language: 'python',
-    title: 'Python 异步上下文管理器',
+    titleKey: 'geekTools.typing.python1.title',
     codeSnippet: 'async with aiohttp.ClientSession() as session: async with session.get(url) as response: return await response.json()'
   }
 ]
@@ -124,12 +133,7 @@ export class GeekToolsService {
     `)
   }
 
-  private static readonly DEFAULT_STEAM_GAMES: readonly InstalledGame[] = [
-    { id: 'game-steam-730', name: 'Counter-Strike 2', platform: 'steam', launchCommand: 'steam://rungameid/730', pinyin: 'counterstrike2', acronym: 'cs2' },
-    { id: 'game-steam-570', name: 'Dota 2', platform: 'steam', launchCommand: 'steam://rungameid/570', pinyin: 'dota2', acronym: 'd2' },
-    { id: 'game-steam-1091500', name: '赛博朋克 2077', platform: 'steam', launchCommand: 'steam://rungameid/1091500', pinyin: 'saibopengke2077', acronym: 'sbpk' },
-    { id: 'game-black-myth', name: '黑神话：悟空', platform: 'steam', launchCommand: 'steam://rungameid/2358720', pinyin: 'heishenhuawukong', acronym: 'hsh' }
-  ]
+  private static readonly DEFAULT_STEAM_GAMES: readonly InstalledGame[] = DEFAULT_STEAM_GAME_ENTRIES
 
   private initDefaultGames(): void {
     const candidateDirs = [
@@ -171,7 +175,7 @@ export class GeekToolsService {
 
   public async launchGame(id: string): Promise<{ success: boolean; launchCommand?: string; error?: string }> {
     const game = this.installedGames.find(g => g.id === id) ?? GeekToolsService.DEFAULT_STEAM_GAMES.find(g => g.id === id)
-    if (!game) throw new Error(`Game not found: ${id}`)
+    if (!game) throw new Error(t('geekTools.error.gameNotFound', { id }))
 
     try {
       await shell.openExternal(game.launchCommand)
@@ -182,13 +186,8 @@ export class GeekToolsService {
   }
 
   public addCustomGame(game: Omit<InstalledGame, 'pinyin' | 'acronym'>): InstalledGame {
-    const pinyinMap: Record<string, { pinyin: string; acronym: string }> = {
-      '星际争霸 2': { pinyin: 'xingjizhengba2', acronym: 'xjzb' },
-      '星际争霸2': { pinyin: 'xingjizhengba2', acronym: 'xjzb' },
-      '星际争霸': { pinyin: 'xingjizhengba', acronym: 'xjzb' }
-    }
     const cleanName = (game.name || '').replace(/\s+/g, '')
-    const matched = pinyinMap[game.name] || pinyinMap[cleanName]
+    const matched = CUSTOM_GAME_PINYIN_MAP[game.name] || CUSTOM_GAME_PINYIN_MAP[cleanName]
     const pinyin = matched?.pinyin || (game.name || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]/g, '')
     const acronym = matched?.acronym || pinyin.slice(0, 4)
     const newGame: InstalledGame = { ...game, pinyin, acronym }
@@ -200,7 +199,12 @@ export class GeekToolsService {
   // 2. 极客打字训练场 (typing-practice)
   // =========================================================================
   public getTypingChallenges(): TypingChallenge[] {
-    return [...DEFAULT_TYPING_CHALLENGES]
+    return DEFAULT_TYPING_CHALLENGES.map(({ id, language, titleKey, codeSnippet }) => ({
+      id,
+      language,
+      title: t(titleKey),
+      codeSnippet
+    }))
   }
 
   public evaluateTyping(challengeId: string, typedText: string, elapsedSeconds: number): TypingResult {

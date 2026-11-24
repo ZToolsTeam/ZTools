@@ -57,9 +57,12 @@ const electron = { BrowserWindow: NativeWindow, screen, nativeTheme: { shouldUse
 const modules = require('node:module') as { _load: (name: string, ...args: unknown[]) => unknown }
 const originalLoad = modules._load
 let Controller: typeof import('../../src/main/windows/launcher-controller.js').LauncherController
+let handleBeforeInput: typeof import('../../src/main/windows/launcher-controller.js').handleLauncherBeforeInputEvent
 try {
   modules._load = function (name, ...args) { return name === 'electron' ? electron : originalLoad.call(this, name, ...args) }
-  Controller = (require('../../src/main/windows/launcher-controller.js') as typeof import('../../src/main/windows/launcher-controller.js')).LauncherController
+  const launcherModule = require('../../src/main/windows/launcher-controller.js') as typeof import('../../src/main/windows/launcher-controller.js')
+  Controller = launcherModule.LauncherController
+  handleBeforeInput = launcherModule.handleLauncherBeforeInputEvent
 } finally {
   modules._load = originalLoad
 }
@@ -341,4 +344,55 @@ test('launcher_call 拒绝带 attributedPlugin 或 stalePluginSession 的伪装�
   } finally {
     controller.stop()
   }
+})
+
+test('独立悬浮条快捷键：updateLastActiveSurface=false 不触发 onShow，且 before-input 仅拦截纯 Alt+Space', async () => {
+  let onShowCalls = 0
+  const controller = new Controller({
+    icon: {} as Electron.NativeImage,
+    registry: new WindowRegistry(),
+    showMainWindow: () => undefined,
+    hideMainWindow: () => undefined,
+    onShow: () => { onShowCalls += 1 }
+  })
+  controller.register()
+  try {
+    controller.toggle({ updateLastActiveSurface: false })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(onShowCalls, 0, '独立悬浮条快捷键不得改写 lastActiveSurface')
+    assert.equal(controller.isFocused(), true)
+
+    controller.toggle({ updateLastActiveSurface: false })
+    assert.equal(NativeWindow.latest.visible, false)
+
+    controller.show()
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(onShowCalls, 1)
+  } finally {
+    controller.stop()
+  }
+
+  let hideCalls = 0
+  let prevented = 0
+  const fakeEvent = { preventDefault: () => { prevented += 1 } }
+  const fakeTarget = { hide: () => { hideCalls += 1 } }
+  // Alt+Shift+Space / Ctrl+Alt+Space 不得被纯 Alt+Space 逻辑误拦
+  assert.equal(
+    handleBeforeInput(fakeEvent, { alt: true, shift: true, code: 'Space', key: ' ', type: 'keyDown' }, fakeTarget),
+    false
+  )
+  assert.equal(
+    handleBeforeInput(fakeEvent, { alt: true, control: true, code: 'Space', key: ' ', type: 'keyDown' }, fakeTarget),
+    false
+  )
+  assert.equal(hideCalls, 0)
+  assert.equal(prevented, 0)
+
+  // 纯 Alt+Space 仍照常拦截并隐藏
+  assert.equal(
+    handleBeforeInput(fakeEvent, { alt: true, code: 'Space', key: ' ', type: 'keyDown' }, fakeTarget),
+    true
+  )
+  assert.equal(hideCalls, 1)
+  assert.equal(prevented, 1)
 })

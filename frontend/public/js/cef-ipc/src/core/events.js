@@ -30,7 +30,7 @@ class Events {
 
   _buildEnvelope(type, payload, options = {}) {
     return {
-      envelopeId: `env_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      envelopeId: `env_${Date.now()}_${typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : (this._envelopeSeq = (this._envelopeSeq || 0) + 1)}`,
       version: 'v1',
       timestamp: Date.now(),
       type,

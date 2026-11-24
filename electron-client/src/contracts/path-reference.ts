@@ -89,7 +89,7 @@ export interface ReferenceCopyParams { fileGrantId: string; saveGrantId: string;
 export interface ReferenceDirectoryParams { directoryGrantId: string; relativePath: string }
 export interface ReferenceRemoveParams extends ReferenceDirectoryParams { isDirectory: boolean }
 export interface ReferenceMoveParams extends ReferenceDirectoryParams { saveGrantId: string; replace: boolean }
-const invalid = () => new ZToolsError(errorCodes.invalidRequest, '文件引用参数无效；请使用当前SDK授权引用')
+const invalid = () => new ZToolsError(errorCodes.invalidRequest, 'Invalid file reference parameters; use a current SDK authorized reference')
 function record(value: unknown, allowed: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).some(key => !allowed.includes(key))) throw invalid()

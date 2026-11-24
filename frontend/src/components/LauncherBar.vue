@@ -67,7 +67,6 @@
             @click="expandToDashboard()"
           >
             {{ t('launcher.workbenchBtn') }}
-            <ShortcutKeys :combo="TOGGLE_MODE_SHORTCUT" />
           </button>
         </div>
         <div class="launcher-hairline" aria-hidden="true"></div>
@@ -157,7 +156,7 @@
             <p v-if="!isSearching && !fileSearchError" class="launcher-empty-desc">
               {{ fileSearchDegraded ? t('launcher.degradedHint') : t('launcher.emptyDesc') }}
             </p>
-            <RcButton v-if="!isSearching && !fileSearchError" variant="primary" size="sm" class="launcher-primary-btn" kbd="Enter" @click="searchInMarket">
+            <RcButton v-if="canSearchMarket" variant="primary" size="sm" class="launcher-primary-btn" kbd="Enter" @click="searchInMarket">
               {{ t('launcher.searchInMarket') }}
             </RcButton>
           </div>
@@ -170,10 +169,17 @@
           </span>
           <span v-else-if="isSearching" class="truncate min-w-0" role="status">{{ t('launcher.searchingShort') }}</span>
           <span v-else-if="fileSearchError" class="truncate min-w-0" role="status">{{ fileSearchError }}</span>
-          <span v-else-if="fileSearchDegraded" class="truncate min-w-0" role="status">{{ t('launcher.resultsCountDegraded', { count: filteredItems.length }) }}</span>
-          <span v-else class="truncate min-w-0">{{ t('launcher.resultsCount', { count: filteredItems.length }) }}</span>
+          <span v-else-if="fileSearchDegraded" class="truncate min-w-0" role="status">{{ t('launcher.resultsCountDegraded', { count: filteredItems.length }, filteredItems.length) }}</span>
+          <span v-else class="truncate min-w-0">{{ t('launcher.resultsCount', { count: filteredItems.length }, filteredItems.length) }}</span>
           <div class="flex items-center gap-3 flex-shrink-0">
-            <span class="launcher-foot-hint is-primary">{{ t('launcher.footOpen') }} <ShortcutKeys combo="Enter" /></span>
+            <button
+              v-if="currentFocusedItem && currentFocusedItem.available !== false"
+              type="button"
+              class="launcher-foot-hint is-primary"
+              @click="executeItem(currentFocusedItem)"
+            >
+              {{ currentFocusedItem.actionLabel || t('launcher.footOpen') }} <ShortcutKeys combo="Enter" />
+            </button>
             <button
               v-if="currentFocusedItem?.type === 'file' && currentFocusedItem?.available !== false"
               type="button"
@@ -190,10 +196,13 @@
             >
               {{ currentFocusedItem?.pinned ? t('launcher.footUnpin') : t('launcher.footPin') }} <ShortcutKeys combo="Ctrl+P" />
             </button>
-            <button type="button" class="launcher-foot-hint" @click="toggleActionPanel">
+            <button v-if="activeItemActions.length" type="button" class="launcher-foot-hint" @click="toggleActionPanel">
               {{ t('launcher.footActions') }} <ShortcutKeys combo="Ctrl+K" />
             </button>
-            <span class="launcher-foot-hint">{{ t('launcher.footClose') }} <ShortcutKeys combo="Escape" /></span>
+            <button type="button" class="launcher-foot-hint" @click="handleLauncherEscape">
+              {{ pinnedFocusIndex >= 0 ? t('common.back') : (query ? t('common.clear') : t('launcher.footClose')) }}
+              <ShortcutKeys combo="Escape" />
+            </button>
           </div>
         </div>
       </template>
@@ -265,7 +274,9 @@ import SearchResultRow from '@/components/SearchResultRow.vue'
 import { shortcutLabel, isMacOS, isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { win as nativeWin } from '@/api/apiserver'
 import { track } from '@edition'
-import { useAppI18n } from '@/i18n'
+import { i18n, useAppI18n } from '@/i18n'
+import { SUPPORTED_LOCALES } from '@/utils/locale'
+import { resolveErrorMessage, resolveResponseMessage } from '@/utils/errorMessage'
 
 const { t } = useAppI18n()
 const router = useRouter()
@@ -366,7 +377,7 @@ async function handleTogglePin(item) {
       false
     )
   } else if (res?.error) {
-    showNoViewFeedback(res.error, true)
+    showNoViewFeedback(resolveErrorMessage(res, 'launcher.pinnedErrors.togglePinFailed'), true)
   }
 }
 
@@ -376,11 +387,33 @@ const visibleItems = computed(() => filteredItems.value.slice(0, MAX_VISIBLE_ITE
 
 // 类型标签只在结果混合了不同类型（插件 / 软件 / 系统工具 / 文件…）时才有区分意义；
 // 结果里全是同一类型时，每行都写一遍「插件」只是噪音，隐藏。
-// 只隐藏固定的类型标签；「已失效」是状态，子命令行的标签是所属插件名，都带信息，始终保留。
+// 只隐藏固定的类型标签；「已失效」是状态，子命令行的标签是所属插件名（badgeKind='source'），都带信息，始终保留。
 // 少于 2 条结果时不隐藏：单条结果没有「全部同类」可言，类型本身就是有用信息。
-const TYPE_BADGES = new Set(['插件', '应用', '文件', '文件夹', '系统工具', '系统', '极速动作'])
+const TYPE_BADGE_KEYS = [
+  'launcher.badges.plugin',
+  'launcher.badges.app',
+  'launcher.badges.file',
+  'launcher.badges.folder',
+  'launcher.badges.systemTool',
+  'launcher.badges.system',
+  'launcher.badges.quickAction'
+]
+const typeBadgeSet = computed(() => {
+  const set = new Set()
+  for (const key of TYPE_BADGE_KEYS) {
+    set.add(t(key))
+    for (const loc of SUPPORTED_LOCALES) {
+      set.add(i18n.global.t(key, {}, { locale: loc }))
+    }
+  }
+  return set
+})
 const isUniformResultType = computed(() => {
-  const typeBadges = visibleItems.value.map(item => item?.badge || '').filter(badge => TYPE_BADGES.has(badge))
+  const badges = typeBadgeSet.value
+  const typeBadges = visibleItems.value
+    .filter(item => item?.badgeKind !== 'source')
+    .map(item => item?.badge || '')
+    .filter(badge => badges.has(badge))
   return visibleItems.value.length >= 2 && typeBadges.length === visibleItems.value.length && new Set(typeBadges).size === 1
 })
 
@@ -401,6 +434,7 @@ const currentFocusedItem = computed(() => {
   return visibleItems.value[activeIndex.value] || null
 })
 
+const canSearchMarket = computed(() => !!query.value.trim() && !visibleItems.value.length && !isSearching.value && !fileSearchError.value)
 const canPinActiveItem = computed(() => canPinItem(currentFocusedItem.value))
 
 function registerItemEl(index, el) {
@@ -1139,7 +1173,7 @@ async function commitPinnedReorder(order, kind, baseline, generation) {
       if (!Array.isArray(res?.pinnedEntries) && baseline && typeof restorePinnedEntries === 'function') {
         restorePinnedEntries(baseline)
       }
-      showNoViewFeedback(res?.error || t('launcher.reorderFailed'), true)
+      showNoViewFeedback(resolveErrorMessage(res, 'launcher.reorderFailed'), true)
     }
   }
 }
@@ -1287,20 +1321,15 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     if (actionPanelVisible.value) return false
     return handleLauncherPageStep(8)
   },
-  'Enter': () => {
+  'Enter': (event) => {
+    if (event?.target?.closest?.('button')) return false
     if (actionPanelVisible.value) return false
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-    if (pinnedFocusIndex.value >= 0) {
-      const pinTarget = displayedPinnedItems.value[pinnedFocusIndex.value]
-      if (pinTarget) {
-        executeItem(pinTarget)
-        return true
-      }
-    }
-    if (visibleItems.value.length > 0) {
-      executeItem(visibleItems.value[activeIndex.value])
+    if (currentFocusedItem.value) {
+      executeItem(currentFocusedItem.value)
       return true
-    } else if (query.value.trim() && !isSearching.value && !fileSearchError.value) {
+    }
+    if (canSearchMarket.value) {
       searchInMarket()
       return true
     }
@@ -1325,8 +1354,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
   },
   'Ctrl+K': () => {
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-    toggleActionPanel()
-    return true
+    return toggleActionPanel()
   },
   'Ctrl+P': () => {
     if (actionPanelVisible.value) return false
@@ -1340,27 +1368,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
   },
   'Ctrl+Shift+ArrowLeft': () => handlePinnedReorder(-1),
   'Ctrl+Shift+ArrowRight': () => handlePinnedReorder(1),
-  'Escape': () => {
-    if (loadingDeclarative.value || declarativeLoadError.value) {
-      exitDeclarative()
-      return true
-    }
-    if (activeDeclarativePlugin.value) return false
-    if (actionPanelVisible.value) {
-      actionPanelVisible.value = false
-      return true
-    } else if (pinnedFocusIndex.value >= 0) {
-      focusSearchInputFromPinned()
-      return true
-    } else if (query.value) {
-      clearQuery()
-      return true
-    } else {
-      resetPinnedFocus()
-      hideLauncher()
-      return true
-    }
-  }
+  'Escape': handleLauncherEscape
 })
 
 function handleKeyDown(e) {
@@ -1410,7 +1418,7 @@ async function copyFileText(text, label) {
   )
 }
 
-async function runFileAction(filePath, action, failureMessage) {
+async function runFileAction(filePath, action, failureKey) {
   if (fileActionPending) return
   fileActionPending = true
   const searchAtStart = query.value
@@ -1420,19 +1428,19 @@ async function runFileAction(filePath, action, failureMessage) {
     if (typeof bridge?.[action] !== 'function') throw new Error(t('launcher.fileApiUnavailable'))
     const result = await bridge[action](filePath)
     if (result !== true && result?.success !== true) {
-      throw new Error(result?.error?.message || result?.error || failureMessage)
+      throw new Error(resolveErrorMessage(result, failureKey))
     }
     finishExternalLaunch(searchAtStart)
   } catch (error) {
     console.warn('[LauncherBar] 文件操作失败:', error)
-    showNoViewFeedback(error?.message || failureMessage, true)
+    showNoViewFeedback(resolveErrorMessage(error, failureKey), true)
   } finally {
     fileActionPending = false
   }
 }
 
 function openFile(filePath) {
-  return runFileAction(filePath, 'openPath', t('launcher.openFileFailed'))
+  return runFileAction(filePath, 'openPath', 'launcher.openFileFailed')
 }
 
 /** 冷启动时用使用记录占位的程序：等程序列表返回、拿到打开授权后再打开 */
@@ -1446,14 +1454,14 @@ async function openPendingApplication(item) {
 }
 
 function showInFolder(filePath) {
-  return runFileAction(filePath, 'showItemInFolder', t('launcher.revealFileFailed'))
+  return runFileAction(filePath, 'showItemInFolder', 'launcher.revealFileFailed')
 }
 
 async function openPinnedFileItem(item, action = 'open') {
   if (!item?.pinKey || fileActionPending) return
   fileActionPending = true
   const searchAtStart = query.value
-  const failureMessage = action === 'reveal' ? t('launcher.revealFileFailed') : t('launcher.openFileFailed')
+  const failureKey = action === 'reveal' ? 'launcher.revealFileFailed' : 'launcher.openFileFailed'
   try {
     const bridge = window.__ztoolsLauncher
     if (typeof bridge?.openPanelItem !== 'function') {
@@ -1461,12 +1469,12 @@ async function openPinnedFileItem(item, action = 'open') {
     }
     const res = await bridge.openPanelItem(item.pinKey, 'pinned', '', action)
     if (res?.success === false) {
-      throw new Error(res?.error?.message || res?.error || failureMessage)
+      throw new Error(resolveErrorMessage(res, failureKey))
     }
     finishExternalLaunch(searchAtStart)
   } catch (err) {
     console.warn('[LauncherBar] 打开固定文件条目失败:', err)
-    showNoViewFeedback(err?.message || failureMessage, true)
+    showNoViewFeedback(resolveErrorMessage(err, failureKey), true)
   } finally {
     fileActionPending = false
   }
@@ -1483,12 +1491,12 @@ async function openPanelEntry(item) {
     const itemType = item.panelItemType || 'system_tool'
     const res = await bridge.openPanelItem(item.id, itemType, query.value)
     if (res?.success === false) {
-      throw new Error(res?.error?.message || res?.error || t('launcher.openItemFailed'))
+      throw new Error(resolveErrorMessage(res, 'launcher.openItemFailed'))
     }
     finishExternalLaunch(searchAtStart)
   } catch (err) {
     console.warn('[LauncherBar] 打开面板条目失败:', err)
-    showNoViewFeedback(err?.message || t('launcher.openItemFailed'), true)
+    showNoViewFeedback(resolveErrorMessage(err, 'launcher.openItemFailed'), true)
   }
 }
 
@@ -1546,9 +1554,9 @@ async function runNoViewCommand(item) {
       featureCode: item.featureCode || '',
       query: query.value
     })
-    showNoViewFeedback(`✓ ${res.message || t('launcher.commandExecuted', { name: item.name || item.title })}`, false)
+    showNoViewFeedback(`✓ ${resolveResponseMessage(res, 'launcher.commandExecuted', { name: item.name || item.title })}`, false)
   } catch (err) {
-    showNoViewFeedback(err?.message || t('launcher.runNoViewFailed'), true)
+    showNoViewFeedback(resolveErrorMessage(err, 'launcher.runNoViewFailed'), true)
   } finally {
     if (executingNoViewKey === lockKey) {
       executingNoViewKey = ''
@@ -1602,7 +1610,7 @@ async function launchPlugin(pluginId, options = {}) {
       return { success: true }
     } catch (err) {
       if (token !== declarativeLoadToken) return { success: false, cancelled: true }
-      declarativeLoadError.value = err?.message || String(err) || t('launcher.loadDeclarativeFailed')
+      declarativeLoadError.value = resolveErrorMessage(err, 'launcher.loadDeclarativeFailed')
       return { success: false, error: declarativeLoadError.value }
     } finally {
       if (token === declarativeLoadToken) {
@@ -1620,13 +1628,13 @@ async function launchPlugin(pluginId, options = {}) {
     if (result?.success === true && !result.isDeclarative) {
       finishExternalLaunch(searchAtStart)
     } else if (result?.success !== true && !result?.cancelled) {
-      showNoViewFeedback(result?.error?.message || result?.error || t('launcher.launchPluginFailed'), true)
+      showNoViewFeedback(resolveErrorMessage(result, 'launcher.launchPluginFailed'), true)
     }
     return result
   } catch (err) {
     console.error('[Launcher] 启动插件失败:', err)
-    showNoViewFeedback(err?.message || t('launcher.launchPluginFailed'), true)
-    return { success: false, error: err?.message || t('launcher.launchPluginFailedShort') }
+    showNoViewFeedback(resolveErrorMessage(err, 'launcher.launchPluginFailed'), true)
+    return { success: false, error: resolveErrorMessage(err, 'launcher.launchPluginFailedShort') }
   } finally {
     externalPluginPending = false
   }
@@ -1637,8 +1645,32 @@ function searchInMarket() {
   expandToDashboard({ name: 'list', query: { q } })
 }
 
+function handleLauncherEscape() {
+  if (loadingDeclarative.value || declarativeLoadError.value) {
+    exitDeclarative()
+    return true
+  }
+  if (activeDeclarativePlugin.value) return false
+  if (actionPanelVisible.value) {
+    actionPanelVisible.value = false
+    return true
+  } else if (pinnedFocusIndex.value >= 0) {
+    focusSearchInputFromPinned()
+    return true
+  } else if (query.value) {
+    clearQuery()
+    return true
+  } else {
+    resetPinnedFocus()
+    hideLauncher()
+    return true
+  }
+}
+
 function toggleActionPanel() {
+  if (!actionPanelVisible.value && !activeItemActions.value.length) return false
   actionPanelVisible.value = !actionPanelVisible.value
+  return true
 }
 
 function collectDeclarativeQuery(pluginObj) {
@@ -1856,7 +1888,7 @@ watch(
   align-items: center;
   gap: 6px;
   height: 28px;
-  padding: 0 4px 0 8px;
+  padding: 0 8px;
   border: none;
   border-radius: var(--rc-radius-md);
   background: transparent;

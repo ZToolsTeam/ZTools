@@ -227,7 +227,7 @@ test('冒充：篡改令牌、跨窗口使用、插件窗口带令牌、畸形�
     assert.equal(admit(h, h.main, envelope('credential_v1_status', {}, flipped)).caller.attributedPlugin, undefined)
     // 限频：同一窗口 60 秒内只 warn 一次
     admit(h, h.main, envelope('credential_v1_status', {}, flipped))
-    assert.equal(h.logs.entries.filter(entry => entry.level === 'warn' && entry.message.includes('令牌已失效')).length, 1)
+    assert.equal(h.logs.entries.filter(entry => entry.level === 'warn' && entry.message.includes('session token is invalid')).length, 1)
 
     const { contents: other } = h.window(2)
     assert.equal(admit(h, other, envelope('credential_v1_status', {}, token)).caller.attributedPlugin, undefined,
@@ -377,7 +377,7 @@ test('单窗口会话达到上限时淘汰最旧会话并报错日志，新会�
     assert.equal(h.attribution.snapshot().length, 32)
     assert.equal(h.attribution.resolve(1, sessions[0]!.data.token), undefined, '最旧会话被淘汰')
     assert.equal(h.attribution.resolve(1, sessions[32]!.data.token)?.pluginId, 'google-auth')
-    assert.ok(h.logs.entries.some(entry => entry.level === 'error' && entry.message.includes('上限')))
+    assert.ok(h.logs.entries.some(entry => entry.level === 'error' && entry.message.includes('session limit reached')))
     for (const session of sessions) h.attribution.close(h.mainCaller, { sessionId: session.data.sessionId })
     assert.equal(h.attribution.snapshot().length, 0)
 

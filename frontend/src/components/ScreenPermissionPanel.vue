@@ -3,6 +3,7 @@ import { RcAlert, RcButton, RcTag } from '@/components/base'
 import { RotateCwIcon, TriangleAlertIcon } from '@lucide/vue'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { createScreenPermissionController } from '@/utils/screenPermissionController'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 import { useAppI18n } from '@/i18n'
 
 const { t } = useAppI18n()
@@ -51,13 +52,13 @@ const revokeGrant = async grantId => {
   try {
     const result = await sdkInstance.sys.revokeCapabilityGrant(grantId)
     if (result?.success !== true || result.revoked !== true) {
-      throw new Error(typeof result?.error?.message === 'string' ? result.error.message : t('privacy.revokeUnconfirmed'))
+      throw new Error(resolveErrorMessage(result, 'privacy.revokeUnconfirmed'))
     }
     if (!panelActive) return
     await refreshGrants()
   } catch (error) {
     if (panelActive) {
-      const detail = typeof error?.message === 'string' && error.message.trim() ? error.message.trim() : t('privacy.revokeUnconfirmed')
+      const detail = resolveErrorMessage(error, 'privacy.revokeUnconfirmed')
       grantState.value = { ...grantState.value, error: t('privacy.revokeFailed', { detail }) }
     }
   } finally {

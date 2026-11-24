@@ -8,6 +8,7 @@ import test from 'node:test'
 import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { runtimePathsForBusinessDataRoot } from '../../src/main/runtime/runtime-paths.js'
 import { UpdateService, type UpdateSource } from '../../src/main/services/update-service.js'
+import { getLocaleSetting, getResolvedLocale, setLocale } from '../../src/main/i18n/index.js'
 
 // Windows 更新器只在进程边界替换；路径、文件与下载服务使用真实实现，可跨平台回归。
 // 更新来源由主进程版本提供；这里用一个经测试 fetch 读取的通用来源，覆盖与版本无关的校验、比较与下载链路
@@ -101,7 +102,13 @@ test('update service preserves the legacy response shape and verifies downloads'
   assert.equal(calls.length, 2)
   const cancelled = service.cancel()
   assert.deepEqual(cancelled.cancelled, [downloaded.operationId])
-  await new Promise((resolve) => setTimeout(resolve, 10))
+  // cancel() 触发异步 fs.rm 清理，在并发测试磁盘负载下有界轮询等待删除落盘
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    const stillExists = await fs.access(downloaded.path).then(() => true, () => false)
+    if (!stillExists) break
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
   await assert.rejects(fs.access(downloaded.path))
   removeProgressListener()
   await fs.rm(root, { recursive: true, force: true })
@@ -173,7 +180,7 @@ test('App package formats leave install-scope resolution to the native updater',
     assert.equal(launch.argumentsList[0]?.startsWith('--source='), true)
     assert.equal(path.extname(launch.argumentsList[0]?.slice('--source='.length) ?? ''), `.${extension}`)
     assert.equal(launch.argumentsList[1], `--target=${runtimePaths.installRoot}`)
-    assert.deepEqual(launch.argumentsList.slice(2), ['--updated', '--need-cleanup'])
+    assert.deepEqual(launch.argumentsList.slice(2), ['--updated', '--need-cleanup', `--lang=${getResolvedLocale()}`])
     assert.equal(launch.cwd, path.dirname(launch.executable))
     assert.equal(launch.updaterContents, 'updater')
     await assert.rejects(service.install({ type: 'app', version: '3.0.0', downloadUrl, checksum, fileSize: payload.length }), /已交接/)
@@ -300,7 +307,8 @@ test('Windows app update falls back to direct .exe installer when ZToolsUpdater.
     '/S',
     `/D=${runtimePaths.installRoot}`,
     '--updated',
-    '--need-cleanup'
+    '--need-cleanup',
+    `--lang=${getResolvedLocale()}`
   ])
   await portableExeService.stop()
 
@@ -336,7 +344,8 @@ test('Windows app update falls back to direct .exe installer when ZToolsUpdater.
     '/S',
     `/D=${runtimePaths.installRoot}`,
     '--updated',
-    '--need-cleanup'
+    '--need-cleanup',
+    `--lang=${getResolvedLocale()}`
   ])
   await policyBlockedService.stop()
 

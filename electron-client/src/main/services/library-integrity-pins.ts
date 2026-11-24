@@ -48,6 +48,6 @@ export interface LibraryMetadataSource {
 export const pinnedLibraryMetadataSource: LibraryMetadataSource = Object.freeze({
   async resolve(libId: string): Promise<RawLibraryMetadata> {
     if (libId === ffmpeg.libId) return { ...ffmpeg }
-    throw new ZToolsError(errorCodes.notSupported, `单机模式不支持在线获取公共库 ${libId}`)
+    throw new ZToolsError(errorCodes.notSupported, `Offline mode does not support online fetching of common library ${libId}`)
   }
 })

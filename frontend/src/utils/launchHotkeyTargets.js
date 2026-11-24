@@ -1,3 +1,5 @@
+import { t } from '@/i18n'
+
 /** 从触发器中识别插件启动快捷键目标。 */
 export function getLaunchHotkeyTarget(trigger) {
   if (!trigger || trigger.type !== 'hotkey') return null
@@ -39,7 +41,7 @@ export function buildLaunchHotkeyMap(triggers, shouldExclude = () => false) {
 export function buildLaunchHotkeyRegistration(target, hotkey) {
   const targetId = typeof target?.id === 'string' ? target.id.trim() : ''
   if (!target || target.kind !== 'plugin' || !targetId) {
-    throw new Error('仅支持为插件注册启动快捷键')
+    throw new Error(t('hotkey.launchModal.pluginOnly'))
   }
 
   return {

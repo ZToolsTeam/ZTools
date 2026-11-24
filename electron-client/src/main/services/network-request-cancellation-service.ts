@@ -53,12 +53,12 @@ export class NetworkRequestCancellationService {
     controller: AbortController
   ): () => void {
     this.#assertRequest(owner, method, messageId)
-    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
     this.#prune()
     const key = ownerKey(owner)
     const requests = this.#active.get(key) ?? new Map<string, ActiveRequest>()
     if (requests.has(messageId) || this.#terminal.get(key)?.has(messageId)) {
-      throw new ZToolsError(errorCodes.invalidRequest, '网络请求标识正在使用或已结束')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Network request ID is already in use or finished')
     }
 
     const cancellations = this.#early.get(key)
@@ -92,15 +92,15 @@ export class NetworkRequestCancellationService {
   ): { readonly accepted: boolean; readonly terminal: boolean } {
     this.#assertRequest(owner, NETWORK_METHOD, messageId)
     if (reason !== 'cancel' && reason !== 'timeout') {
-      throw new ZToolsError(errorCodes.invalidRequest, '网络请求取消原因无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid network request cancellation reason')
     }
-    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
     this.#prune()
     const key = ownerKey(owner)
     const active = this.#active.get(key)?.get(messageId)
     if (active) {
       if (active.method !== NETWORK_METHOD) {
-        throw new ZToolsError(errorCodes.permissionDenied, '网络请求取消目标无效')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Invalid network request cancellation target')
       }
       if (!active.controller.signal.aborted) active.controller.abort(this.#reasonCode(reason))
       // Acceptance means the Main controller was signaled. Transport completion is still awaited separately.
@@ -111,7 +111,7 @@ export class NetworkRequestCancellationService {
     const requests = this.#early.get(key) ?? new Map<string, EarlyCancellation>()
     if (!requests.has(messageId)) {
       if (requests.size >= MAX_EARLY_PER_OWNER || this.#earlyCount >= MAX_EARLY_TOTAL) {
-        throw new ZToolsError(errorCodes.pluginBusy, '网络请求取消标记超过上限')
+        throw new ZToolsError(errorCodes.pluginBusy, 'Network request cancellation marker limit exceeded')
       }
       requests.set(messageId, { reason, expiresAt: this.now() + TOMBSTONE_TTL_MS })
       this.#early.set(key, requests)
@@ -214,7 +214,7 @@ export class NetworkRequestCancellationService {
         typeof owner.pluginInstanceId === 'string' && owner.pluginInstanceId.length > 0
     if (!validOwner || method !== NETWORK_METHOD || !Number.isSafeInteger(owner.webContentsId) || owner.webContentsId <= 0 ||
         typeof messageId !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(messageId)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '网络请求取消调用者无效')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Invalid caller for network request cancellation')
     }
   }
 }

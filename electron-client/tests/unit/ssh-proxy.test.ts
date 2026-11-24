@@ -70,7 +70,7 @@ test('扫描失败明确显示错误；SSH、Git 的失败不伪造空列表或�
   assert.equal(result.proxies.find(row => row.tool === 'npm')!.status, 'ready')
   assert.equal(JSON.stringify(result).includes('FAKE_TOKEN_KEEP'), false)
   assert.equal((await f.apply('npm', { kind: 'set', port: 7890 })).verified, true)
-  await assert.rejects(f.prepare('git', { kind: 'set', port: 7890 }), /读取失败/)
+  await assert.rejects(f.prepare('git', { kind: 'set', port: 7890 }), /read failed/i)
 })
 test('真实 Git、NPM 文件经原生安全组件写入、读回、重启读取与备份恢复', { skip: !mac }, async t => {
   const f = await fixture(t)
@@ -107,22 +107,22 @@ test('备份失败、备份损坏和并发编辑都不覆盖配置', { skip: !ma
   const f = await fixture(t), original = await fs.readFile(f.npm, 'utf8')
   const plan = await f.prepare('npm', { kind: 'set', port: 7890 })
   await fs.rename(f.backupDirectory, f.backupDirectory + '-saved'); await fs.writeFile(f.backupDirectory, 'block')
-  await assert.rejects(f.call({ action: 'apply', planId: plan.planId }), /备份/)
+  await assert.rejects(f.call({ action: 'apply', planId: plan.planId }), /backup/i)
   assert.equal(await fs.readFile(f.npm, 'utf8'), original)
   await fs.unlink(f.backupDirectory); await fs.rename(f.backupDirectory + '-saved', f.backupDirectory)
   const concurrent = await f.prepare('npm', { kind: 'set', port: 7890 }); await fs.appendFile(f.npm, '# user edit\n')
-  await assert.rejects(f.call({ action: 'apply', planId: concurrent.planId }), /已变化/)
+  await assert.rejects(f.call({ action: 'apply', planId: concurrent.planId }), /changed/i)
   assert.equal(await fs.readFile(f.npm, 'utf8'), original + '# user edit\n')
   const written = await f.apply('npm', { kind: 'set', port: 7890 }), beforeCorruption = await fs.readFile(f.npm, 'utf8')
   await fs.writeFile(path.join(f.backupDirectory, written.backupId + '.json'), 'broken FAKE_SECRET')
   const scan = await f.scan(); assert.ok(scan.backupError); assert.equal(scan.ssh.status, 'ready')
-  await assert.rejects(f.prepare('npm', { kind: 'restore', backupId: written.backupId }, scan), /校验失败/)
+  await assert.rejects(f.prepare('npm', { kind: 'restore', backupId: written.backupId }, scan), /verification failed/i)
   assert.equal(await fs.readFile(f.npm, 'utf8'), beforeCorruption)
 })
 test('恢复拒绝抹掉后续编辑；链接、硬链接和只读文件不能被写入', { skip: !mac }, async t => {
   const f = await fixture(t), written = await f.apply('npm', { kind: 'set', port: 7890 })
   await fs.appendFile(f.npm, '# later edit\n')
-  await assert.rejects(f.prepare('npm', { kind: 'restore', backupId: written.backupId }), /保留后续修改/)
+  await assert.rejects(f.prepare('npm', { kind: 'restore', backupId: written.backupId }), /preserve later edits/i)
   await fs.chmod(f.npm, 0o400)
   await assert.rejects(f.apply('npm', { kind: 'set', port: 7891 }), /只读/)
   await fs.chmod(f.npm, 0o600)
@@ -132,16 +132,16 @@ test('恢复拒绝抹掉后续编辑；链接、硬链接和只读文件不能�
 })
 test('状态和计划绑定窗口；SSH 配置变动后需重新扫描，连接只返回打开请求', { skip: !mac }, async t => {
   const f = await fixture(t), scan = await f.scan(), other = { ...caller, webContentsId: 614 }
-  await assert.rejects(f.call({ action: 'connect', sessionId: scan.sessionId, alias: 'fixture' }, other), /不属于/)
+  await assert.rejects(f.call({ action: 'connect', sessionId: scan.sessionId, alias: 'fixture' }, other), /does not belong/i)
   const connected = await f.call({ action: 'connect', sessionId: scan.sessionId, alias: 'fixture' }) as { opened: boolean; connected?: boolean }
   assert.equal(connected.opened, true); assert.equal(connected.connected, undefined)
   assert.ok(f.scripts[0]!.includes("exec '/usr/bin/ssh' 'fixture'"))
   const plan = await f.prepare('git', { kind: 'set', port: 7890 }, scan)
-  await assert.rejects(f.call({ action: 'apply', planId: plan.planId }, other), /不属于/)
+  await assert.rejects(f.call({ action: 'apply', planId: plan.planId }, other), /does not belong/i)
   await fs.appendFile(path.join(f.root, '.ssh/config'), '# changed\n')
-  await assert.rejects(f.call({ action: 'connect', sessionId: scan.sessionId, alias: 'fixture' }), /已变化/)
+  await assert.rejects(f.call({ action: 'connect', sessionId: scan.sessionId, alias: 'fixture' }), /changed/i)
   f.service.closeOwner(caller.webContentsId)
-  await assert.rejects(f.call({ action: 'apply', planId: plan.planId }), /过期/)
+  await assert.rejects(f.call({ action: 'apply', planId: plan.planId }), /expired/i)
 })
 test('配置路径遵循显式环境与 XDG 选择，无法安全确定时失败', { skip: !mac }, async t => {
   const f = await fixture(t), custom = path.join(f.root, 'custom.npmrc')
@@ -203,7 +203,7 @@ test('写入成功后读回失败或外部改动仍返回原对象恢复位置�
       if (written && mode === 'unreadable') throw new Error('fixture readback failed')
       return read(...args)
     })
-    await assert.rejects(f.call({ action: 'apply', planId: plan.planId }), error => error instanceof Error && !!retained && error.message.includes(retained) && error.message.includes('原配置备份'))
+    await assert.rejects(f.call({ action: 'apply', planId: plan.planId }), error => error instanceof Error && !!retained && error.message.includes(retained) && error.message.includes('original backup'))
     assert.ok(retained); assert.equal(await fs.readFile(retained, 'utf8'), original)
     assert.equal((await f.backups.list()).length, 1)
     if (mode === 'changed') assert.ok((await fs.readFile(f.npm, 'utf8')).endsWith('# external change\n'))
@@ -215,7 +215,7 @@ test('终端清理失败不遗漏其余目录，失败项可重试；停止会�
   const dirs = (await fs.readdir(f.root)).filter(name => name.startsWith('ztools-ssh-')), failed = path.join(f.root, dirs[0]!), originalRm = fs.rm
   const mocked = t.mock.method(fs, 'rm', async (...args: Parameters<typeof fs.rm>) => { if (args[0] === failed) throw new Error('fixture cleanup failed'); return originalRm(...args) })
   try {
-    await assert.rejects(launcher.stop(), /清理失败/)
+    await assert.rejects(launcher.stop(), /clean up/i)
     assert.equal((await fs.readdir(f.root)).filter(name => name.startsWith('ztools-ssh-')).length, 1)
   } finally { mocked.mock.restore(); await launcher.stop() }
   let release!: () => void, entered!: () => void
@@ -225,7 +225,7 @@ test('终端清理失败不遗漏其余目录，失败项可重试；停止会�
   await started; let stopped = false
   const closing = pending.stop().then(() => { stopped = true })
   await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(stopped, false)
-  release(); await assert.rejects(opening, /退出/); await closing
+  release(); await assert.rejects(opening, /exiting/i); await closing
   assert.equal((await fs.readdir(f.root)).filter(name => name.startsWith('ztools-ssh-')).length, 0)
 })
 test('运行中操作仅由其所属窗口取消，取消后可以重新读取', { skip: !mac }, async t => {
@@ -243,7 +243,7 @@ test('运行中操作仅由其所属窗口取消，取消后可以重新读取',
   await started
   const otherCancel = await f.call({ action: 'cancel' }, { ...caller, webContentsId: 999 }) as { cancelRequested: boolean }
   assert.equal(otherCancel.cancelRequested, false)
-  await assert.rejects(f.call({ action: 'scan' }), /正在进行/)
+  await assert.rejects(f.call({ action: 'scan' }), /in progress/i)
   await f.call({ action: 'cancel' }); await rejected
   assert.equal((await f.scan()).ssh.status, 'ready')
   assert.equal((await fs.readdir(f.root)).filter(name => name.startsWith('ztools-ssh-')).length, 0)
@@ -256,7 +256,7 @@ test('Windows 终端：SSH 使用系统 OpenSSH 并原样传递隧道参数；�
   const files = new Set(['D:\\Win\\System32\\OpenSSH\\ssh.exe'])
   const launcher = new WindowsTerminalLauncher(start, environment, async file => files.has(file))
   const opened = await launcher.launch('ssh', sshArguments('fixture', { localPort: 15432, remoteHost: 'db.internal', remotePort: 5432 }), signal())
-  assert.equal(opened.opened, true); assert.match(opened.notice, /控制台/)
+  assert.equal(opened.opened, true); assert.match(opened.notice, /console window/i)
   assert.equal(started[0]!.file, 'D:\\Win\\System32\\OpenSSH\\ssh.exe')
   assert.deepEqual(started[0]!.args, ['-N', '-o', 'ExitOnForwardFailure=yes', '-L', '127.0.0.1:15432:db.internal:5432', 'fixture'])
   await launcher.launch('proxy', windowsProxyTerminalArguments(7890), signal())
@@ -265,13 +265,13 @@ test('Windows 终端：SSH 使用系统 OpenSSH 并原样传递隧道参数；�
   assert.deepEqual(Object.keys(env).filter(key => /_proxy$/i.test(key)).sort(), ['ALL_PROXY', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'])
   assert.equal(env.HTTP_PROXY, 'http://127.0.0.1:7890'); assert.equal(env.NO_PROXY, 'corp.local'); assert.equal(env.PATH, 'C:\\bin')
   files.clear()
-  await assert.rejects(launcher.launch('ssh', ['fixture'], signal()), /OpenSSH 客户端/)
-  const failing = new WindowsTerminalLauncher(async () => { throw new Error('系统未能打开新的控制台窗口') }, environment, async () => true)
-  await assert.rejects(failing.launch('ssh', ['fixture'], signal()), /未能打开/)
+  await assert.rejects(launcher.launch('ssh', ['fixture'], signal()), /OpenSSH Client/)
+  const failing = new WindowsTerminalLauncher(async () => { throw new Error('System failed to open a new console window') }, environment, async () => true)
+  await assert.rejects(failing.launch('ssh', ['fixture'], signal()), /failed to open/i)
   const aborted = new AbortController(); aborted.abort()
   await assert.rejects(launcher.launch('proxy', windowsProxyTerminalArguments(1), aborted.signal))
   await launcher.stop(); const before = started.length
-  await assert.rejects(launcher.launch('proxy', windowsProxyTerminalArguments(1), signal()), /已停止/)
+  await assert.rejects(launcher.launch('proxy', windowsProxyTerminalArguments(1), signal()), /stopped/i)
   assert.equal(started.length, before)
   for (const bad of [['HTTP_PROXY=http://evil:1'], ['PATH=C:\\evil'], ['HTTP_PROXY=http://127.0.0.1:1 & calc']]) assert.throws(() => windowsProxyEnvironment({}, bad))
   assert.throws(() => windowsProxyTerminalArguments(0))
@@ -282,7 +282,7 @@ test('Windows Git 查找：按 PATH 顺序取绝对目录，忽略相对路径�
   assert.equal(await findWindowsGit({ PATH: 'bin;"C:\\Program Files\\Git\\cmd";C:\\other' }, found(['bin\\git.exe', 'C:\\Program Files\\Git\\cmd\\git.exe', 'C:\\other\\git.exe'])), 'C:\\Program Files\\Git\\cmd\\git.exe')
   assert.equal(await findWindowsGit({ Path: 'C:\\none', ProgramFiles: 'C:\\PF' }, found(['C:\\PF\\Git\\cmd\\git.exe'])), 'C:\\PF\\Git\\cmd\\git.exe')
   assert.equal(await findWindowsGit({ LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }, found(['C:\\Users\\u\\AppData\\Local\\Programs\\Git\\cmd\\git.exe'])), 'C:\\Users\\u\\AppData\\Local\\Programs\\Git\\cmd\\git.exe')
-  await assert.rejects(findWindowsGit({ PATH: '.;relative' }, found(['.\\git.exe', 'relative\\git.exe'])), /未找到 Git/)
+  await assert.rejects(findWindowsGit({ PATH: '.;relative' }, found(['.\\git.exe', 'relative\\git.exe'])), /Git \(git\.exe\) was not found/)
 })
 
 async function windowsService(t: TestContext, locateGit: () => Promise<string>) {
@@ -323,7 +323,7 @@ test('Windows 未安装 Git：Git 行如实报错且不能预览修改，NPM 照
   const git = snapshot.proxies.find(item => item.tool === 'git')!, npm = snapshot.proxies.find(item => item.tool === 'npm')!
   assert.equal(git.status, 'error'); assert.match(JSON.stringify(git), /git\.exe/)
   assert.equal(npm.status, 'ready'); assert.deepEqual(npm.values!.map(value => value.value), ['http://old:8888'])
-  await assert.rejects(f.call({ action: 'prepare', sessionId: snapshot.sessionId, tool: 'git', change: { kind: 'clear' } }), /读取失败/)
+  await assert.rejects(f.call({ action: 'prepare', sessionId: snapshot.sessionId, tool: 'git', change: { kind: 'clear' } }), /read failed/i)
   const linux = new SshProxyService(new ProxyConfigurationProvider(() => { throw new Error('x') }, f.root, {}, 'linux'), new EnvironmentBackupStore(path.join(f.root, 'b2')), { async launch() { return { success: true, opened: true, notice: '' } }, async stop() {} }, { home: f.root }, 'linux')
-  await assert.rejects(linux.handle({ action: 'scan' }, caller, signal()), /不可用/)
+  await assert.rejects(linux.handle({ action: 'scan' }, caller, signal()), /unavailable/i)
 })

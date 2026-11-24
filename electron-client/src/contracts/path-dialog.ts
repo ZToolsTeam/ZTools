@@ -10,7 +10,7 @@ export interface ReferenceDialogOptions {
 /** v2 dialog hints do not accept legacy absolute paths. The native selection stays in main. */
 export function parseReferenceDialog(value: unknown, mode: 'open' | 'save' | 'folder',
   platform: 'win32' | 'darwin' = process.platform === 'darwin' ? 'darwin' : 'win32'): ReferenceDialogOptions {
-  const invalid = () => new ZToolsError(errorCodes.invalidRequest, '文件引用对话框参数无效')
+  const invalid = () => new ZToolsError(errorCodes.invalidRequest, 'Invalid file reference dialog parameters')
   if (!['open', 'save', 'folder'].includes(mode) || !value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw invalid()
   const v = value as Record<string, unknown>, allowed = mode === 'open' ? ['title', 'filters', 'properties'] :
     mode === 'save' ? ['title', 'filters', 'defaultName'] : ['title', 'access']

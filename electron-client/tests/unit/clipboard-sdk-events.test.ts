@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 function fixture() {
-  const source = ['core/events', 'api/clipboard'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join(String.fromCharCode(10))
+  const source = loadCefIpcSources(['core/events', 'api/clipboard'])
   const constructors = vm.runInNewContext(source + String.fromCharCode(10) + '({ Events, ClipboardAPI })', { window: {}, setTimeout, clearTimeout, console }) as { Events: new (transport: unknown) => { on(key: string, handler: (value: unknown) => void): void; off(key: string, handler?: unknown): void; dispatchEnvelope(value: unknown): void; handlers: Map<string, Set<unknown>> }; ClipboardAPI: new (transport: unknown, events: unknown) => { onChange(handler: unknown): () => void; offChange(handler?: unknown): void } }
   const calls: string[] = [], transport = { call: async (method: string) => { calls.push(method); return { success: true } } }
   const events = new constructors.Events(transport), api = new constructors.ClipboardAPI(transport, events)

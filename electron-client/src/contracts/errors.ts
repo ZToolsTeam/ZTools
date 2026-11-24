@@ -58,6 +58,10 @@ export interface ZToolsErrorDetails {
   hostCode?: string
   path?: string
   fields?: string[]
+  /** 可选的主进程多语言词典键，供错误本地化出口按当前 locale 解析 */
+  i18nKey?: string
+  /** 可选的脱敏插值参数，仅允许非敏感字符串或有限数字 */
+  i18nParams?: Readonly<Record<string, string | number>>
   /**
    * 允许原样返回给调用方的结构化补充信息（例如结束进程超时时仍在运行的 pid）。
    * 只能放可公开的非敏感数据；其余 details 字段只进日志，不出现在 IPC 响应里。
@@ -88,5 +92,5 @@ export function toPublicError(error: unknown): PublicError {
       ? { code: error.code, message: error.message, details: { ...error.details.public } }
       : { code: error.code, message: error.message }
   }
-  return { code: errorCodes.internalError, message: '宿主内部错误' }
+  return { code: errorCodes.internalError, message: 'Internal host error' }
 }

@@ -83,7 +83,7 @@ test('partial multi-selection pin failure revokes acquired refs and cleanup fail
   await assert.rejects(f.dialogs.show('open', { properties: ['multiSelections'] }, caller), /acquire failed/)
   assert.equal(f.revoked.length, 1)
   const failed = fixture(selections); failed.fail(2); failed.failCleanup()
-  await assert.rejects(failed.dialogs.show('open', { properties: ['multiSelections'] }, caller), { code: 'FILE_ERROR', message: '部分文件选择授权释放未确认' })
+  await assert.rejects(failed.dialogs.show('open', { properties: ['multiSelections'] }, caller), { code: 'FILE_ERROR', message: 'Partial file selection grant release could not be confirmed' })
 })
 test('chooser kind and count must agree with requested mode before authority is issued', async () => {
   const folder = fixture([{ absolutePath: directoryPath, kind: 'directory' }])

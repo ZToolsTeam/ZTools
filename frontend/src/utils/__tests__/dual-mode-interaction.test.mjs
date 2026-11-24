@@ -5,8 +5,22 @@
  * 2. 严禁仅写 Happy Path：全面覆盖参数异常、IPC崩溃/超时注入、高频并发竞态锁等。
  */
 
-import { describe, it } from 'vitest'
+import { describe, it, afterEach } from 'vitest'
 import assert from 'node:assert/strict'
+
+/** 在保留 jsdom 原生 window（含 performance / location）的前提下仅替换测试所需桥接字段 */
+function mockWindowBridge({ ztools = undefined, __ztoolsLauncher = undefined } = {}) {
+  if (ztools === undefined) {
+    delete globalThis.window.ztools
+  } else {
+    globalThis.window.ztools = ztools
+  }
+  if (__ztoolsLauncher === undefined) {
+    delete globalThis.window.__ztoolsLauncher
+  } else {
+    globalThis.window.__ztoolsLauncher = __ztoolsLauncher
+  }
+}
 
 
 // 模拟浏览器全局存储与 Window 对象
@@ -48,6 +62,10 @@ import {
 } from '../pinyinSearch.js'
 
 describe('ZTools 双模态交互集成测试', () => {
+  afterEach(() => {
+    mockWindowBridge()
+  })
+
   it('1. [新手默认基线与容错] 首次启动默认应用工作台大界面，损坏存储安全自愈', async () => {
     localStorage.clear()
     _resetWindowModeForTesting()
@@ -76,7 +94,7 @@ describe('ZTools 双模态交互集成测试', () => {
   _resetWindowModeForTesting()
 
   let lastResizedBounds = null
-  globalThis.window = {
+  mockWindowBridge({
     ztools: {
       window: {
         setSize: async (bounds) => {
@@ -85,7 +103,7 @@ describe('ZTools 双模态交互集成测试', () => {
         }
       }
     }
-  }
+  })
 
   // 2.1 切换为极客悬浮条 (Launcher)
   const res1 = await switchWindowMode(WINDOW_MODES.LAUNCHER, { initialQuery: '音频' })
@@ -107,7 +125,7 @@ describe('ZTools 双模态交互集成测试', () => {
   _resetWindowModeForTesting()
 
   // 模拟 Native setSize 失败 (例如 Windows 窗口句柄失效或 IPC 超时)
-  globalThis.window = {
+  mockWindowBridge({
     ztools: {
       window: {
         setSize: async () => {
@@ -115,7 +133,7 @@ describe('ZTools 双模态交互集成测试', () => {
         }
       }
     }
-  }
+  })
 
   // 即使底层报错，前端状态机仍能正常流转，isTransitioning 必须释放
   const res = await switchWindowMode(WINDOW_MODES.LAUNCHER)
@@ -128,7 +146,7 @@ describe('ZTools 双模态交互集成测试', () => {
   _resetWindowModeForTesting()
 
   let callCount = 0
-  globalThis.window = {
+  mockWindowBridge({
     ztools: {
       window: {
         setSize: async () => {
@@ -138,7 +156,7 @@ describe('ZTools 双模态交互集成测试', () => {
         }
       }
     }
-  }
+  })
 
   // 20ms 内连续交替触发 10 次并发切换
   const promises = []
@@ -196,7 +214,7 @@ describe('ZTools 双模态交互集成测试', () => {
   let launcherShowCalled = false
   let launcherExpandCalled = false
 
-  globalThis.window = {
+  mockWindowBridge({
     __ztoolsLauncher: {
       show: async () => {
         launcherShowCalled = true
@@ -207,7 +225,7 @@ describe('ZTools 双模态交互集成测试', () => {
         return { success: true }
       }
     }
-  }
+  })
 
   // 6.1 呼出 Launcher
   await switchWindowMode(WINDOW_MODES.LAUNCHER, { initialQuery: 'test' })
@@ -236,7 +254,7 @@ describe('ZTools 双模态交互集成测试', () => {
     let hotkeyCallback = null
     let launcherShowCount = 0
 
-    globalThis.window = {
+    mockWindowBridge({
       __ztoolsLauncher: {
         show: async () => {
           launcherShowCount++
@@ -251,7 +269,7 @@ describe('ZTools 双模态交互集成测试', () => {
           }
         }
       }
-    }
+    })
 
     initWindowMode()
     await new Promise((r) => setTimeout(r, 10))
@@ -267,7 +285,7 @@ describe('ZTools 双模态交互集成测试', () => {
     _resetWindowModeForTesting()
     let configWritten = null
 
-    globalThis.window = {
+    mockWindowBridge({
       ztools: {
         config: {
           set: async (key, val, _sync, file) => {
@@ -276,7 +294,7 @@ describe('ZTools 双模态交互集成测试', () => {
           }
         }
       }
-    }
+    })
 
     // 7.1 正常设置
     setWakePreference('launcher')

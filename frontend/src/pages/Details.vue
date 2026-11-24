@@ -1,7 +1,7 @@
 <script setup>
 import { RcButton } from '@/components/base'
 import { confirmDialog } from '@/utils/confirmDialog'
-import { ArrowLeftIcon, FileTextIcon, RotateCwIcon, TriangleAlertIcon } from '@lucide/vue'
+import { ArrowLeftIcon, RotateCwIcon, TriangleAlertIcon } from '@lucide/vue'
 import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -22,9 +22,20 @@ import { pluginDetailSections, pluginRatings, auth, onAuthRequired, track } from
 import { getOfficialPlugin, isClientProvidedPlugin } from '@/utils/officialPlugins'
 import { getBundledPluginEntry, isBundledPlugin } from '@/utils/bundledPlugins'
 import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
-import { normalizeCatalogScreenshots } from '@/utils/pluginScreenshots'
+import {
+  normalizeCatalogI18nScreenshots,
+  normalizeCatalogScreenshots,
+  resolveCatalogScreenshotBaseUrl
+} from '@/utils/pluginScreenshots'
 import { useAppI18n } from '@/i18n'
-import { getLocalizedPluginDescription } from '@/utils/pluginI18n'
+import {
+  getLocalizedFeatureCmds,
+  getLocalizedFeatureExplain,
+  getLocalizedPluginDescription,
+  getLocalizedPluginField,
+  getLocalizedPluginScreenshots
+} from '@/utils/pluginI18n'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 
 const { t } = useAppI18n()
 const route = useRoute()
@@ -69,8 +80,22 @@ const isRevoked = computed(() =>
   Boolean(plugin.value?.revoked || pluginsStore.isRevoked(pluginId.value))
 )
 const revokedReason = computed(() =>
-  plugin.value?.revoked_reason || plugin.value?.revokedReason || pluginsStore.getRevokedReason(pluginId.value) || ''
+  getLocalizedPluginField(plugin.value, 'revokedReason') || pluginsStore.getRevokedReason(pluginId.value) || ''
 )
+const localizedScreenshots = computed(() => getLocalizedPluginScreenshots(plugin.value))
+// 从插件实际声明的文本口令中取一个可用示例；无口令的插件只展示简介。
+const usageExample = computed(() => {
+  const entry = plugin.value
+  const features = entry.features ?? entry.manifest?.features
+  if (!Array.isArray(features)) return null
+  for (const feature of features) {
+    const explanation = getLocalizedFeatureExplain(entry, feature)
+    if (!explanation || explanation === feature.code || explanation === feature.id) continue
+    const command = getLocalizedFeatureCmds(entry, feature).find((item) => typeof item === 'string')
+    if (command) return { command, explanation }
+  }
+  return null
+})
 const installError = computed(() =>
   pluginsStore.getInstallError(pluginId.value)
 )
@@ -237,7 +262,19 @@ const load = async () => {
     // 1. 插件详情
     if (results[0].status === 'fulfilled') {
       // 目录不可用时详情来自已安装插件的 plugin.json，其中的 screenshots 只有相对路径，这里只保留可展示的 https 地址
-      plugin.value = { ...results[0].value, screenshots: normalizeCatalogScreenshots(results[0].value?.screenshots) }
+      const detailValue = results[0].value || {}
+      const detailBaseUrl = resolveCatalogScreenshotBaseUrl(detailValue)
+      const normalizedDetailI18n = normalizeCatalogI18nScreenshots(detailValue.i18n, {
+        baseUrl: detailBaseUrl
+      })
+      plugin.value = {
+        ...detailValue,
+        ...(normalizedDetailI18n ? { i18n: normalizedDetailI18n } : {}),
+        screenshots: normalizeCatalogScreenshots(detailValue.screenshots, { baseUrl: detailBaseUrl })
+      }
+      if (!normalizedDetailI18n && Object.hasOwn(plugin.value, 'i18n')) {
+        delete plugin.value.i18n
+      }
       if (!isPluginSupportedOnCurrentPlatform(plugin.value)) {
         error.value = t('details.platformUnsupported')
         loading.value = false
@@ -319,8 +356,8 @@ const load = async () => {
     }
   } catch (e) {
     if (requestId !== loadRequestId) return
-    error.value = e.message || String(e)
-    toastError(t('details.loadFailedToast', { reason: e.message || e }))
+    error.value = resolveErrorMessage(e, 'common.unknownError')
+    toastError(t('details.loadFailedToast', { reason: error.value }))
   } finally {
     if (requestId === loadRequestId) {
       loading.value = false
@@ -417,7 +454,7 @@ const open = async () => {
 
     // 检查是否需要导航到详情页（插件已卸载的情况）
     if (result?.action === 'navigate_to_detail') {
-      toastWarning(result.error || t('details.notInstalledReinstall'))
+      toastWarning(resolveErrorMessage(result, 'details.notInstalledReinstall'))
       // 如果当前不在详情页，则跳转到详情页
       if (
         route.name !== 'details' ||
@@ -434,10 +471,10 @@ const open = async () => {
     if (result?.success) {
       toastSuccess(t('details.pluginLaunched'))
     } else {
-      toastError(t('details.launchFailed', { reason: result?.error || t('common.unknownError') }))
+      toastError(t('details.launchFailed', { reason: resolveErrorMessage(result, 'common.unknownError') }))
     }
   } catch (e) {
-    toastError(t('details.launchFailed', { reason: e.message || e }))
+    toastError(t('details.launchFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
   }
 }
 
@@ -455,7 +492,7 @@ const toggleFavorite = async () => {
     toastSuccess(isFavorite.value ? t('market.favoriteAdded') : t('market.favoriteRemoved'))
   } catch (e) {
     if (!onAuthRequired(e)) {
-      toastError(t('market.operationFailed', { reason: e.message || e }))
+      toastError(t('market.operationFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
     }
   }
 }
@@ -494,7 +531,7 @@ const updatePlugin = async () => {
       } catch (e) {
         // 出错时清除下载状态
         pluginsStore.endDownload(pid)
-        toastError(t('details.updateFailed', { reason: e.message || e }))
+        toastError(t('details.updateFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
       }
     }
   })
@@ -534,10 +571,10 @@ const uninstall = async () => {
               .catch(() => {})
           }
         } else {
-          toastError(t('market.uninstallFailed', { reason: res?.error || t('common.unknownError') }))
+          toastError(t('market.uninstallFailed', { reason: resolveErrorMessage(res, 'common.unknownError') }))
         }
       } catch (e) {
-        toastError(t('market.uninstallFailed', { reason: e.message || e }))
+        toastError(t('market.uninstallFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
       }
     }
   })
@@ -558,10 +595,10 @@ const createShortcut = async () => {
       // 埋点：创建桌面快捷方式
       track('shortcut_create', pluginId.value)
     } else {
-      toastError(t('details.shortcutFailed', { reason: res?.error || t('common.unknownError') }))
+      toastError(t('details.shortcutFailed', { reason: resolveErrorMessage(res, 'common.unknownError') }))
     }
   } catch (e) {
-    toastError(t('details.shortcutFailed', { reason: e.message || e }))
+    toastError(t('details.shortcutFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
   } finally {
     creatingShortcut.value = false
   }
@@ -620,7 +657,7 @@ const handleInstallComplete = async (envelope) => {
         // 无需再次调用 fetchInstalledPlugins，避免竞态条件
         // isInstalled 和 downloading 计算属性会自动响应状态变化
       } else {
-        const reason = payload.error || t('common.unknownError')
+        const reason = resolveErrorMessage(payload, 'common.unknownError')
         toastError(payload.isUpdate ? t('details.updateFailed', { reason }) : t('market.installFailed', { reason }))
       }
     }
@@ -713,46 +750,45 @@ onBeforeUnmount(() => {
 
     <!-- 正常内容 -->
     <div v-else>
-      <PluginDetailHeader
-        :plugin="plugin"
-        :isInstalled="isInstalled"
-        :isBundled="isBundled"
-        :canUninstall="canUninstall"
-        :canCreateShortcut="canCreateShortcut"
-        :hasUpdate="hasUpdate"
-        :downloading="downloading"
-        :installFailed="installFailed"
-        :installError="installError"
-        :isRevoked="isRevoked"
-        :revokedReason="revokedReason"
-        :isFavorite="isFavorite"
-        :downloadProgress="downloadProgress"
-        :downloadPhase="downloadPhase"
-        :libIndex="libIndex"
-        :libTotal="libTotal"
-        :updateInfo="updateInfo"
-        :hotkeyText="hotkeyText"
-        :creatingShortcut="creatingShortcut"
-        :commentsCount="commentsCount"
-        :ratingSummary="ratingSummary"
-        @open="open"
-        @update="updatePlugin"
-        @uninstall="uninstall"
-        @download="downloadPlugin"
-        @toggle-favorite="toggleFavorite"
-        @create-shortcut="createShortcut"
-        @set-hotkey="setHotkey"
-        @show-comments="showComments"
-      />
-
-      <!-- 插件详情卡：截图、介绍，以及版本附加的详情区块（官方版：可折叠的版本记录） -->
-      <section class="detail-card" data-section="detail">
-        <h2 class="card-title">
-          <FileTextIcon aria-hidden="true" />
-          {{ t('details.sectionTitle') }}
-        </h2>
-        <PluginScreenshots :screenshots="plugin.screenshots" />
+      <section class="detail-card detail-overview" data-section="detail">
+        <PluginDetailHeader
+          :plugin="plugin"
+          :isInstalled="isInstalled"
+          :isBundled="isBundled"
+          :canUninstall="canUninstall"
+          :canCreateShortcut="canCreateShortcut"
+          :hasUpdate="hasUpdate"
+          :downloading="downloading"
+          :installFailed="installFailed"
+          :installError="installError"
+          :isRevoked="isRevoked"
+          :revokedReason="revokedReason"
+          :isFavorite="isFavorite"
+          :downloadProgress="downloadProgress"
+          :downloadPhase="downloadPhase"
+          :libIndex="libIndex"
+          :libTotal="libTotal"
+          :updateInfo="updateInfo"
+          :hotkeyText="hotkeyText"
+          :creatingShortcut="creatingShortcut"
+          :commentsCount="commentsCount"
+          :ratingSummary="ratingSummary"
+          @open="open"
+          @update="updatePlugin"
+          @uninstall="uninstall"
+          @download="downloadPlugin"
+          @toggle-favorite="toggleFavorite"
+          @create-shortcut="createShortcut"
+          @set-hotkey="setHotkey"
+          @show-comments="showComments"
+        />
         <PluginDescription :description="getLocalizedPluginDescription(plugin)" />
+        <p v-if="usageExample" class="usage-example">
+          <span class="usage-label">{{ t('details.usageExample') }}</span>
+          <span class="usage-command">{{ usageExample.command }}</span>
+          <span>{{ usageExample.explanation }}</span>
+        </p>
+        <PluginScreenshots :screenshots="localizedScreenshots" />
         <component
           :is="section.component"
           v-for="section in detailSections"
@@ -948,18 +984,29 @@ onBeforeUnmount(() => {
   margin-top: 12px;
 }
 
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 16px;
-  color: var(--rc-text-primary);
-  font-size: var(--rc-fs-emph);
-  font-weight: 600;
+.detail-overview {
+  display: grid;
+  gap: 16px;
 }
 
-.card-title :deep(.lucide) {
+.usage-example {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0;
+  color: var(--rc-text-secondary);
+  font-size: var(--rc-fs-body);
+}
+
+.usage-label {
   color: var(--rc-text-muted);
+  font-size: var(--rc-fs-small);
+}
+
+.usage-command {
+  color: var(--rc-text-primary);
+  font-weight: 600;
 }
 
 /* 响应式 */

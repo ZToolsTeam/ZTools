@@ -73,16 +73,21 @@ function isPrintableAscii(text) {
 export function buildWifiPayload(ssid, password, security, hidden = false) {
     const s = qrGenStrings();
     const esc = (v) => v.replace(/([\\;,:"])/g, "\\$1");
+    const makeCodedError = (message, code) => {
+        const err = new Error(message);
+        err.code = code;
+        return err;
+    };
     if (!ssid)
-        throw new Error(s.wifiSsidEmpty);
+        throw makeCodedError(s.wifiSsidEmpty, "WIFI_SSID_EMPTY");
     if (security !== "nopass" && !password)
-        throw new Error(s.wifiPasswordRequired);
+        throw makeCodedError(s.wifiPasswordRequired, "WIFI_PASSWORD_INVALID");
     // 长度不合规的密码路由器本来就不接受，生成的二维码手机扫了也连不上，提前拦下
     if (security === "WPA" && !((isPrintableAscii(password) && password.length >= 8 && password.length <= 63) || /^[0-9a-fA-F]{64}$/.test(password))) {
-        throw new Error(s.wifiWpaInvalid);
+        throw makeCodedError(s.wifiWpaInvalid, "WIFI_PASSWORD_INVALID");
     }
     if (security === "WEP" && !((isPrintableAscii(password) && (password.length === 5 || password.length === 13)) || /^(?:[0-9a-fA-F]{10}|[0-9a-fA-F]{26})$/.test(password))) {
-        throw new Error(s.wifiWepInvalid);
+        throw makeCodedError(s.wifiWepInvalid, "WIFI_PASSWORD_INVALID");
     }
     return `WIFI:T:${security};S:${esc(ssid)};${security === "nopass" ? "" : `P:${esc(password)};`}${hidden ? "H:true;" : ""};`;
 }

@@ -6,7 +6,13 @@
  */
 
 import { getLocalPlugins } from './native'
-import { normalizeCategoryNames, sortCategories } from '../utils/pluginCategories'
+import {
+  CATEGORY_ID_TO_NAME,
+  getPluginCategoryIds,
+  isAllCategory,
+  normalizeCategoryIds,
+  sortCategories
+} from '../utils/pluginCategories'
 import { getPluginPlatforms } from '../utils/platform'
 import { checkCompat, fetchVersions } from '../composables/useVersionCompat'
 import {
@@ -18,6 +24,7 @@ import {
   resolveUpdatePlatform,
   normalizePluginVersionError
 } from './pluginCatalog'
+import { t } from '@/i18n'
 
 export {
   PLUGIN_VERSION_INCOMPATIBLE,
@@ -28,7 +35,7 @@ export {
 
 export const PLUGIN_NOT_IN_CATALOG = 'PLUGIN_NOT_IN_CATALOG'
 
-function createNotInCatalogError(pluginId, message = '插件市场未收录该插件') {
+function createNotInCatalogError(pluginId, message = t('pluginApi.notInCatalog')) {
   const err = new Error(message)
   err.code = PLUGIN_NOT_IN_CATALOG
   err.pluginId = String(pluginId || '')
@@ -55,11 +62,20 @@ export async function getCategories() {
   const counts = new Map()
   for (const entry of entries) {
     if (!entry || typeof entry !== 'object' || !(entry.id || entry.pluginId) || entry.revoked || entry.draft) continue
-    for (const name of normalizeCatalogEntry(entry).category) {
-      counts.set(name, (counts.get(name) || 0) + 1)
+    const normalized = normalizeCatalogEntry(entry)
+    for (const id of getPluginCategoryIds(normalized.categoryId || normalized.category)) {
+      counts.set(id, (counts.get(id) || 0) + 1)
     }
   }
-  return sortCategories([...counts].map(([name, pluginsCount]) => ({ id: name, name, slug: name, pluginsCount })))
+  return sortCategories(
+    [...counts].map(([id, pluginsCount]) => ({
+      id,
+      slug: id,
+      name: CATEGORY_ID_TO_NAME[id] || id,
+      labelKey: `categories.${id}`,
+      pluginsCount
+    }))
+  )
 }
 
 /**
@@ -96,9 +112,11 @@ export async function getMarketPlugins(params = {}) {
 
   const keyword = String(params.search || params.keyword || '').trim().toLowerCase()
   if (keyword) items = items.filter((entry) => matchesKeyword(entry, keyword))
-  if (params.category && !['all', '全部'].includes(params.category)) {
-    const categories = normalizeCategoryNames(params.category)
-    items = items.filter((entry) => entry.category.some((name) => categories.includes(name)))
+  if (params.category && !isAllCategory(params.category)) {
+    const categoryIds = normalizeCategoryIds(params.category)
+    items = items.filter((entry) =>
+      getPluginCategoryIds(entry.categoryId || entry.category).some((id) => categoryIds.includes(id))
+    )
   }
   if (params.sort === 'downloads') {
     items = [...items].sort((a, b) => (Number(b.downloads) || 0) - (Number(a.downloads) || 0))
@@ -147,11 +165,11 @@ export async function getDownloadSign(pluginId) {
   // 安装前重新读取目录，不能把列表缓存或离线快照当作仍可安装的依据。
   const entry = await findInV2StaticCatalog(pluginId, { forceRefresh: true })
   const info = buildCatalogDownloadInfo(entry)
-  if (!info) throw createNotInCatalogError(pluginId, '插件市场未收录该插件或缺少下载信息')
+  if (!info) throw createNotInCatalogError(pluginId, t('pluginApi.notInCatalogOrMissingDownload'))
   const platform = await resolveUpdatePlatform()
   const platforms = getPluginPlatforms(entry)
   if (platforms && !platforms.includes(platform)) {
-    const error = new Error('该插件不支持当前平台')
+    const error = new Error(t('pluginApi.platformUnsupported'))
     error.code = 'PLUGIN_PLATFORM_UNSUPPORTED'
     throw error
   }

@@ -7,6 +7,9 @@
  * 不使用 v-html，避免把字符串当作 HTML 注入。
  */
 
+import { getCategoryId, isAllCategory } from './pluginCategories'
+import { KEYWORD_GLYPHS } from './brandIcons.zh-data'
+
 const p = (d) => ['path', { d }]
 const r = (x, y, width, height, rx) => ['rect', { x, y, width, height, rx }]
 const c = (cx, cy, rr) => ['circle', { cx, cy, r: rr }]
@@ -224,21 +227,28 @@ export const OFFICIAL_PLUGIN_GLYPHS = Object.freeze({
   'invoice-assistant': 'invoice'
 })
 
-/** 侧边栏 / 市场分类 → 图形 */
+/** 侧边栏 / 市场分类（标准 categoryId 主键）→ 图形 */
 export const CATEGORY_GLYPHS = Object.freeze({
-  全部: 'grid',
-  系统工具: 'wrench',
-  办公效率: 'briefcase',
-  文件管理: 'folder',
-  图像媒体: 'image',
-  其他工具: 'apps',
-  媒体处理: 'image',
-  图像视频: 'image',
-  安全工具: 'shield',
-  安全隐私: 'shield',
-  网络工具: 'wifi',
-  开发工具: 'terminal'
+  all: 'grid',
+  system: 'wrench',
+  productivity: 'briefcase',
+  files: 'folder',
+  media: 'image',
+  developer: 'terminal',
+  network: 'wifi',
+  security: 'shield',
+  other: 'apps'
 })
+
+/** 按标准 categoryId 或旧中文分类名解析侧边栏分类图形 */
+export function getCategoryGlyph(categoryIdOrName) {
+  if (isAllCategory(categoryIdOrName)) return CATEGORY_GLYPHS.all
+  if (typeof categoryIdOrName === 'string' && Object.hasOwn(CATEGORY_GLYPHS, categoryIdOrName.trim())) {
+    return CATEGORY_GLYPHS[categoryIdOrName.trim()]
+  }
+  const id = getCategoryId(categoryIdOrName)
+  return CATEGORY_GLYPHS[id] || 'folder'
+}
 
 export function isGlyph(kind) {
   return typeof kind === 'string' && Object.hasOwn(GLYPHS, kind)
@@ -289,29 +299,8 @@ export function resolveItemGlyph(item) {
 
 /**
  * 没有自带图标的第三方插件：按名称关键词挑一个同风格的线性图形（放在中性底块里，与官方插件的彩色底块区分）。
- * 按顺序匹配，越具体的关键词越靠前；都不匹配时返回空字符串，由调用方显示默认立方体。
+ * 静态关键词表独立维护在 brandIcons.zh-data.js 中；都不匹配时返回空字符串，由调用方显示默认立方体。
  */
-const KEYWORD_GLYPHS = Object.freeze([
-  ['剪贴板', 'clipboard'], ['截图', 'crop'], ['录屏', 'video'], ['录音', 'audio'],
-  ['二维码', 'qr'], ['ocr', 'ocr'], ['文字识别', 'ocr'],
-  ['定时关机', 'clock'], ['关机', 'power'], ['待办', 'check'], ['备忘', 'note'], ['便签', 'note'], ['笔记', 'note'],
-  ['身份验证', 'key'], ['验证器', 'key'], ['2fa', 'key'], ['hosts', 'link'], ['base64', 'hash'],
-  ['时间戳', 'clock'], ['万年历', 'clock'], ['日历', 'clock'], ['时钟', 'clock'],
-  ['翻译', 'translate'], ['计算', 'calculator'], ['取色', 'color'], ['颜色', 'color'], ['json', 'json'], ['正则', 'terminal'],
-  ['金额', 'currency'], ['汇率', 'currency'], ['编码', 'hash'],
-  ['清理', 'broom'], ['清除', 'broom'], ['垃圾', 'trash'], ['粉碎', 'trash'], ['卸载', 'trash'],
-  ['进程', 'process'], ['内存', 'process'], ['硬件', 'process'], ['监控', 'pulse'], ['测速', 'gauge'], ['加速', 'gauge'], ['优化', 'gauge'],
-  ['磁盘', 'disk'], ['硬盘', 'disk'], ['数据库', 'disk'], ['sql', 'disk'],
-  ['备份', 'archive'], ['恢复', 'update'], ['同步', 'update'], ['压缩', 'compress'], ['解压', 'compress'],
-  ['重命名', 'rename'], ['搜索', 'filesearch'], ['查找', 'filesearch'], ['文件夹', 'folder'], ['文件', 'folder'],
-  ['图片', 'image'], ['图像', 'image'], ['视频', 'video'], ['音频', 'audio'], ['音乐', 'audio'], ['pdf', 'pdf'], ['发票', 'invoice'],
-  ['网络', 'wifi'], ['wifi', 'wifi'], ['下载', 'download'], ['代理', 'link'], ['链接', 'link'],
-  ['安全', 'shield'], ['加密', 'lock'], ['密码', 'lock'],
-  ['窗口', 'window'], ['快捷键', 'keyboard'], ['键盘', 'keyboard'], ['软件', 'package'], ['启动', 'power'], ['应用', 'apps'],
-  ['对比', 'diff'], ['文本', 'plaintext'], ['markdown', 'book'], ['代码', 'terminal'], ['开发', 'terminal'], ['git', 'branch'],
-  ['数字', 'hash'], ['设置', 'settings'], ['管理', 'settings'], ['工具', 'wrench']
-])
-
 export function resolveKeywordGlyph(name) {
   const text = String(name || '').toLowerCase()
   if (!text) return ''

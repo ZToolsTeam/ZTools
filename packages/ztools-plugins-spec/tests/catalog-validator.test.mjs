@@ -12,6 +12,7 @@ import {
   validateStoreCatalog,
   PERMISSIONS,
   PLUGIN_CATEGORIES,
+  PLUGIN_CATEGORY_IDS,
   HIGH_RISK_PERMISSIONS,
   OFFICIAL_PLUGIN_IDS,
   isOfficialAuthorName
@@ -52,7 +53,7 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
           version: '1.0.0'
         })
         assert.equal(res.valid, false, `ID "${id}" 应被判定为无效`)
-        assert.ok(res.errors.some((e) => e.includes('id 无效')))
+        assert.ok(res.errors.some((e) => e.includes('Invalid plugin id')))
       }
     })
 
@@ -65,7 +66,7 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
           version
         })
         assert.equal(res.valid, false, `version "${version}" 应被判定为无效`)
-        assert.ok(res.errors.some((e) => e.includes('semver')))
+        assert.ok(res.errors.some((e) => e.includes('SemVer')))
       }
     })
 
@@ -120,6 +121,74 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
       })
       assert.equal(res.valid, false)
       assert.ok(res.errors.some((e) => e.includes('revoked')))
+    })
+
+    it('Happy Case: 支持校验合法的 defaultLocale、categoryId 与多语言 i18n（含目录截图）', () => {
+      const validItem = {
+        id: 'i18n-catalog-demo',
+        name: '多语言目录插件',
+        version: '1.0.0',
+        defaultLocale: 'zh-CN',
+        categoryId: ['files', 'productivity'],
+        features: [{ code: 'inspect', explain: '查看内容' }],
+        i18n: {
+          'en-US': {
+            name: 'Multilingual Catalog Plugin',
+            description: 'Catalog entry with localized metadata and screenshots',
+            keywords: ['i18n', 'catalog'],
+            features: {
+              inspect: { explain: 'Inspect contents', cmds: ['inspect'] }
+            },
+            screenshots: [
+              {
+                url: 'https://cdn.ztools.cn/plugins-v2/dev/i18n-catalog-demo/screenshots/1.0.0/en-US/01-12345678.png',
+                title: 'Main View',
+                width: 1280,
+                height: 800
+              }
+            ]
+          }
+        }
+      }
+      const res = validateCatalogPluginItem(validItem)
+      assert.equal(res.valid, true, res.errors.join('; '))
+      assert.equal(validateCatalogPluginItem({ ...validItem, categoryId: 'developer' }).valid, true)
+    })
+
+    it('异常测试: 拦截非法的 defaultLocale、categoryId 与 i18n 结构及目录截图', () => {
+      const badItem = {
+        id: 'i18n-catalog-bad',
+        name: '错误多语言插件',
+        version: '1.0.0',
+        defaultLocale: 'zh_CN',
+        categoryId: ['developer', 'unknown-cat'],
+        features: [{ code: 'real-code', explain: '真实命令' }],
+        i18n: {
+          en_US: {
+            name: '   ',
+            description: '',
+            extraKey: true,
+            keywords: [''],
+            features: {
+              'wrong-code': { explain: '' }
+            },
+            screenshots: [
+              { url: 'http://insecure.example.com/01.png', width: 800, height: 600 }
+            ]
+          }
+        }
+      }
+      const res = validateCatalogPluginItem(badItem)
+      assert.equal(res.valid, false)
+      assert.ok(res.errors.some((e) => e.includes('Invalid defaultLocale format')))
+      assert.ok(res.errors.some((e) => e.includes('Unknown or non-standard categoryId')))
+      assert.ok(res.errors.some((e) => e.includes('Invalid i18n locale tag')))
+      assert.ok(res.errors.some((e) => e.includes('contains unknown fields: extraKey')))
+      assert.ok(res.errors.some((e) => e.includes('.name must be a non-empty string')))
+      assert.ok(res.errors.some((e) => e.includes('.description must be a non-empty string')))
+      assert.ok(res.errors.some((e) => e.includes('not present in top-level manifest.features')))
+      assert.ok(res.errors.some((e) => e.includes('screenshots[0]')))
+      assert.equal(validateCatalogPluginItem({ id: 'bad-root', name: '测试', version: '1.0.0', i18n: ['en-US'] }).valid, false)
     })
   })
 
@@ -181,7 +250,7 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
       }
       const result = validateStoreCatalog(catalogWithDuplicates)
       assert.equal(result.valid, false)
-      assert.ok(result.errors.some((e) => e.includes('存在重复的插件 ID')))
+      assert.ok(result.errors.some((e) => e.includes('duplicate plugin ID')))
     })
 
     it('混合容错测试: 部分条目损坏时的精准定位与统计', () => {
@@ -197,7 +266,7 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
       assert.equal(result.valid, false)
       assert.equal(result.totalValid, 2)
       assert.equal(result.errors.length, 1)
-      assert.ok(result.errors[0].includes('plugins[1] 校验失败'))
+      assert.ok(result.errors[0].includes('plugins[1] validation failed'))
     })
   })
 
@@ -226,7 +295,7 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
         assert.equal(res.valid, true, res.errors.join('; '))
         // 大小写不同的近似名不算
         const typo = validatePluginManifest({ ...manifest, permissions: ['Process'] }, { baseDir: tmpDir })
-        assert.ok(typo.errors.some((e) => e.includes('未知的权限声明')))
+        assert.ok(typo.errors.some((e) => e.includes('Unknown permission')))
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true })
       }
@@ -262,8 +331,8 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
         const res = validatePluginManifest(manifest, { baseDir: tmpDir })
         assert.equal(res.valid, true, res.errors.join('; '))
         assert.deepEqual(getManifestPlatforms(manifest), ['windows', 'macos'])
-        assert.equal(describePlatforms(['windows', 'macos']), '跨平台')
-        assert.equal(describePlatforms(['windows']), '仅 Windows')
+        assert.equal(describePlatforms(['windows', 'macos']), 'Cross-platform')
+        assert.equal(describePlatforms(['windows']), 'Windows only')
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true })
       }
@@ -295,10 +364,10 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
         for (const mode of ['menu-bar', 'Menu-Bar', 'VIEW', '', 1, null]) {
           const top = validatePluginManifest({ ...manifest, mode }, { baseDir: tmpDir })
           assert.equal(top.valid, false, `顶层 mode=${JSON.stringify(mode)} 应被拒绝`)
-          assert.ok(top.errors.some((e) => e.startsWith('mode 必须为以下取值之一: view, no-view')), top.errors.join('; '))
+          assert.ok(top.errors.some((e) => e.startsWith('mode must be one of: view, no-view')), top.errors.join('; '))
           const feat = validatePluginManifest({ ...manifest, features: [{ code: 'a', explain: '命令', mode }] }, { baseDir: tmpDir })
           assert.equal(feat.valid, false, `features[0].mode=${JSON.stringify(mode)} 应被拒绝`)
-          assert.ok(feat.errors.some((e) => e.startsWith('features[0].mode 必须为以下取值之一')), feat.errors.join('; '))
+          assert.ok(feat.errors.some((e) => e.startsWith('features[0].mode must be one of')), feat.errors.join('; '))
         }
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true })
@@ -323,19 +392,19 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
       }
       const res = validatePluginManifest(badManifest)
       assert.equal(res.valid, false)
-      assert.ok(res.errors.some((e) => e.includes('entry 路径不合法')))
-      assert.ok(res.errors.some((e) => e.includes('icon 路径不合法')))
-      assert.ok(res.errors.some((e) => e.includes('main 路径不合法')))
-      assert.ok(res.errors.some((e) => e.includes('未知的权限声明')))
-      assert.ok(res.errors.some((e) => e.includes('重复声明的权限')))
-      assert.ok(res.errors.some((e) => e.includes('缺少必填字段: targets')))
-      assert.ok(res.errors.some((e) => e.includes('缺少必填字段: category')))
+      assert.ok(res.errors.some((e) => e.includes('Invalid entry path')))
+      assert.ok(res.errors.some((e) => e.includes('Invalid icon path')))
+      assert.ok(res.errors.some((e) => e.includes('Invalid main path')))
+      assert.ok(res.errors.some((e) => e.includes('Unknown permission')))
+      assert.ok(res.errors.some((e) => e.includes('Duplicate permission')))
+      assert.ok(res.errors.some((e) => e.includes('Missing required field: targets')))
+      assert.ok(res.errors.some((e) => e.includes('Missing required field: category')))
     })
 
-    it('category 只接受 1-2 个标准 7 大分类，拒绝漏填、非数组、重复、其他工具或英文别名；已下架条目豁免', () => {
+    it('category 只接受 1-2 个标准 7 大分类（中文名或英文 slug），拒绝漏填、非数组、重复、其他工具或非标英文别名；已下架条目豁免', () => {
       const schema = JSON.parse(fs.readFileSync(new URL('../plugin.schema.json', import.meta.url), 'utf8'))
       assert.ok(schema.required.includes('category'))
-      assert.deepEqual(schema.properties.category.items.enum, [...PLUGIN_CATEGORIES])
+      assert.deepEqual(schema.properties.category.items.enum, [...PLUGIN_CATEGORIES, ...PLUGIN_CATEGORY_IDS])
 
       const base = {
         id: 'cat-test',
@@ -349,22 +418,89 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
         targets: buildPlatformTargets(['windows']),
         nativeComponents: []
       }
-      for (const cat of PLUGIN_CATEGORIES) {
+      for (const cat of [...PLUGIN_CATEGORIES, ...PLUGIN_CATEGORY_IDS]) {
         assert.equal(validatePluginManifest({ ...base, category: [cat] }).valid, true, cat)
       }
-      assert.equal(validatePluginManifest({ ...base, category: ['文件管理', '系统工具'] }).valid, true)
+      assert.equal(validatePluginManifest({ ...base, category: ['文件管理', '系统工具'], categoryId: ['files', 'system'] }).valid, true)
+      assert.equal(validatePluginManifest({ ...base, category: ['developer'], categoryId: 'developer' }).valid, true)
       assert.equal(validatePluginManifest({ ...base, revoked: true, revokedReason: '下架' }).valid, true)
 
-      for (const bad of [undefined, null, '', '系统工具', [], ['办公效率', '系统工具', '开发工具'], ['办公效率', '办公效率'], ['其他工具'], ['utility'], ['效率工具'], ['AI工具'], ['金融理财']]) {
+      for (const bad of [undefined, null, '', '系统工具', [], ['办公效率', '系统工具', '开发工具'], ['办公效率', '办公效率'], ['开发工具', 'developer'], ['其他工具'], ['utility'], ['效率工具'], ['AI工具'], ['金融理财']]) {
         const res = validatePluginManifest({ ...base, category: bad })
         assert.equal(res.valid, false, `category=${JSON.stringify(bad)} 应被拦截`)
       }
+    })
+
+    it('i18n.features 交叉校验：必须全部存在于顶层 manifest.features 中，顶层未定义 features 时拒绝声明 i18n.features', () => {
+      const base = {
+        id: 'i18n-feat-check',
+        name: '功能翻译校验',
+        version: '1.0.0',
+        description: '校验 i18n.features 与顶层 features 的对应关系',
+        author: 'dev',
+        category: ['开发工具'],
+        categoryId: 'developer',
+        defaultLocale: 'zh-CN',
+        entry: 'dist/index.js',
+        icon: 'icon.svg',
+        permissions: [],
+        targets: buildPlatformTargets(['windows']),
+        nativeComponents: []
+      }
+
+      // 1. 顶层与 i18n.features 精确匹配 -> 通过
+      const ok = validatePluginManifest({
+        ...base,
+        features: [
+          { code: 'open-main', explain: '打开主界面' },
+          { code: 'quick-copy', explain: '快速复制' }
+        ],
+        i18n: {
+          'en-US': {
+            name: 'Feature I18n Check',
+            description: 'Validate feature translation keys',
+            features: {
+              'open-main': { explain: 'Open Main View', cmds: ['open'] }
+            }
+          }
+        }
+      })
+      assert.equal(ok.valid, true, ok.errors.join('; '))
+
+      // 2. 写错 code -> 报错
+      const typoCode = validatePluginManifest({
+        ...base,
+        features: [{ code: 'open-main', explain: '打开主界面' }],
+        i18n: {
+          'en-US': {
+            features: {
+              'open-mian': { explain: 'Typo Code' }
+            }
+          }
+        }
+      })
+      assert.equal(typoCode.valid, false)
+      assert.ok(typoCode.errors.some((e) => e.includes('open-mian') && e.includes('not present in top-level manifest.features')))
+
+      // 3. 顶层没有 features 却声明了 i18n[loc].features -> 报错
+      const missingTop = validatePluginManifest({
+        ...base,
+        i18n: {
+          'en-US': {
+            features: {
+              main: { explain: 'Main Command' }
+            }
+          }
+        }
+      })
+      assert.equal(missingTop.valid, false)
+      assert.ok(missingTop.errors.some((e) => e.includes('top-level features is not defined')))
     })
   })
 
   describe('官方名单与官方作者名', () => {
     const base = { name: '测试', version: '1.0.0', description: '测试', category: ['办公效率'], entry: 'dist/index.js', icon: 'icon.svg', permissions: [], targets: buildPlatformTargets(['windows']), nativeComponents: [] }
-    const authorErrors = (manifest) => validatePluginManifest(manifest).errors.filter((e) => e.includes('官方名称'))
+    const authorErrors = (manifest) => validatePluginManifest(manifest).errors.filter((e) => e.includes('official name'))
 
     it('名单来自 official-ids.json：109 个 ID、无重复、格式合法', () => {
       const raw = JSON.parse(fs.readFileSync(new URL('../official-ids.json', import.meta.url), 'utf8'))

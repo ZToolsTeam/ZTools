@@ -53,9 +53,10 @@ describe('分类列表补上内置插件用到的分类', () => {
   it('远端已有同名分类时不重复添加；坏数据不崩溃', () => {
     const merged = mergeLocalCategories([...REMOTE, { id: 9, name: '开发工具' }])
     expect(merged.filter((c) => c.name === '开发工具')).toHaveLength(1)
-    expect(merged.find((c) => c.name === '开发工具').id).toBe('开发工具')
+    expect(merged.find((c) => c.name === '开发工具').id).toBe('developer')
+    expect(merged.find((c) => c.name === '开发工具').slug).toBe('developer')
     expect(() => mergeLocalCategories(null)).not.toThrow()
-    expect(mergeLocalCategories([null, undefined]).every((entry) => entry?.name)).toBe(true)
+    expect(mergeLocalCategories([null, undefined]).every((entry) => entry?.name && entry?.id)).toBe(true)
   })
 
   it('[回归] 内置插件多分类标签统一收敛为标准四字分类，侧栏绝不出现带斜杠的超长复合分类名', async () => {

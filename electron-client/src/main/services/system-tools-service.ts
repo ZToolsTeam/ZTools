@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
 import { getResolvedLocale, SUPPORTED_LOCALES, t } from '../i18n/index.js'
+import { SYSTEM_TOOLS_ZH_META } from './system-tools.zh-data.js'
 
 export interface SystemToolTarget {
   id: string
@@ -89,394 +90,165 @@ function externalCandidate(launcher: string, url: string): ExternalCandidate {
   return { kind: 'external', launcher, url }
 }
 
+function createTarget(
+  id: string,
+  category: string,
+  iconSource: string,
+  candidates: readonly LaunchCandidate[]
+): TargetDefinition {
+  const meta = SYSTEM_TOOLS_ZH_META[id]
+  return {
+    id,
+    name: meta?.name ?? id,
+    category,
+    description: meta?.description ?? '',
+    iconSource,
+    candidates
+  }
+}
+
 const control = system32File('control.exe')
 const explorer = system32File('explorer.exe')
 const mmc = system32File('mmc.exe')
 const systemTools: readonly TargetDefinition[] = [
-  {
-    id: 'control_panel',
-    name: '控制面板',
-    category: 'core',
-    description: '打开经典控制面板',
-    iconSource: 'shell:ControlPanelFolder',
-    candidates: [processCandidate('primary', control)]
-  },
-  {
-    id: 'settings',
-    name: 'Windows 设置',
-    category: 'core',
-    description: '打开 Windows 设置主页',
-    iconSource: '%SystemRoot%\\ImmersiveControlPanel\\SystemSettings.exe',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:'),
-      processCandidate('classic_fallback', control)
-    ]
-  },
-  {
-    id: 'this_pc',
-    name: '此电脑',
-    category: 'core',
-    description: '打开此电脑',
-    iconSource: 'shell:MyComputerFolder',
-    candidates: [processCandidate('primary', explorer, ['shell:MyComputerFolder'])]
-  },
-  {
-    id: 'file_explorer',
-    name: '文件资源管理器',
-    category: 'core',
-    description: '打开文件资源管理器',
-    iconSource: '%SystemRoot%\\explorer.exe',
-    candidates: [processCandidate('primary', explorer)]
-  },
-  {
-    id: 'powershell',
-    name: 'Windows PowerShell',
-    category: 'terminal',
-    description: '打开 Windows PowerShell',
-    iconSource: '%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-    candidates: [processCandidate('primary', system32File('WindowsPowerShell\\v1.0\\powershell.exe'), ['-NoLogo'])]
-  },
-  {
-    id: 'command_prompt',
-    name: '命令提示符',
-    category: 'terminal',
-    description: '打开命令提示符',
-    iconSource: '%SystemRoot%\\System32\\cmd.exe',
-    candidates: [processCandidate('primary', system32File('cmd.exe'))]
-  },
-  {
-    id: 'windows_terminal',
-    name: 'Windows 终端',
-    category: 'terminal',
-    description: '优先打开 Windows 终端，未安装时回退 PowerShell',
-    iconSource: '%LOCALAPPDATA%\\Microsoft\\WindowsApps\\wt.exe',
-    candidates: [
-      processCandidate('windows_terminal', () => 'wt.exe'),
-      processCandidate('powershell_fallback', system32File('WindowsPowerShell\\v1.0\\powershell.exe'), ['-NoLogo'])
-    ]
-  },
-  {
-    id: 'registry_editor',
-    name: '注册表编辑器',
-    category: 'management',
-    description: '打开注册表编辑器，Windows 可能请求提升权限',
-    iconSource: '%SystemRoot%\\System32\\regedit.exe',
-    candidates: [processCandidate('primary', system32File('regedit.exe'))]
-  },
-  {
-    id: 'task_manager',
-    name: '任务管理器',
-    category: 'management',
-    description: '打开任务管理器',
-    iconSource: '%SystemRoot%\\System32\\Taskmgr.exe',
-    candidates: [processCandidate('primary', system32File('Taskmgr.exe'))]
-  },
-  {
-    id: 'computer_management',
-    name: '计算机管理',
-    category: 'management',
-    description: '打开计算机管理控制台',
-    iconSource: '%SystemRoot%\\System32\\compmgmt.msc',
-    candidates: [processCandidate('primary', mmc, ['compmgmt.msc'])]
-  },
-  {
-    id: 'device_manager',
-    name: '设备管理器',
-    category: 'management',
-    description: '打开设备管理器',
-    iconSource: 'shell:::{74246BFC-4C96-11D0-ABEF-0020AF6B0B7A}',
-    candidates: [processCandidate('primary', mmc, ['devmgmt.msc'])]
-  },
-  {
-    id: 'disk_management',
-    name: '磁盘管理',
-    category: 'management',
-    description: '打开磁盘管理',
-    iconSource: '%SystemRoot%\\System32\\diskmgmt.msc',
-    candidates: [processCandidate('primary', mmc, ['diskmgmt.msc'])]
-  },
-  {
-    id: 'services',
-    name: '服务',
-    category: 'management',
-    description: '打开 Windows 服务管理器',
-    iconSource: '%SystemRoot%\\System32\\services.msc',
-    candidates: [processCandidate('primary', mmc, ['services.msc'])]
-  },
-  {
-    id: 'event_viewer',
-    name: '事件查看器',
-    category: 'management',
-    description: '打开事件查看器',
-    iconSource: '%SystemRoot%\\System32\\eventvwr.msc',
-    candidates: [processCandidate('primary', mmc, ['eventvwr.msc'])]
-  },
-  {
-    id: 'task_scheduler',
-    name: '任务计划程序',
-    category: 'management',
-    description: '打开任务计划程序',
-    iconSource: '%SystemRoot%\\System32\\taskschd.msc',
-    candidates: [processCandidate('primary', mmc, ['taskschd.msc'])]
-  },
-  {
-    id: 'system_information',
-    name: '系统信息',
-    category: 'management',
-    description: '打开系统信息',
-    iconSource: '%SystemRoot%\\System32\\msinfo32.exe',
-    candidates: [processCandidate('primary', system32File('msinfo32.exe'))]
-  },
-  {
-    id: 'resource_monitor',
-    name: '资源监视器',
-    category: 'management',
-    description: '打开资源监视器',
-    iconSource: '%SystemRoot%\\System32\\resmon.exe',
-    candidates: [processCandidate('primary', system32File('resmon.exe'))]
-  },
-  {
-    id: 'performance_monitor',
-    name: '性能监视器',
-    category: 'management',
-    description: '打开性能监视器',
-    iconSource: '%SystemRoot%\\System32\\perfmon.exe',
-    candidates: [processCandidate('primary', system32File('perfmon.exe'))]
-  },
-  {
-    id: 'system_properties',
-    name: '系统属性',
-    category: 'system',
-    description: '打开系统属性',
-    iconSource: 'shell:::{BB06C0E4-D293-4F75-8A90-CB05B6477EEE}',
-    candidates: [processCandidate('primary', control, ['sysdm.cpl'])]
-  },
-  {
-    id: 'advanced_system_properties',
-    name: '高级系统属性',
-    category: 'system',
-    description: '打开系统属性的高级页',
-    iconSource: '%SystemRoot%\\System32\\sysdm.cpl',
-    candidates: [processCandidate('primary', control, ['sysdm.cpl,,3'])]
-  },
-  {
-    id: 'environment_variables',
-    name: '环境变量',
-    category: 'system',
-    description: '打开环境变量编辑器',
-    iconSource: '%SystemRoot%\\System32\\sysdm.cpl',
-    candidates: [processCandidate('primary', system32File('rundll32.exe'), ['sysdm.cpl,EditEnvironmentVariables'])]
-  },
-  {
-    id: 'programs_features',
-    name: '程序和功能',
-    category: 'system',
-    description: '打开经典程序和功能',
-    iconSource: 'shell:::{7B81BE6A-CE2B-4676-A29E-EB907A5126C5}',
-    candidates: [processCandidate('primary', control, ['appwiz.cpl'])]
-  },
-  {
-    id: 'optional_features',
-    name: 'Windows 功能',
-    category: 'system',
-    description: '打开启用或关闭 Windows 功能',
-    iconSource: '%SystemRoot%\\Sysnative\\OptionalFeatures.exe',
-    candidates: [processCandidate('primary', sysnativeFile('OptionalFeatures.exe'))]
-  },
-  {
-    id: 'network_connections',
-    name: '网络连接',
-    category: 'network',
-    description: '打开网络适配器连接列表',
-    iconSource: 'shell:ConnectionsFolder',
-    candidates: [processCandidate('primary', control, ['ncpa.cpl'])]
-  },
-  {
-    id: 'firewall',
-    name: 'Windows 防火墙',
-    category: 'network',
-    description: '打开经典 Windows 防火墙',
-    iconSource: 'shell:::{4026492F-2F69-46B8-B9BF-5654FC07E423}',
-    candidates: [processCandidate('primary', control, ['firewall.cpl'])]
-  },
-  {
-    id: 'power_options',
-    name: '电源选项',
-    category: 'hardware',
-    description: '打开经典电源选项',
-    iconSource: 'shell:::{025A5937-A6BE-4686-A844-36FE4BEC8B6D}',
-    candidates: [processCandidate('primary', control, ['powercfg.cpl'])]
-  },
-  {
-    id: 'sound',
-    name: '声音',
-    category: 'hardware',
-    description: '打开经典声音设置',
-    iconSource: 'shell:::{F2DDFC82-8F12-4CDD-B7DC-D4FE1425AA4D}',
-    candidates: [processCandidate('primary', control, ['mmsys.cpl'])]
-  },
-  {
-    id: 'display',
-    name: '显示设置',
-    category: 'settings',
-    description: '打开显示设置',
-    iconSource: '%SystemRoot%\\System32\\desk.cpl',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:display'),
-      processCandidate('classic_fallback', control, ['desk.cpl'])
-    ]
-  },
-  {
-    id: 'bluetooth',
-    name: '蓝牙和设备',
-    category: 'settings',
-    description: '打开蓝牙和设备设置',
-    iconSource: '%SystemRoot%\\ImmersiveControlPanel\\SystemSettings.exe',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:bluetooth'),
-      processCandidate('classic_fallback', control, ['/name', 'Microsoft.DevicesAndPrinters'])
-    ]
-  },
-  {
-    id: 'printers',
-    name: '打印机和扫描仪',
-    category: 'settings',
-    description: '打开打印机和扫描仪设置',
-    iconSource: 'shell:::{A8A91A66-3A7D-4424-8D24-04E180695C7A}',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:printers'),
-      processCandidate('classic_fallback', control, ['/name', 'Microsoft.DevicesAndPrinters'])
-    ]
-  },
-  {
-    id: 'date_time',
-    name: '日期和时间',
-    category: 'settings',
-    description: '打开日期和时间设置',
-    iconSource: 'shell:::{E2E7934B-DCE5-43C4-9576-7FE4F75E7480}',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:dateandtime'),
-      processCandidate('classic_fallback', control, ['timedate.cpl'])
-    ]
-  },
-  {
-    id: 'region_language',
-    name: '区域和语言',
-    category: 'settings',
-    description: '打开区域和语言设置',
-    iconSource: 'shell:::{62D8ED13-C9D0-4CE8-A914-47DD628FB1B0}',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:regionlanguage'),
-      processCandidate('classic_fallback', control, ['intl.cpl'])
-    ]
-  },
-  {
-    id: 'user_accounts',
-    name: '用户账户',
-    category: 'settings',
-    description: '打开账户信息设置',
-    iconSource: 'shell:::{60632754-C523-4B62-B45C-4172DA012619}',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:yourinfo'),
-      processCandidate('classic_fallback', control, ['/name', 'Microsoft.UserAccounts'])
-    ]
-  },
-  {
-    id: 'apps',
-    name: '应用和功能',
-    category: 'settings',
-    description: '打开已安装应用设置',
-    iconSource: 'shell:::{7B81BE6A-CE2B-4676-A29E-EB907A5126C5}',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:appsfeatures'),
-      processCandidate('classic_fallback', control, ['appwiz.cpl'])
-    ]
-  },
-  {
-    id: 'default_apps',
-    name: '默认应用',
-    category: 'settings',
-    description: '打开默认应用设置',
-    iconSource: 'shell:::{17CD9488-1228-4B2F-88CE-4298E93E0966}',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:defaultapps'),
-      processCandidate('classic_fallback', control, ['/name', 'Microsoft.DefaultPrograms'])
-    ]
-  },
-  {
-    id: 'windows_update',
-    name: 'Windows 更新',
-    category: 'settings',
-    description: '打开 Windows 更新',
-    iconSource: '%SystemRoot%\\ImmersiveControlPanel\\SystemSettings.exe',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:windowsupdate'),
-      processCandidate('classic_fallback', control, ['/name', 'Microsoft.WindowsUpdate'])
-    ]
-  },
-  {
-    id: 'windows_security',
-    name: 'Windows 安全中心',
-    category: 'settings',
-    description: '打开 Windows 安全中心设置',
-    iconSource: '%SystemRoot%\\Sysnative\\SecurityHealthSystray.exe',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:windowsdefender'),
-      externalCandidate('classic_fallback', 'windowsdefender:')
-    ]
-  },
-  {
-    id: 'notifications',
-    name: '通知',
-    category: 'settings',
-    description: '打开通知设置',
-    iconSource: '%SystemRoot%\\ImmersiveControlPanel\\SystemSettings.exe',
-    candidates: [externalCandidate('settings_uri', 'ms-settings:notifications')]
-  },
-  {
-    id: 'storage',
-    name: '存储',
-    category: 'settings',
-    description: '打开存储设置',
-    iconSource: '%SystemRoot%\\ImmersiveControlPanel\\SystemSettings.exe',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:storagesense'),
-      processCandidate('classic_fallback', explorer, ['shell:MyComputerFolder'])
-    ]
-  },
-  {
-    id: 'troubleshoot',
-    name: '疑难解答',
-    category: 'settings',
-    description: '打开疑难解答设置',
-    iconSource: 'shell:::{C58C4893-3BE0-4B45-ABB5-A63E4B8C8651}',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:troubleshoot'),
-      processCandidate('classic_fallback', control, ['/name', 'Microsoft.Troubleshooting'])
-    ]
-  },
-  {
-    id: 'remote_desktop',
-    name: '远程桌面',
-    category: 'settings',
-    description: '打开远程桌面设置',
-    iconSource: '%SystemRoot%\\System32\\mstsc.exe',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:remotedesktop'),
-      processCandidate('classic_fallback', control, ['sysdm.cpl,,5'])
-    ]
-  },
-  {
-    id: 'recovery',
-    name: '恢复',
-    category: 'settings',
-    description: '打开系统恢复设置',
-    iconSource: 'shell:::{9FE63AFD-59CF-4419-9775-ABCC3849F861}',
-    candidates: [
-      externalCandidate('settings_uri', 'ms-settings:recovery'),
-      processCandidate('classic_fallback', control, ['/name', 'Microsoft.Recovery'])
-    ]
-  }
+  createTarget('control_panel', 'core', 'shell:ControlPanelFolder', [processCandidate('primary', control)]),
+  createTarget('settings', 'core', '%SystemRoot%\\ImmersiveControlPanel\\SystemSettings.exe', [
+    externalCandidate('settings_uri', 'ms-settings:'),
+    processCandidate('classic_fallback', control)
+  ]),
+  createTarget('this_pc', 'core', 'shell:MyComputerFolder', [
+    processCandidate('primary', explorer, ['shell:MyComputerFolder'])
+  ]),
+  createTarget('file_explorer', 'core', '%SystemRoot%\\explorer.exe', [processCandidate('primary', explorer)]),
+  createTarget('powershell', 'terminal', '%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', [
+    processCandidate('primary', system32File('WindowsPowerShell\\v1.0\\powershell.exe'), ['-NoLogo'])
+  ]),
+  createTarget('command_prompt', 'terminal', '%SystemRoot%\\System32\\cmd.exe', [
+    processCandidate('primary', system32File('cmd.exe'))
+  ]),
+  createTarget('windows_terminal', 'terminal', '%LOCALAPPDATA%\\Microsoft\\WindowsApps\\wt.exe', [
+    processCandidate('windows_terminal', () => 'wt.exe'),
+    processCandidate('powershell_fallback', system32File('WindowsPowerShell\\v1.0\\powershell.exe'), ['-NoLogo'])
+  ]),
+  createTarget('registry_editor', 'management', '%SystemRoot%\\System32\\regedit.exe', [
+    processCandidate('primary', system32File('regedit.exe'))
+  ]),
+  createTarget('task_manager', 'management', '%SystemRoot%\\System32\\Taskmgr.exe', [
+    processCandidate('primary', system32File('Taskmgr.exe'))
+  ]),
+  createTarget('computer_management', 'management', '%SystemRoot%\\System32\\compmgmt.msc', [
+    processCandidate('primary', mmc, ['compmgmt.msc'])
+  ]),
+  createTarget('device_manager', 'management', 'shell:::{74246BFC-4C96-11D0-ABEF-0020AF6B0B7A}', [
+    processCandidate('primary', mmc, ['devmgmt.msc'])
+  ]),
+  createTarget('disk_management', 'management', '%SystemRoot%\\System32\\diskmgmt.msc', [
+    processCandidate('primary', mmc, ['diskmgmt.msc'])
+  ]),
+  createTarget('services', 'management', '%SystemRoot%\\System32\\services.msc', [
+    processCandidate('primary', mmc, ['services.msc'])
+  ]),
+  createTarget('event_viewer', 'management', '%SystemRoot%\\System32\\eventvwr.msc', [
+    processCandidate('primary', mmc, ['eventvwr.msc'])
+  ]),
+  createTarget('task_scheduler', 'management', '%SystemRoot%\\System32\\taskschd.msc', [
+    processCandidate('primary', mmc, ['taskschd.msc'])
+  ]),
+  createTarget('system_information', 'management', '%SystemRoot%\\System32\\msinfo32.exe', [
+    processCandidate('primary', system32File('msinfo32.exe'))
+  ]),
+  createTarget('resource_monitor', 'management', '%SystemRoot%\\System32\\resmon.exe', [
+    processCandidate('primary', system32File('resmon.exe'))
+  ]),
+  createTarget('performance_monitor', 'management', '%SystemRoot%\\System32\\perfmon.exe', [
+    processCandidate('primary', system32File('perfmon.exe'))
+  ]),
+  createTarget('system_properties', 'system', 'shell:::{BB06C0E4-D293-4F75-8A90-CB05B6477EEE}', [
+    processCandidate('primary', control, ['sysdm.cpl'])
+  ]),
+  createTarget('advanced_system_properties', 'system', '%SystemRoot%\\System32\\sysdm.cpl', [
+    processCandidate('primary', control, ['sysdm.cpl,,3'])
+  ]),
+  createTarget('environment_variables', 'system', '%SystemRoot%\\System32\\sysdm.cpl', [
+    processCandidate('primary', system32File('rundll32.exe'), ['sysdm.cpl,EditEnvironmentVariables'])
+  ]),
+  createTarget('programs_features', 'system', 'shell:::{7B81BE6A-CE2B-4676-A29E-EB907A5126C5}', [
+    processCandidate('primary', control, ['appwiz.cpl'])
+  ]),
+  createTarget('optional_features', 'system', '%SystemRoot%\\Sysnative\\OptionalFeatures.exe', [
+    processCandidate('primary', sysnativeFile('OptionalFeatures.exe'))
+  ]),
+  createTarget('network_connections', 'network', 'shell:ConnectionsFolder', [
+    processCandidate('primary', control, ['ncpa.cpl'])
+  ]),
+  createTarget('firewall', 'network', 'shell:::{4026492F-2F69-46B8-B9BF-5654FC07E423}', [
+    processCandidate('primary', control, ['firewall.cpl'])
+  ]),
+  createTarget('power_options', 'hardware', 'shell:::{025A5937-A6BE-4686-A844-36FE4BEC8B6D}', [
+    processCandidate('primary', control, ['powercfg.cpl'])
+  ]),
+  createTarget('sound', 'hardware', 'shell:::{F2DDFC82-8F12-4CDD-B7DC-D4FE1425AA4D}', [
+    processCandidate('primary', control, ['mmsys.cpl'])
+  ]),
+  createTarget('display', 'settings', '%SystemRoot%\\System32\\desk.cpl', [
+    externalCandidate('settings_uri', 'ms-settings:display'),
+    processCandidate('classic_fallback', control, ['desk.cpl'])
+  ]),
+  createTarget('bluetooth', 'settings', '%SystemRoot%\\ImmersiveControlPanel\\SystemSettings.exe', [
+    externalCandidate('settings_uri', 'ms-settings:bluetooth'),
+    processCandidate('classic_fallback', control, ['/name', 'Microsoft.DevicesAndPrinters'])
+  ]),
+  createTarget('printers', 'settings', 'shell:::{A8A91A66-3A7D-4424-8D24-04E180695C7A}', [
+    externalCandidate('settings_uri', 'ms-settings:printers'),
+    processCandidate('classic_fallback', control, ['/name', 'Microsoft.DevicesAndPrinters'])
+  ]),
+  createTarget('date_time', 'settings', 'shell:::{E2E7934B-DCE5-43C4-9576-7FE4F75E7480}', [
+    externalCandidate('settings_uri', 'ms-settings:dateandtime'),
+    processCandidate('classic_fallback', control, ['timedate.cpl'])
+  ]),
+  createTarget('region_language', 'settings', 'shell:::{62D8ED13-C9D0-4CE8-A914-47DD628FB1B0}', [
+    externalCandidate('settings_uri', 'ms-settings:regionlanguage'),
+    processCandidate('classic_fallback', control, ['intl.cpl'])
+  ]),
+  createTarget('user_accounts', 'settings', 'shell:::{60632754-C523-4B62-B45C-4172DA012619}', [
+    externalCandidate('settings_uri', 'ms-settings:yourinfo'),
+    processCandidate('classic_fallback', control, ['/name', 'Microsoft.UserAccounts'])
+  ]),
+  createTarget('apps', 'settings', 'shell:::{7B81BE6A-CE2B-4676-A29E-EB907A5126C5}', [
+    externalCandidate('settings_uri', 'ms-settings:appsfeatures'),
+    processCandidate('classic_fallback', control, ['appwiz.cpl'])
+  ]),
+  createTarget('default_apps', 'settings', 'shell:::{17CD9488-1228-4B2F-88CE-4298E93E0966}', [
+    externalCandidate('settings_uri', 'ms-settings:defaultapps'),
+    processCandidate('classic_fallback', control, ['/name', 'Microsoft.DefaultPrograms'])
+  ]),
+  createTarget('windows_update', 'settings', '%SystemRoot%\\ImmersiveControlPanel\\SystemSettings.exe', [
+    externalCandidate('settings_uri', 'ms-settings:windowsupdate'),
+    processCandidate('classic_fallback', control, ['/name', 'Microsoft.WindowsUpdate'])
+  ]),
+  createTarget('windows_security', 'settings', '%SystemRoot%\\Sysnative\\SecurityHealthSystray.exe', [
+    externalCandidate('settings_uri', 'ms-settings:windowsdefender'),
+    externalCandidate('classic_fallback', 'windowsdefender:')
+  ]),
+  createTarget('notifications', 'settings', '%SystemRoot%\\ImmersiveControlPanel\\SystemSettings.exe', [
+    externalCandidate('settings_uri', 'ms-settings:notifications')
+  ]),
+  createTarget('storage', 'settings', '%SystemRoot%\\ImmersiveControlPanel\\SystemSettings.exe', [
+    externalCandidate('settings_uri', 'ms-settings:storagesense'),
+    processCandidate('classic_fallback', explorer, ['shell:MyComputerFolder'])
+  ]),
+  createTarget('troubleshoot', 'settings', 'shell:::{C58C4893-3BE0-4B45-ABB5-A63E4B8C8651}', [
+    externalCandidate('settings_uri', 'ms-settings:troubleshoot'),
+    processCandidate('classic_fallback', control, ['/name', 'Microsoft.Troubleshooting'])
+  ]),
+  createTarget('remote_desktop', 'settings', '%SystemRoot%\\System32\\mstsc.exe', [
+    externalCandidate('settings_uri', 'ms-settings:remotedesktop'),
+    processCandidate('classic_fallback', control, ['sysdm.cpl,,5'])
+  ]),
+  createTarget('recovery', 'settings', 'shell:::{9FE63AFD-59CF-4419-9775-ABCC3849F861}', [
+    externalCandidate('settings_uri', 'ms-settings:recovery'),
+    processCandidate('classic_fallback', control, ['/name', 'Microsoft.Recovery'])
+  ])
 ]
 
 const systemToolMap = new Map(systemTools.map((target) => [target.id, target]))
@@ -508,6 +280,14 @@ function defaultIconReader(source: string): Promise<string> {
   return app.getFileIcon(expandIconSource(source), { size: 'large' }).then((image) => image.toDataURL())
 }
 
+function extractLaunchErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    const detail = error.message.trim()
+    if (detail) return detail
+  }
+  return t('systemTools.error.launchFailed')
+}
+
 function defaultLauncher(): SystemToolsLauncher {
   return {
     openExternal: (url) => shell.openExternal(url),
@@ -525,13 +305,13 @@ function defaultLauncher(): SystemToolsLauncher {
           stdio: 'ignore',
           windowsHide: true
         })
-        child.once('error', (error) => finish(error instanceof Error ? error.message : '启动失败'))
+        child.once('error', (error) => finish(extractLaunchErrorMessage(error)))
         child.once('spawn', () => {
           child.unref()
           finish('')
         })
       } catch (error) {
-        finish(error instanceof Error ? error.message : '启动失败')
+        finish(extractLaunchErrorMessage(error))
       }
     })
   }
@@ -581,9 +361,9 @@ export class SystemToolsService implements SystemToolsProvider {
   }
 
   async openTarget(targetId: string): Promise<SystemToolsOpenResult> {
-    if (this.platform !== 'win32') throw new Error('系统工具仅支持 Windows')
+    if (this.platform !== 'win32') throw new Error(t('systemTools.error.windowsOnly'))
     const target = systemToolMap.get(targetId)
-    if (!target) throw new Error('未知系统工具')
+    if (!target) throw new Error(t('systemTools.error.unknownTarget'))
     const systemRoot = defaultSystemRoot()
     const osBuild = osInformation(this.platform).build
     let lastError = ''
@@ -600,10 +380,10 @@ export class SystemToolsService implements SystemToolsProvider {
         if (!error) return { success: true, target: target.id, launcher: candidate.launcher, osBuild }
         lastError = error
       } catch (error) {
-        lastError = error instanceof Error ? error.message : '启动失败'
+        lastError = extractLaunchErrorMessage(error)
       }
     }
-    throw new Error(lastError || 'Windows 无法打开该系统工具')
+    throw new Error(lastError || t('systemTools.error.openFailed'))
   }
 
   async getIcon(targetId: string): Promise<string> {

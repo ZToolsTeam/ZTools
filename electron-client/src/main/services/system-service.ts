@@ -30,6 +30,7 @@ import { readSystemAvailableMemoryBytes } from '../platform/macos/memory.js'
 import { resolveRuntimeArchitecture, type NativeOsArchitecture } from '../platform/runtime-architecture.js'
 import type { WindowRegistry } from '../windows/window-registry.js'
 import { getResolvedLocale, type SupportedLocale } from '../i18n/index.js'
+import { MACOS_NOTIFICATION_DISMISS_LABELS_ZH } from './system-service.zh-data.js'
 
 type StaticSystemPath = Exclude<SystemPathName, 'cache' | 'temp'>
 const execFileAsync = promisify(execFile)
@@ -90,17 +91,17 @@ function emptyBrewSearchResult() {
 
 export function parseInstalledBrewPackages(output: string): BrewPackageInfo[] {
   const raw: unknown = JSON.parse(output)
-  if (!raw || typeof raw !== 'object') throw new Error('Homebrew 软件包信息格式无效')
+  if (!raw || typeof raw !== 'object') throw new Error('Invalid Homebrew package info format')
   const data = raw as Record<string, unknown>
-  if (!Array.isArray(data.formulae) || !Array.isArray(data.casks)) throw new Error('Homebrew 软件包信息缺少 formulae/casks')
+  if (!Array.isArray(data.formulae) || !Array.isArray(data.casks)) throw new Error('Homebrew package info is missing formulae/casks')
   const readObject = (value: unknown): Record<string, unknown> => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Homebrew 软件包条目格式无效')
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid Homebrew package entry format')
     return value as Record<string, unknown>
   }
   return [
     ...data.formulae.map((value: unknown) => {
       const item = readObject(value)
-      if (typeof item.name !== 'string' || !item.name) throw new Error('Homebrew formula 名称无效')
+      if (typeof item.name !== 'string' || !item.name) throw new Error('Invalid Homebrew formula name')
       const installed = Array.isArray(item.installed) ? item.installed : []
       const versions = readObject(item.versions)
       return { name: item.name, isCask: false, outdated: item.outdated === true,
@@ -109,7 +110,7 @@ export function parseInstalledBrewPackages(output: string): BrewPackageInfo[] {
     }),
     ...data.casks.map((value: unknown) => {
       const item = readObject(value)
-      if (typeof item.token !== 'string' || !item.token) throw new Error('Homebrew cask 名称无效')
+      if (typeof item.token !== 'string' || !item.token) throw new Error('Invalid Homebrew cask name')
       return { name: item.token, isCask: true, outdated: item.outdated === true,
         version: Array.isArray(item.installed) ? item.installed.map(String).join(', ') : String(item.installed ?? ''),
         latestVersion: String(item.version ?? '') }
@@ -200,7 +201,7 @@ function platformName(platform: NodeJS.Platform): 'windows' | 'macos' | 'linux' 
     case 'darwin': return 'macos'
     case 'linux': return 'linux'
     default:
-      throw new ZToolsError(errorCodes.notSupported, `不支持的系统平台: ${platform}`)
+      throw new ZToolsError(errorCodes.notSupported, `Unsupported platform: ${platform}`)
   }
 }
 
@@ -214,21 +215,21 @@ export function resolveSystemVolumePath(
     : '/'
   const volumePath = requestedPath ?? defaultPath
   if (/[\u0000-\u001f\u007f]/.test(volumePath)) {
-    throw new ZToolsError(errorCodes.invalidRequest, '卷路径包含无效字符')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Volume path contains invalid characters')
   }
   if (platform === 'win32') {
     if (!path.win32.isAbsolute(volumePath) || !/^[A-Za-z]:[\\/]/.test(volumePath)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'Windows 卷路径必须是本地驱动器绝对路径')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Windows volume path must be an absolute local drive path')
     }
     return volumePath
   }
   if (platform === 'darwin' || platform === 'linux') {
     if (!path.posix.isAbsolute(volumePath)) {
-      throw new ZToolsError(errorCodes.invalidRequest, '卷路径必须是 POSIX 绝对路径')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Volume path must be an absolute POSIX path')
     }
     return volumePath
   }
-  throw new ZToolsError(errorCodes.notSupported, `当前系统不支持磁盘查询: ${platform}`)
+  throw new ZToolsError(errorCodes.notSupported, `Disk queries are not supported on platform: ${platform}`)
 }
 
 function windowsSystemExecutable(name: string): string {
@@ -408,7 +409,7 @@ function powerCommand(
     case 'shutdown': {
       const timeout = options.timeout ?? 0
       if (!Number.isInteger(timeout) || timeout < 0 || timeout > 86_400) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'timeout 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid timeout value')
       }
       return {
         executable: windowsSystemExecutable('shutdown.exe'),
@@ -450,14 +451,14 @@ export function createSystemPowerAdapter(
   return {
     async execute(action, options) {
       if (platform !== 'win32' && platform !== 'darwin') {
-        throw new ZToolsError(errorCodes.notSupported, '当前平台不支持系统电源操作')
+        throw new ZToolsError(errorCodes.notSupported, 'System power actions are not supported on this platform')
       }
       const command = powerCommand(action, options, platform)
       try {
         await runner.run(command.executable, command.args)
       } catch (error) {
         if (error instanceof ZToolsError) throw error
-        throw new ZToolsError(errorCodes.processError, '系统电源操作失败')
+        throw new ZToolsError(errorCodes.processError, 'System power action failed')
       }
     }
   }
@@ -618,7 +619,7 @@ export class SystemService {
   async getNativeId(): Promise<{ success: true; nativeId: string }> {
     const nativeId = (await this.adapter.getNativeId()).trim().toUpperCase()
     if (!/^[0-9A-F]{8}$/.test(nativeId)) {
-      throw new ZToolsError(errorCodes.notSupported, '无法读取兼容的 Windows 卷序列号')
+      throw new ZToolsError(errorCodes.notSupported, 'Failed to read a compatible Windows volume serial number')
     }
     return { success: true, nativeId }
   }
@@ -695,7 +696,7 @@ export class SystemService {
         filePath
       }
     } catch {
-      throw new ZToolsError(errorCodes.fileError, '无法读取文件图标')
+      throw new ZToolsError(errorCodes.fileError, 'Failed to read file icon')
     }
   }
 
@@ -715,7 +716,7 @@ export class SystemService {
       : {
           success: true,
           ...result,
-          message: '未检测到活动的浏览器窗口或无法获取URL'
+          message: 'No active browser window detected or failed to read URL'
         }
   }
 
@@ -819,12 +820,12 @@ export class SystemService {
         }
       }
     } catch {
-      throw new ZToolsError(errorCodes.fileError, '无法读取驱动器容量')
+      throw new ZToolsError(errorCodes.fileError, 'Failed to read drive capacity')
     }
   }
 
   getNetworkStats(): never {
-    throw new ZToolsError(errorCodes.notSupported, '网络流量统计尚未实现')
+    throw new ZToolsError(errorCodes.notSupported, 'Network traffic statistics are not implemented')
   }
 
   async getBatteryStatus(): Promise<{ success: true } & SystemBatteryStatus> {
@@ -838,7 +839,7 @@ export class SystemService {
   ): Promise<{ success: boolean; action: string; message: string; state?: unknown }> {
     const normalized = String(actionKey ?? '').trim().toLowerCase()
     if (!normalized) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'actionKey 不能为空')
+      throw new ZToolsError(errorCodes.invalidRequest, 'actionKey cannot be empty')
     }
 
     switch (normalized) {
@@ -858,7 +859,7 @@ export class SystemService {
         return {
           success: true,
           action: normalized,
-          message: nextDark ? '已切换至深色模式' : '已切换至浅色模式',
+          message: nextDark ? 'Switched to dark mode' : 'Switched to light mode',
           state: { darkMode: nextDark }
         }
       }
@@ -877,24 +878,24 @@ export class SystemService {
             'Clear-RecycleBin -Force -ErrorAction SilentlyContinue'
           ], { timeout: 15_000, windowsHide: true })
         }
-        return { success: true, action: normalized, message: '废纸篓已清空' }
+        return { success: true, action: normalized, message: 'Trash emptied' }
       }
 
       case 'eject-all-disks': {
         if (this.runtimePlatform !== 'darwin') {
-          return { success: false, action: normalized, message: '当前平台暂不支持一键推出所有外置磁盘' }
+          return { success: false, action: normalized, message: 'Ejecting all external disks is not supported on this platform' }
         }
         try {
           await execFileAsync('/usr/bin/osascript', [
             '-e',
             'tell application "Finder" to eject (every disk whose ejectable is true)'
           ], { timeout: 15_000 })
-          return { success: true, action: normalized, message: '所有外置磁盘已安全推出' }
+          return { success: true, action: normalized, message: 'All external disks ejected safely' }
         } catch (err) {
           return {
             success: false,
             action: normalized,
-            message: err instanceof Error ? err.message : '推出所有外置磁盘失败'
+            message: err instanceof Error ? err.message : 'Failed to eject all external disks'
           }
         }
       }
@@ -924,11 +925,11 @@ export class SystemService {
           return {
             success: true,
             action: normalized,
-            message: next === 'true' ? '已显示隐藏文件' : '已隐藏系统隐藏文件',
+            message: next === 'true' ? 'Hidden files are now shown' : 'Hidden files are now hidden',
             state: { showHiddenFiles: next === 'true' }
           }
         }
-        return { success: true, action: normalized, message: '已切换隐藏文件显示状态' }
+        return { success: true, action: normalized, message: 'Toggled hidden files visibility' }
       }
 
       case 'toggle-desktop-icons': {
@@ -957,11 +958,11 @@ export class SystemService {
           return {
             success: true,
             action: normalized,
-            message: next === 'true' ? '桌面图标已显示' : '桌面图标已隐藏',
+            message: next === 'true' ? 'Desktop icons are now shown' : 'Desktop icons are now hidden',
             state: { desktopIconsVisible: next === 'true' }
           }
         }
-        return { success: true, action: normalized, message: '已切换桌面图标显示状态' }
+        return { success: true, action: normalized, message: 'Toggled desktop icons visibility' }
       }
 
       case 'toggle-caffeinate': {
@@ -970,7 +971,7 @@ export class SystemService {
           return {
             success: true,
             action: normalized,
-            message: '咖啡因防休眠已关闭',
+            message: 'Keep awake disabled',
             state: { caffeinated: false }
           }
         }
@@ -999,7 +1000,7 @@ export class SystemService {
         return {
           success: true,
           action: normalized,
-          message: '咖啡因防休眠已开启',
+          message: 'Keep awake enabled',
           state: { caffeinated: true }
         }
       }
@@ -1011,7 +1012,7 @@ export class SystemService {
         return {
           success: res.success,
           action: normalized,
-          message: res.muted ? '系统音频已静音' : '系统音频已取消静音',
+          message: res.muted ? 'System audio muted' : 'System audio unmuted',
           state: { muted: res.muted }
         }
       }
@@ -1026,7 +1027,7 @@ export class SystemService {
         return {
           success: res.success,
           action: normalized,
-          message: `音量已设为 ${res.volume}%`,
+          message: `Volume set to ${res.volume}%`,
           state: { volume: res.volume }
         }
       }
@@ -1040,7 +1041,7 @@ export class SystemService {
         return {
           success: res.success,
           action: normalized,
-          message: `音量已调整至 ${res.volume}%`,
+          message: `Volume adjusted to ${res.volume}%`,
           state: { volume: res.volume }
         }
       }
@@ -1067,35 +1068,35 @@ export class SystemService {
           return {
             success: true,
             action: normalized,
-            message: nextState === 'on' ? 'Wi-Fi 已开启' : 'Wi-Fi 已关闭',
+            message: nextState === 'on' ? 'Wi-Fi enabled' : 'Wi-Fi disabled',
             state: { wifiEnabled: nextState === 'on' }
           }
         }
-        return { success: true, action: normalized, message: '已切换 Wi-Fi 状态' }
+        return { success: true, action: normalized, message: 'Toggled Wi-Fi state' }
       }
 
       case 'hide-other-apps': {
         if (this.runtimePlatform !== 'darwin') {
-          return { success: false, action: normalized, message: '当前平台暂不支持隐藏其他应用程序' }
+          return { success: false, action: normalized, message: 'Hiding other applications is not supported on this platform' }
         }
         try {
           await execFileAsync('/usr/bin/osascript', [
             '-e',
             'tell application "System Events" to set visible of every process whose visible is true and frontmost is false to false'
           ], { timeout: 5_000 })
-          return { success: true, action: normalized, message: '已隐藏其他应用程序' }
+          return { success: true, action: normalized, message: 'Other applications hidden' }
         } catch (err) {
           return {
             success: false,
             action: normalized,
-            message: err instanceof Error ? err.message : '隐藏其他应用程序失败'
+            message: err instanceof Error ? err.message : 'Failed to hide other applications'
           }
         }
       }
 
       case 'quit-all-apps': {
         if (this.runtimePlatform !== 'darwin') {
-          return { success: false, action: normalized, message: '当前平台暂不支持退出所有应用程序' }
+          return { success: false, action: normalized, message: 'Quitting all applications is not supported on this platform' }
         }
         try {
           const script = [
@@ -1109,19 +1110,19 @@ export class SystemService {
             'end repeat'
           ].join('\n')
           await execFileAsync('/usr/bin/osascript', ['-e', script], { timeout: 10_000 })
-          return { success: true, action: normalized, message: '已请求退出所有打开的应用程序' }
+          return { success: true, action: normalized, message: 'Requested all open applications to quit' }
         } catch (err) {
           return {
             success: false,
             action: normalized,
-            message: err instanceof Error ? err.message : '退出所有应用程序失败'
+            message: err instanceof Error ? err.message : 'Failed to quit all applications'
           }
         }
       }
 
       case 'quit-active-app': {
         if (this.runtimePlatform !== 'darwin') {
-          return { success: false, action: normalized, message: '当前平台暂不支持退出当前前台应用程序' }
+          return { success: false, action: normalized, message: 'Quitting the active application is not supported on this platform' }
         }
         try {
           const script = [
@@ -1133,68 +1134,71 @@ export class SystemService {
             'end if'
           ].join('\n')
           await execFileAsync('/usr/bin/osascript', ['-e', script], { timeout: 5_000 })
-          return { success: true, action: normalized, message: '已退出当前前台应用程序' }
+          return { success: true, action: normalized, message: 'Active application quit' }
         } catch (err) {
           return {
             success: false,
             action: normalized,
-            message: err instanceof Error ? err.message : '退出当前前台应用程序失败'
+            message: err instanceof Error ? err.message : 'Failed to quit the active application'
           }
         }
       }
 
       case 'dismiss-notifications': {
         if (this.runtimePlatform !== 'darwin') {
-          return { success: false, action: normalized, message: '当前平台暂不支持清理屏幕通知横幅' }
+          return { success: false, action: normalized, message: 'Dismissing notifications is not supported on this platform' }
         }
         try {
+          const dismissClauses = ['Close', 'Clear', ...MACOS_NOTIFICATION_DISMISS_LABELS_ZH]
+            .map((label) => `description contains "${label}"`)
+            .join(' or ')
           const script = [
             'tell application "System Events"',
             '  tell process "NotificationCenter"',
             '    if exists window 1 then',
-            '      click (every button of every UI element of every scroll area of window 1 whose description contains "Close" or description contains "Clear" or description contains "关闭" or description contains "清除")',
+            `      click (every button of every UI element of every scroll area of window 1 whose ${dismissClauses})`,
             '    end if',
             '  end tell',
             'end tell'
           ].join('\n')
           await execFileAsync('/usr/bin/osascript', ['-e', script], { timeout: 5_000 })
-          return { success: true, action: normalized, message: '已清理屏幕通知横幅' }
+          return { success: true, action: normalized, message: 'Notifications dismissed' }
         } catch (err) {
           return {
             success: false,
             action: normalized,
-            message: err instanceof Error ? err.message : '清理屏幕通知横幅失败'
+            message: err instanceof Error ? err.message : 'Failed to dismiss notifications'
           }
         }
       }
 
       case 'lock-screen': {
         await this.lock()
-        return { success: true, action: normalized, message: '已锁定屏幕' }
+        return { success: true, action: normalized, message: 'Screen locked' }
       }
 
       case 'sleep': {
         await this.sleep()
-        return { success: true, action: normalized, message: '系统已进入休眠' }
+        return { success: true, action: normalized, message: 'System entering sleep' }
       }
 
       case 'restart': {
         await this.restart({ force: false })
-        return { success: true, action: normalized, message: '系统正在重启' }
+        return { success: true, action: normalized, message: 'System restarting' }
       }
 
       case 'shutdown': {
         await this.shutdown({ force: false, timeout: 0 })
-        return { success: true, action: normalized, message: '系统正在关机' }
+        return { success: true, action: normalized, message: 'System shutting down' }
       }
 
       case 'logout': {
         await this.logout({ force: false })
-        return { success: true, action: normalized, message: '正在注销当前用户' }
+        return { success: true, action: normalized, message: 'Logging out current user' }
       }
 
       default:
-        throw new ZToolsError(errorCodes.invalidRequest, `不支持的系统动作: ${actionKey}`)
+        throw new ZToolsError(errorCodes.invalidRequest, `Unsupported system action: ${actionKey}`)
     }
   }
 
@@ -1203,7 +1207,7 @@ export class SystemService {
    */
   async listShortcuts(): Promise<SystemShortcutItem[]> {
     if (this.runtimePlatform !== 'darwin') {
-      throw new ZToolsError(errorCodes.notSupported, '当前平台不支持 Apple Shortcuts')
+      throw new ZToolsError(errorCodes.notSupported, 'Apple Shortcuts is not supported on this platform')
     }
     try {
       const { stdout } = await execFileAsync('/usr/bin/shortcuts', ['list'], {
@@ -1220,7 +1224,7 @@ export class SystemService {
           name
         }))
     } catch (error) {
-      throw new ZToolsError(errorCodes.fileError, `读取快捷指令失败：${error instanceof Error ? error.message : String(error)}`)
+      throw new ZToolsError(errorCodes.fileError, `Failed to list shortcuts: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -1230,10 +1234,10 @@ export class SystemService {
   async runShortcut(name: string, input?: string): Promise<{ success: boolean; output: string }> {
     const cleanName = String(name ?? '').trim()
     if (!cleanName) {
-      throw new ZToolsError(errorCodes.invalidRequest, '快捷指令名称不能为空')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Shortcut name cannot be empty')
     }
     if (this.runtimePlatform !== 'darwin') {
-      return { success: false, output: '当前平台不支持 Apple Shortcuts' }
+      return { success: false, output: 'Apple Shortcuts is not supported on this platform' }
     }
     try {
       const args: string[] = ['run', cleanName]
@@ -1272,7 +1276,7 @@ export class SystemService {
   async viewShortcut(name: string): Promise<{ success: boolean }> {
     const cleanName = String(name ?? '').trim()
     if (!cleanName) {
-      throw new ZToolsError(errorCodes.invalidRequest, '快捷指令名称不能为空')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Shortcut name cannot be empty')
     }
     if (this.runtimePlatform !== 'darwin') {
       return { success: false }
@@ -1301,7 +1305,7 @@ export class SystemService {
   }
 
   async setAudioVolume(volume: number, type: 'output' | 'input' = 'output', id?: string) {
-    if (!Number.isFinite(volume) || volume < 0 || volume > 100) throw new ZToolsError(errorCodes.invalidRequest, '音量必须在 0 到 100 之间')
+    if (!Number.isFinite(volume) || volume < 0 || volume > 100) throw new ZToolsError(errorCodes.invalidRequest, 'Volume must be between 0 and 100')
     const details = await this.audio.change({ version: 1, operation: 'volume', type, volume, ...(id === undefined ? {} : { id }) })
     return { success: true, volume: details.volume, type, details }
   }
@@ -1340,16 +1344,16 @@ export class SystemService {
   }> {
     const action = params.action
     if (!ALLOWED_BREW_ACTIONS.has(action)) {
-      throw new ZToolsError(errorCodes.invalidRequest, `不允许的 Homebrew 操作: ${String(action)}`)
+      throw new ZToolsError(errorCodes.invalidRequest, `Disallowed Homebrew action: ${String(action)}`)
     }
 
     const rawPkg = typeof params.pkg === 'string' ? params.pkg.trim() : ''
     if (rawPkg && !SAFE_BREW_PKG_REGEX.test(rawPkg)) {
-      throw new ZToolsError(errorCodes.invalidRequest, `非法的 Homebrew 软件包名称: ${rawPkg}`)
+      throw new ZToolsError(errorCodes.invalidRequest, `Invalid Homebrew package name: ${rawPkg}`)
     }
 
     if ((action === 'search' || action === 'info' || action === 'install' || action === 'uninstall') && !rawPkg) {
-      throw new ZToolsError(errorCodes.invalidRequest, `Homebrew ${action} 操作必须提供有效的 pkg 参数`)
+      throw new ZToolsError(errorCodes.invalidRequest, `Homebrew ${action} requires a valid pkg parameter`)
     }
 
     const brewBin = this.#resolveBrewExecutable()
@@ -1362,7 +1366,7 @@ export class SystemService {
         action,
         stdout: '',
         stderr: '',
-        error: '未检测到 Homebrew (brew)，请先安装 https://brew.sh'
+        error: 'Homebrew (brew) not detected; install from https://brew.sh'
       }
     }
 
@@ -1599,8 +1603,8 @@ export class SystemService {
         success: false,
         action,
         stdout: '',
-        stderr: msg || 'winget 命令执行失败',
-        error: msg || 'winget 命令执行失败'
+        stderr: msg || 'winget command execution failed',
+        error: msg || 'winget command execution failed'
       }
     }
   }
@@ -1620,7 +1624,7 @@ export class SystemService {
 
   async #readMacosOutputVolume(): Promise<number> {
     const device = (await this.audio.list()).find(item => item.type === 'output' && item.isDefault)
-    if (device?.volume === undefined) throw new ZToolsError(errorCodes.notSupported, '当前默认输出设备不提供音量状态')
+    if (device?.volume === undefined) throw new ZToolsError(errorCodes.notSupported, 'Current default output device does not expose volume status')
     return device.volume
   }
 

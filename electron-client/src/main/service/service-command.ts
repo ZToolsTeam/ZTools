@@ -84,7 +84,7 @@ function decodeJsonObject(payload: Uint8Array): Record<string, unknown> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error()
     return value as Record<string, unknown>
   } catch {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService JSON 响应无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService JSON response')
   }
 }
 
@@ -114,16 +114,16 @@ export function encodeServiceDllCall(
 ): Buffer {
   if (!SAFE_IDENTIFIER.test(pluginId) || !SAFE_IDENTIFIER.test(dllId) ||
       !SAFE_IDENTIFIER.test(functionName)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'ZToolsService DLL 调用标识无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid ZToolsService DLL call identifier')
   }
   let payload: string
   try {
     payload = JSON.stringify(params)
   } catch {
-    throw new ZToolsError(errorCodes.invalidRequest, 'ZToolsService DLL 参数不可序列化')
+    throw new ZToolsError(errorCodes.invalidRequest, 'ZToolsService DLL parameters are not serializable')
   }
   if (Buffer.byteLength(payload, 'utf8') > SERVICE_DLL_PAYLOAD_BYTES) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'ZToolsService DLL 参数过大')
+    throw new ZToolsError(errorCodes.invalidRequest, 'ZToolsService DLL parameters exceed size limit')
   }
   return encodeFixedCommand(DLL_CALL_COMMAND, {
     pluginId,
@@ -143,16 +143,16 @@ function encodeServiceDllTaskCall(
 ): Buffer {
   if (!SAFE_IDENTIFIER.test(pluginId) || !SAFE_IDENTIFIER.test(dllId) ||
       !SAFE_IDENTIFIER.test(functionName) || !/^task_[A-Za-z0-9_-]{1,123}$/.test(taskId)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'ZToolsService DLL 任务标识无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid ZToolsService DLL task identifier')
   }
   let payload: string
   try {
     payload = JSON.stringify({ ...params, taskId })
   } catch {
-    throw new ZToolsError(errorCodes.invalidRequest, 'ZToolsService DLL 参数不可序列化')
+    throw new ZToolsError(errorCodes.invalidRequest, 'ZToolsService DLL parameters are not serializable')
   }
   if (Buffer.byteLength(payload, 'utf8') > SERVICE_DLL_PAYLOAD_BYTES) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'ZToolsService DLL 参数过大')
+    throw new ZToolsError(errorCodes.invalidRequest, 'ZToolsService DLL parameters exceed size limit')
   }
   return encodeFixedCommand(command, {
     pluginId,
@@ -189,7 +189,7 @@ export function encodeServiceDllCallWithCallback(
 function encodeServiceDllTaskControl(command: number, pluginId: string, dllId: string, taskId: string): Buffer {
   if (!SAFE_IDENTIFIER.test(pluginId) || !SAFE_IDENTIFIER.test(dllId) ||
       !/^task_[A-Za-z0-9_-]{1,123}$/.test(taskId)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'ZToolsService DLL 任务标识无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid ZToolsService DLL task identifier')
   }
   return encodeFixedCommand(command, { pluginId, dllId, payload: taskId })
 }
@@ -217,7 +217,7 @@ export function decodeServiceContextMenuCheckAdmin(payload: Uint8Array): boolean
   const result = decodeJsonObject(payload)
   if (Object.keys(result).length !== 2 || result.success !== true ||
       typeof result.isAdmin !== 'boolean') {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService CheckAdmin 响应无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService CheckAdmin response')
   }
   return result.isAdmin
 }
@@ -227,7 +227,7 @@ export function decodeServiceDllCall(payload: Uint8Array): unknown {
   try {
     text = new TextDecoder('utf-8', { fatal: true }).decode(payload)
   } catch {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService DLL 响应不是有效 UTF-8')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService DLL response is not valid UTF-8')
   }
   try {
     return JSON.parse(text) as unknown
@@ -241,10 +241,10 @@ export function decodeServiceDllTaskId(payload: Uint8Array, taskId: string): voi
   try {
     value = new TextDecoder('utf-8', { fatal: true }).decode(payload)
   } catch {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService DLL 任务响应不是有效 UTF-8')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService DLL task response is not valid UTF-8')
   }
   if (value !== taskId) {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService DLL 任务响应无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService DLL task response')
   }
 }
 
@@ -259,18 +259,18 @@ export function decodeServiceDllTaskStatus(payload: Uint8Array, taskId: string):
     typeof value.functionName !== 'string' ||
     (value.error !== null && typeof value.error !== 'string')
   ) {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService DLL 任务状态无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService DLL task status')
   }
   if (value.resultReady !== undefined && typeof value.resultReady !== 'boolean') {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService DLL 任务结果状态无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService DLL task result status')
   }
   if (value.result !== undefined && value.result !== null && typeof value.result !== 'string') {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService DLL 任务结果无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService DLL task result')
   }
   if (value.callbackResults !== undefined &&
       (!Array.isArray(value.callbackResults) ||
        !value.callbackResults.every((item) => typeof item === 'string'))) {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService DLL 回调结果无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService DLL callback result')
   }
   return value as unknown as ServiceDllTaskStatus
 }
@@ -278,7 +278,7 @@ export function decodeServiceDllTaskStatus(payload: Uint8Array, taskId: string):
 export function decodeServiceDllTaskCode(payload: Uint8Array): number {
   const value = decodeJsonObject(payload)
   if (Object.keys(value).length !== 1 || !Number.isInteger(value.code)) {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService DLL 任务响应无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService DLL task response')
   }
   return value.code as number
 }
@@ -286,27 +286,27 @@ export function decodeServiceDllTaskCode(payload: Uint8Array): number {
 export function decodeServiceDllTaskSuccess(payload: Uint8Array): void {
   const value = decodeJsonObject(payload)
   if (Object.keys(value).length !== 1 || value.success !== true) {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService DLL 任务清理响应无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService DLL task cleanup response')
   }
 }
 
 export function decodeServiceContextMenuRestartExplorer(payload: Uint8Array): void {
   const result = decodeJsonObject(payload)
   if (Object.keys(result).length !== 1 || result.success !== true) {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService Explorer 响应无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService Explorer response')
   }
 }
 
 export function decodeServicePolicyStatus(payload: Uint8Array): ServicePolicyStatus {
   if (!(payload instanceof Uint8Array) || payload.byteLength !== SERVICE_POLICY_STATUS_BYTES) {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService 策略状态长度无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService policy state length')
   }
   const status = Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength)
   const flags = status.readUInt16LE(6)
   if (status.readUInt32LE(0) !== SERVICE_POLICY_STATUS_MAGIC ||
       status.readUInt16LE(4) !== SERVICE_POLICY_STATUS_VERSION ||
       (flags & ~POLICY_KNOWN_FLAGS) !== 0) {
-    throw new ZToolsError(errorCodes.serviceProtocol, 'ZToolsService 策略状态格式无效')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Invalid ZToolsService policy state format')
   }
   return {
     manifestTrusted: (flags & POLICY_FLAG_MANIFEST_TRUSTED) !== 0,

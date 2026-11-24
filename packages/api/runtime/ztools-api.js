@@ -24,6 +24,376 @@
     // ========================================
 
     /**
+     * 清理语言标签：去首尾空白、剥离 POSIX .UTF-8 / @... 后缀并将 _ 转为 -。
+     * 与 packages/ztools-plugins-spec/src/locale.js 保持 100% 行为等价。
+     * @param {unknown} raw
+     * @returns {string}
+     */
+    function stripSdkLocaleSuffix(raw) {
+      if (typeof raw !== 'string') return ''
+      const trimmed = raw.trim()
+      if (!trimmed) return ''
+      const withoutPosix = trimmed.split(/[.@]/)[0] || ''
+      return withoutPosix.trim().replace(/_/g, '-')
+    }
+
+    /**
+     * 严格匹配受支持语言（zh-CN / en-US）。
+     * 遇到空值、'system'/'auto'/'default' 或第三语种（如 ja-JP/fr-FR）返回 null，
+     * 以便候选列表向后顺延而非提前截断。
+     * @param {unknown} raw
+     * @returns {'zh-CN' | 'en-US' | null}
+     */
+    function matchSdkLocale(raw) {
+      const cleaned = stripSdkLocaleSuffix(raw)
+      if (!cleaned) return null
+      const lower = cleaned.toLowerCase()
+      if (lower === 'system' || lower === 'auto' || lower === 'default') {
+        return null
+      }
+      if (lower === 'zh' || lower.startsWith('zh-')) {
+        return 'zh-CN'
+      }
+      if (lower === 'en' || lower.startsWith('en-')) {
+        return 'en-US'
+      }
+      return null
+    }
+
+    /**
+     * 按优先级实时解析当前运行环境语言。
+     * 读取顺序：globalThis.__ztoolsLocale > window.__ztoolsElectron.initialLocale > document.documentElement.lang > localStorage.ztools_locale > navigator.language
+     * 无法识别时回落英文（'en-US'），确保测试与无 DOM 环境稳定。
+     * @returns {'zh-CN' | 'en-US'}
+     */
+    function resolveSdkLocale() {
+      try {
+        const candidates = [
+          typeof globalThis !== 'undefined' ? globalThis.__ztoolsLocale : undefined,
+          typeof window !== 'undefined' && window.__ztoolsElectron ? window.__ztoolsElectron.initialLocale : undefined,
+          typeof document !== 'undefined' && document.documentElement ? document.documentElement.lang : undefined,
+          typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function'
+            ? localStorage.getItem('ztools_locale')
+            : undefined,
+          typeof navigator !== 'undefined' ? navigator.language : undefined
+        ]
+        for (let i = 0; i < candidates.length; i += 1) {
+          const matched = matchSdkLocale(candidates[i])
+          if (matched) {
+            return matched
+          }
+        }
+      } catch (localeReadError) {
+        // 沙箱或受限存储环境下读取语言失败时，遵循默认英文回退
+        void localeReadError
+      }
+      return 'en-US'
+    }
+
+    /**
+     * 响应运行期语言热切换（更新全局 __ztoolsLocale 与 html lang）。
+     * @param {unknown} nextRawLocale
+     */
+    function applyApiLocaleChange(nextRawLocale) {
+      const resolved = matchSdkLocale(nextRawLocale)
+      if (!resolved) return
+      if (typeof window !== 'undefined') {
+        try {
+          window.__ztoolsLocale = resolved
+        } catch (err) {
+          void err
+        }
+      }
+      if (typeof globalThis !== 'undefined') {
+        try {
+          globalThis.__ztoolsLocale = resolved
+        } catch (err) {
+          void err
+        }
+      }
+      if (typeof document !== 'undefined' && document.documentElement) {
+        document.documentElement.lang = resolved
+      }
+    }
+
+    /**
+     * 根据当前运行环境语言选择 SDK 双语文案。
+     * @param {string} zh - 简体中文文案
+     * @param {string} en - 英文文案
+     * @returns {string}
+     */
+    function resolveSdkText(zh, en) {
+      return resolveSdkLocale() === 'zh-CN' ? zh : en
+    }
+
+    /**
+     * SDK 统一双语错误与操作文案字典（通过 resolveSdkText 按运行时语言查表）
+     */
+    const SDK_ERROR_MESSAGES = Object.freeze({
+      'zh-CN': Object.freeze({
+        mockFileContent: '这是 Mock 文件内容\nMock file content',
+        mockSecureStorageUnsupported: 'Mock 环境不支持安全凭据存储',
+        mockShortcutCreated: '快捷方式已创建 (Mock)',
+        mockOcrResult: 'Mock OCR 识别结果\nMock OCR text result',
+        invalidCancelCleanupLimit: '取消等待上限无效',
+        hostNoPerMethodCancel: '宿主没有逐方法取消入口',
+        fileRequestCancelled: '文件请求已取消',
+        invalidFileTransferOptions: '文件传输选项无效',
+        fileRequestLimitExceeded: '文件请求超过上限',
+        fileRequestOutcomeUnconfirmed: '文件请求结束未确认',
+        networkCancelUnconfirmed: '取消请求未确认底层网络请求已结束',
+        hostNoAtomicNoOverwriteWrite: '当前宿主不支持原子禁止覆盖写入',
+        hostNoAtomicNoOverwriteCacheWrite: '当前宿主缓存写入接口不支持原子禁止覆盖',
+        invalidRegionCaptureCancelResponse: '区域截图取消响应无效',
+        invalidScreenshotRefResponse: '截图引用响应无效',
+        screenshotCancelOptionsUnsupported: '当前截图合约不支持引用取消选项',
+        invalidFileDialogPrompt: '文件选择提示无效',
+        saveNameSingleFileOnly: '保存名称只能有一个文件名',
+        invalidFileDialogFilterType: '文件选择类型无效',
+        invalidDirectoryAccessScope: '目录授权范围无效',
+        invalidFileDialogResponse: '文件选择响应无效',
+        refSdkNoTempPath: '文件引用SDK不返回临时路径',
+        clipboardTextTooLarge: '剪贴板文本超过8MiB',
+        invalidFileClipboardResponse: '文件剪贴板响应无效',
+        invalidFileClipboardErrorResponse: '文件剪贴板错误响应无效',
+        refEventHostUnavailable: '文件引用事件宿主不可用',
+        invalidClipboardEventHandler: '剪贴板事件处理器无效',
+        clipboardEventHandlerLimitExceeded: '剪贴板事件处理器超过上限',
+        invalidFileClipboardEventContract: '文件剪贴板事件契约无效',
+        invalidFileClipboardEventState: '文件剪贴板事件状态无效',
+        invalidImageClipboardResponse: '图片剪贴板响应无效',
+        invalidImageDataResponse: '图片数据响应无效',
+        directImageDataTooLarge: '直接图片数据超出上限',
+        invalidFileClipboardCount: '文件剪贴板数量无效',
+        refFilePasteNotWired: '引用文件粘贴消费者尚未接线',
+        invalidImageRefResponse: '图片引用响应无效',
+        invalidFileTransferUrl: '文件传输URL无效',
+        invalidFileTransferTimeout: '文件传输超时范围无效',
+        invalidFileTransferHeaders: '文件传输headers无效',
+        fileTransferHeadersTooLarge: '文件传输headers超出上限',
+        invalidUploadFieldName: '上传字段名无效',
+        downloadResponseUnconfirmed: '下载完成后的响应无法确认',
+        invalidUploadResponse: '上传响应无效',
+        invalidPortListResponse: '端口列表响应无效',
+        invalidProcessListResponse: '进程列表响应无效',
+        ffmpegTaskControlNotWired: 'FFmpeg任务的进度、完成与取消能力尚未接入',
+        invalidLocalOcrResult: '本地OCR结果无效',
+        invalidLocalOcrLanguages: '本地OCR语言无效',
+        localOcrNoLanguages: '本地OCR未提供语言',
+        invalidLocalOcrLine: '本地OCR行无效',
+        localOcrTextTooLarge: '本地OCR文字过多',
+        localOcrTextMismatch: '本地OCR文字不一致',
+        refEncodePreservesFormat: '引用编码保留原始PNG/JPEG格式',
+        imageCrossPlatformProviderNotImplemented: '此图片方法的跨平台provider尚未实现',
+        hostRefPreviewUnavailable: '当前宿主尚未开放引用预览',
+        legacyImageOptionsUnsupported: '旧图片处理器不支持请求选项',
+        gifPreviewRequiresRefImageHandler: 'GIF预览需要引用图片处理器',
+        gifEncodeRequiresRefImageHandler: '真实GIF编码需要引用图片处理器',
+        pdfRequestOptionsUnsupported: '当前图片桥不支持新增PDF请求选项',
+        invalidGifPreviewParams: 'GIF预览图片或间隔无效',
+        invalidGifPreviewResponse: 'GIF预览响应无效',
+        invalidGifInputParams: 'GIF输入图片或间隔无效',
+        gifSaveOutcomeUnconfirmed: 'GIF保存结果未确认',
+        invalidPdfImageList: 'PDF输入图片列表无效',
+        pdfSaveOutcomeUnconfirmed: 'PDF保存结果未确认',
+        invalidImagePreviewParams: '图片预览参数无效',
+        invalidImagePreviewFormatOrQuality: '图片预览格式或质量无效',
+        invalidImagePreviewResponse: '图片预览响应无效',
+        invalidBase64Response: 'Base64编码响应无效',
+        invalidJpegQualityRange: 'JPEG质量须为1到100',
+        invalidImageSaveReceipt: '图片保存收据无效，请核实目标文件',
+        invalidImageProcessResponse: '图片处理响应无效',
+        invalidImageOutputFormat: '请明确选择PNG或JPEG输出格式',
+        invalidImageResizeDimensions: '图片缩放尺寸无效',
+        invalidImageScaleRatio: '图片缩放比例须为0.1到5',
+        invalidImageCropBounds: '图片裁剪范围无效',
+        invalidImageRotateAngle: '图片旋转角度无效',
+        invalidImageFlipDirection: '图片翻转方向无效',
+        invalidBrowserSnapshotOptions: '浏览器快照选项无效',
+        invalidSqliteResponse: 'SQLite响应无效',
+        invalidSqliteRow: 'SQLite行无效',
+        sqliteFieldTooLarge: 'SQLite字段超过上限',
+        invalidSqliteField: 'SQLite字段无效',
+        sqliteResultTooLarge: 'SQLite结果超过8MiB',
+        imageOpProcess: '图片处理',
+        imageOpConvert: '图片格式转换',
+        imageOpResize: '图片缩放',
+        imageOpScale: '图片按比例缩放',
+        imageOpCrop: '图片裁剪',
+        imageOpRotate: '图片旋转',
+        imageOpFlip: '图片翻转',
+        imageOpCompress: '图片压缩',
+        imageOpCompressPng: 'PNG 压缩',
+        imageOpCompressPngLossy: 'PNG 有损压缩',
+        imageOpWatermark: '图片水印',
+        imageOpAnnotateText: '图片文字标注',
+        imageOpStitch: '图片拼接',
+        imageOpBorder: '图片边框',
+        imageOpRoundCorners: '图片圆角',
+        imageOpToPdf: '图片转 PDF',
+        imageOpGenerateQr: '二维码生成',
+        imageOpDecodeQr: '二维码解码',
+        imageOpSvgToPng: 'SVG 转 PNG',
+        imageOpGetInfo: '获取图片信息',
+        imageOpToBase64: '图片转 Base64',
+        imageOpFromBase64: 'Base64 转图片',
+        imageEmptyResult: '{operation}返回空结果'
+      }),
+      'en-US': Object.freeze({
+        mockFileContent: 'Mock file content',
+        mockSecureStorageUnsupported: 'Secure credential storage is not supported in mock environment',
+        mockShortcutCreated: 'Shortcut created (Mock)',
+        mockOcrResult: 'Mock OCR text result',
+        invalidCancelCleanupLimit: 'Invalid cancellation cleanup timeout',
+        hostNoPerMethodCancel: 'Host does not provide a per-method cancellation handler',
+        fileRequestCancelled: 'File request was cancelled',
+        invalidFileTransferOptions: 'Invalid file transfer options',
+        fileRequestLimitExceeded: 'Concurrent file request limit exceeded',
+        fileRequestOutcomeUnconfirmed: 'File request completion outcome is unconfirmed',
+        networkCancelUnconfirmed: 'Cancellation did not confirm termination of the underlying network request',
+        hostNoAtomicNoOverwriteWrite: 'Current host does not support atomic no-overwrite file writes',
+        hostNoAtomicNoOverwriteCacheWrite: 'Current host cache write API does not support atomic no-overwrite',
+        invalidRegionCaptureCancelResponse: 'Invalid region screenshot cancellation response',
+        invalidScreenshotRefResponse: 'Invalid screenshot reference response',
+        screenshotCancelOptionsUnsupported: 'Current screenshot contract does not support reference cancellation options',
+        invalidFileDialogPrompt: 'Invalid file dialog prompt options',
+        saveNameSingleFileOnly: 'Save filename must be a single file name without path separators',
+        invalidFileDialogFilterType: 'Invalid file dialog selection properties',
+        invalidDirectoryAccessScope: 'Invalid directory access scope',
+        invalidFileDialogResponse: 'Invalid file dialog response',
+        refSdkNoTempPath: 'File reference SDK does not return temporary file paths',
+        clipboardTextTooLarge: 'Clipboard text exceeds 8 MiB limit',
+        invalidFileClipboardResponse: 'Invalid file clipboard response',
+        invalidFileClipboardErrorResponse: 'Invalid file clipboard error response',
+        refEventHostUnavailable: 'File reference event host is unavailable',
+        invalidClipboardEventHandler: 'Invalid clipboard event handler',
+        clipboardEventHandlerLimitExceeded: 'Clipboard event handler limit exceeded',
+        invalidFileClipboardEventContract: 'Invalid file clipboard event contract',
+        invalidFileClipboardEventState: 'Invalid file clipboard event state',
+        invalidImageClipboardResponse: 'Invalid image clipboard response',
+        invalidImageDataResponse: 'Invalid image data response',
+        directImageDataTooLarge: 'Inline image data exceeds size limit',
+        invalidFileClipboardCount: 'Invalid clipboard file list count',
+        refFilePasteNotWired: 'Reference file paste consumer is not wired yet',
+        invalidImageRefResponse: 'Invalid image reference response',
+        invalidFileTransferUrl: 'Invalid file transfer URL',
+        invalidFileTransferTimeout: 'Invalid file transfer timeout range',
+        invalidFileTransferHeaders: 'Invalid file transfer headers',
+        fileTransferHeadersTooLarge: 'File transfer headers exceed size limit',
+        invalidUploadFieldName: 'Invalid upload field name',
+        downloadResponseUnconfirmed: 'Download completion response could not be confirmed',
+        invalidUploadResponse: 'Invalid upload response',
+        invalidPortListResponse: 'Invalid port list response',
+        invalidProcessListResponse: 'Invalid process list response',
+        ffmpegTaskControlNotWired: 'FFmpeg task progress, completion, and cancellation are not wired yet',
+        invalidLocalOcrResult: 'Invalid local OCR result',
+        invalidLocalOcrLanguages: 'Invalid local OCR languages',
+        localOcrNoLanguages: 'Local OCR returned no supported languages',
+        invalidLocalOcrLine: 'Invalid local OCR text line',
+        localOcrTextTooLarge: 'Local OCR recognized text exceeds size limit',
+        localOcrTextMismatch: 'Local OCR combined text does not match line items',
+        refEncodePreservesFormat: 'Reference encoding preserves the original PNG/JPEG format',
+        imageCrossPlatformProviderNotImplemented: 'Cross-platform provider for this image method is not implemented yet',
+        hostRefPreviewUnavailable: 'Current host does not expose reference image preview',
+        legacyImageOptionsUnsupported: 'Legacy image processor does not support request options',
+        gifPreviewRequiresRefImageHandler: 'GIF preview requires the reference image processor',
+        gifEncodeRequiresRefImageHandler: 'True GIF encoding requires the reference image processor',
+        pdfRequestOptionsUnsupported: 'Current image bridge does not support additional PDF request options',
+        invalidGifPreviewParams: 'Invalid GIF preview image list or interval',
+        invalidGifPreviewResponse: 'Invalid GIF preview response',
+        invalidGifInputParams: 'Invalid GIF input image list or interval',
+        gifSaveOutcomeUnconfirmed: 'GIF save outcome could not be confirmed',
+        invalidPdfImageList: 'Invalid PDF input image list',
+        pdfSaveOutcomeUnconfirmed: 'PDF save outcome could not be confirmed',
+        invalidImagePreviewParams: 'Invalid image preview parameters',
+        invalidImagePreviewFormatOrQuality: 'Invalid image preview format or quality',
+        invalidImagePreviewResponse: 'Invalid image preview response',
+        invalidBase64Response: 'Invalid Base64 encoding response',
+        invalidJpegQualityRange: 'JPEG quality must be an integer between 1 and 100',
+        invalidImageSaveReceipt: 'Invalid image save receipt; verify the destination file',
+        invalidImageProcessResponse: 'Invalid image processing response',
+        invalidImageOutputFormat: 'Please explicitly choose PNG or JPEG output format',
+        invalidImageResizeDimensions: 'Invalid image resize dimensions',
+        invalidImageScaleRatio: 'Image scale ratio must be between 0.1 and 5',
+        invalidImageCropBounds: 'Invalid image crop bounds',
+        invalidImageRotateAngle: 'Invalid image rotation angle',
+        invalidImageFlipDirection: 'Invalid image flip direction',
+        invalidBrowserSnapshotOptions: 'Invalid browser snapshot options',
+        invalidSqliteResponse: 'Invalid SQLite response',
+        invalidSqliteRow: 'Invalid SQLite row',
+        sqliteFieldTooLarge: 'SQLite field exceeds size limit',
+        invalidSqliteField: 'Invalid SQLite field value',
+        sqliteResultTooLarge: 'SQLite result exceeds 8 MiB limit',
+        imageOpProcess: 'Image processing',
+        imageOpConvert: 'Image format conversion',
+        imageOpResize: 'Image resize',
+        imageOpScale: 'Image scale',
+        imageOpCrop: 'Image crop',
+        imageOpRotate: 'Image rotate',
+        imageOpFlip: 'Image flip',
+        imageOpCompress: 'Image compression',
+        imageOpCompressPng: 'PNG compression',
+        imageOpCompressPngLossy: 'Lossy PNG compression',
+        imageOpWatermark: 'Image watermark',
+        imageOpAnnotateText: 'Image text annotation',
+        imageOpStitch: 'Image stitching',
+        imageOpBorder: 'Image border',
+        imageOpRoundCorners: 'Image rounded corners',
+        imageOpToPdf: 'Images to PDF',
+        imageOpGenerateQr: 'QR code generation',
+        imageOpDecodeQr: 'QR code decoding',
+        imageOpSvgToPng: 'SVG to PNG',
+        imageOpGetInfo: 'Get image info',
+        imageOpToBase64: 'Image to Base64',
+        imageOpFromBase64: 'Base64 to image',
+        imageEmptyResult: '{operation} returned an empty result'
+      })
+    })
+
+    /**
+     * 按统一错误字典键解析当前运行语言的 SDK 文案（遵循 DEFAULT_LOCALE = 'en-US'）
+     * @param {string} key
+     * @param {Record<string, string | number>} [params]
+     * @returns {string}
+     */
+    function resolveSdkErrorText(key, params) {
+      const zh = Object.prototype.hasOwnProperty.call(SDK_ERROR_MESSAGES['zh-CN'], key)
+        ? SDK_ERROR_MESSAGES['zh-CN'][key]
+        : key
+      const en = Object.prototype.hasOwnProperty.call(SDK_ERROR_MESSAGES['en-US'], key)
+        ? SDK_ERROR_MESSAGES['en-US'][key]
+        : key
+      const template = resolveSdkText(zh, en)
+      if (!params) return template
+      return template.replace(/\{(\w+)\}/g, (match, token) =>
+        params[token] !== undefined ? String(params[token]) : match
+      )
+    }
+
+    /**
+     * 创建带标准错误码的双语 SDK Error（保留原有 .code 与附加属性）
+     * @param {string} code
+     * @param {string} key
+     * @param {Record<string, string | number>} [params]
+     * @returns {Error & { code: string }}
+     */
+    function createSdkError(code, key, params) {
+      const error = new Error(resolveSdkErrorText(key, params))
+      error.code = code
+      return error
+    }
+
+    if (typeof globalThis !== 'undefined') {
+      globalThis.__ztoolsStripSdkLocaleSuffix = stripSdkLocaleSuffix
+      globalThis.__ztoolsMatchSdkLocale = matchSdkLocale
+      globalThis.__ztoolsResolveSdkLocale = resolveSdkLocale
+      globalThis.__ztoolsResolveSdkText = resolveSdkText
+      globalThis.__ztoolsResolveSdkErrorText = resolveSdkErrorText
+      globalThis.__ztoolsCreateSdkError = createSdkError
+      globalThis.__ztoolsSdkErrorMessages = SDK_ERROR_MESSAGES
+    }
+
+    /**
      * Environment - 环境检测与适配
      * 检测运行环境，提供环境适配
      */
@@ -120,7 +490,10 @@
        * 创建环境错误
        */
       createEnvironmentError(method) {
-        const errorMessage = `环境错误: ${method} 需要在 ZTools 应用中运行。当前环境: ${this.type}`
+        const errorMessage = resolveSdkText(
+          `环境错误: ${method} 需要在 ZTools 应用中运行。当前环境: ${this.type}`,
+          `Environment error: ${method} must run inside the ZTools desktop app. Current environment: ${this.type}`
+        )
 
         const error = new Error(errorMessage)
         error.code = 'ENVIRONMENT_ERROR'
@@ -137,14 +510,12 @@
         if (this.isBrowser() && !this._warningShown) {
           this._warningShown = true
 
-          console.warn(`
-    ╔════════════════════════════════════════════════════════════╗
-    ║  ⚠️ 当前在浏览器环境中 - ZTools API 需要在 ZTools 应用中运行  ║
-    ╠════════════════════════════════════════════════════════════╣
-    ║  环境信息:                                                 ║
-    ║  - 类型: ${this.type.padEnd(48)} ║
-    ╚════════════════════════════════════════════════════════════╝
-                `)
+          console.warn(
+            resolveSdkText(
+              `[ztools] 当前在浏览器环境中 - ZTools API 需要在 ZTools 应用中运行（环境类型: ${this.type}）`,
+              `[ztools] Running in browser mode - ZTools API requires the ZTools desktop app (environment: ${this.type})`
+            )
+          )
         }
       }
     }
@@ -435,6 +806,11 @@
     // core/mock-provider.js
     // ========================================
 
+    // ============================================================
+    // Mock Provider - 智能 Mock 数据提供者
+    // 职责: 根据方法名自动生成合理的 Mock 响应
+    // ============================================================
+
     class MockProvider {
       constructor() {
         // Mock 数据缓存（模拟持久化状态）
@@ -457,7 +833,10 @@
             const data = JSON.parse(cached)
             this._cache = new Map(Object.entries(data))
           }
-        } catch (e) {}
+        } catch (storageReadError) {
+          // 无存储权限或缓存损坏时保持空缓存
+          void storageReadError
+        }
       }
 
       /**
@@ -467,7 +846,10 @@
         try {
           const data = Object.fromEntries(this._cache.entries())
           localStorage.setItem('ztools_mock_cache', JSON.stringify(data))
-        } catch (e) {}
+        } catch (storageWriteError) {
+          // 无存储权限或配额不足时忽略持久化
+          void storageWriteError
+        }
       }
 
       /**
@@ -577,7 +959,7 @@
             // 否则返回模拟内容
             return {
               success: true,
-              content: btoa('这是 Mock 文件内容\nMock file content'),
+              content: btoa(unescape(encodeURIComponent(resolveSdkErrorText('mockFileContent')))),
               encoding: 'base64'
             }
           },
@@ -717,13 +1099,13 @@
           // 存储加密数据
           db_put_secure: () => ({
             success: false,
-            error: { code: 'NOT_SUPPORTED', message: 'Mock 环境不支持安全凭据存储' }
+            error: { code: 'NOT_SUPPORTED', message: resolveSdkErrorText('mockSecureStorageUnsupported') }
           }),
 
           // 读取加密数据
           db_get_secure: () => ({
             success: false,
-            error: { code: 'NOT_SUPPORTED', message: 'Mock 环境不支持安全凭据存储' }
+            error: { code: 'NOT_SUPPORTED', message: resolveSdkErrorText('mockSecureStorageUnsupported') }
           }),
 
           // Credentials are never written to browser/mock storage.
@@ -733,15 +1115,15 @@
           }),
           credential_v1_set: () => ({
             success: false,
-            error: { code: 'NOT_SUPPORTED', message: 'Mock 环境不支持安全凭据存储' }
+            error: { code: 'NOT_SUPPORTED', message: resolveSdkErrorText('mockSecureStorageUnsupported') }
           }),
           credential_v1_get: () => ({
             success: false,
-            error: { code: 'NOT_SUPPORTED', message: 'Mock 环境不支持安全凭据存储' }
+            error: { code: 'NOT_SUPPORTED', message: resolveSdkErrorText('mockSecureStorageUnsupported') }
           }),
           credential_v1_delete: () => ({
             success: false,
-            error: { code: 'NOT_SUPPORTED', message: 'Mock 环境不支持安全凭据存储' }
+            error: { code: 'NOT_SUPPORTED', message: resolveSdkErrorText('mockSecureStorageUnsupported') }
           })
         }
 
@@ -1157,7 +1539,7 @@
           }),
           plugin_create_shortcut: () => {
             console.log('[Mock] 创建桌面快捷方式:', params.pluginId)
-            return { success: true, message: '快捷方式已创建 (Mock)' }
+            return { success: true, message: resolveSdkErrorText('mockShortcutCreated') }
           }
         }
 
@@ -1435,7 +1817,7 @@
           }),
           process_start: () => ({
             success: true,
-            pid: Math.floor(Math.random() * 10000)
+            pid: (this._mockPidSeq = ((this._mockPidSeq || 2000) % 9000) + 1001)
           }),
           process_kill: () => {
             console.log('[Mock] 终止进程:', params.pid)
@@ -1471,7 +1853,7 @@
       _mockOCR(method, params) {
         return {
           success: true,
-          text: 'Mock OCR 识别结果\nMock OCR text result',
+          text: resolveSdkErrorText('mockOcrResult'),
           blocks: [{ text: 'Mock OCR', x: 10, y: 10, width: 100, height: 30 }]
         }
       }
@@ -1480,21 +1862,10 @@
        * Mock DLL Plugin API
        */
       _mockDLLPlugin(method, params) {
-        const mockUnavailableMsg = (() => {
-          let raw = 'en-US'
-          try {
-            raw = (typeof document !== 'undefined' && document.documentElement?.lang)
-              || (typeof localStorage !== 'undefined' && localStorage.getItem('ztools_locale'))
-              || (typeof navigator !== 'undefined' && navigator.language)
-              || 'en-US'
-          } catch (_err) { /* 沙盒或受限环境无法访问 localStorage，回退默认语言 */ }
-          const isZh = /^zh(?:$|[-_])/i.test(String(raw).trim())
-          const dict = {
-            'zh-CN': 'DLL 插件在 Mock 环境下不可用，请在 ZTools 应用中运行',
-            'en-US': 'DLL plugins are unavailable in browser/mock mode. Please run inside the ZTools desktop app.'
-          }
-          return isZh ? dict['zh-CN'] : dict['en-US']
-        })()
+        const mockUnavailableMsg = resolveSdkText(
+          'DLL 插件在 Mock 环境下不可用，请在 ZTools 应用中运行',
+          'DLL plugins are unavailable in browser/mock mode. Please run inside the ZTools desktop app.'
+        )
         const handlers = {
           dllplugin_list: () => ({
             success: true,
@@ -1720,7 +2091,10 @@
           ) {
             this._debug = true
           }
-        } catch (e) {}
+        } catch (storageError) {
+          // 受限上下文无法访问 localStorage 时沿用默认调试开关
+          void storageError
+        }
       }
 
       _log(...args) {
@@ -1738,7 +2112,7 @@
         if (!requestId) return error
         const target = error && (typeof error === 'object' || typeof error === 'function')
           ? error
-          : new Error(String(error || '请求失败'))
+          : new Error(String(error || resolveSdkText('请求失败', 'Request failed')))
         try {
           if (target.requestId === requestId) return target
           Object.defineProperty(target, 'requestId', {
@@ -1751,7 +2125,12 @@
         } catch {
           const wrapped = new Error(target instanceof Error ? target.message : String(target))
           if (typeof target.code === 'string') wrapped.code = target.code
-          try { Object.defineProperty(wrapped, 'cause', { value: error, enumerable: false }) } catch (causeError) {}
+          try {
+            Object.defineProperty(wrapped, 'cause', { value: error, enumerable: false })
+          } catch (causeError) {
+            // 无法挂载不可枚举 cause 时忽略并保留包装错误
+            void causeError
+          }
           Object.defineProperty(wrapped, 'requestId', {
             value: requestId,
             enumerable: false,
@@ -1769,7 +2148,7 @@
         if (/^Call timeout[:：]/i.test(message)) {
           console.error('[ztools-transport]', message, context)
 
-          const publicError = new Error('超时失败')
+          const publicError = new Error(resolveSdkText('超时失败', 'Request timed out'))
           publicError.code = 'CALL_TIMEOUT'
           publicError.detail = message
           publicError.cause = error
@@ -1807,18 +2186,18 @@
 
           if (signal !== undefined && (!signal || typeof signal.aborted !== 'boolean' ||
               typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) {
-            const error = new Error('IPC signal 无效')
+            const error = new Error(resolveSdkText('IPC signal 无效', 'Invalid IPC AbortSignal'))
             error.code = 'INVALID_REQUEST'
             reject(this._withRequestId(error, messageId))
             return
           }
           if (signal?.aborted) {
-            const error = Object.assign(new Error('调用已取消'), { name: 'AbortError', code: 'CALLER_DESTROYED' })
+            const error = Object.assign(new Error(resolveSdkText('调用已取消', 'Call aborted')), { name: 'AbortError', code: 'CALLER_DESTROYED' })
             reject(this._withRequestId(error, messageId))
             return
           }
           if (signal && typeof cancel !== 'function') {
-            const error = new Error('宿主没有此方法的受控取消入口')
+            const error = new Error(resolveSdkText('宿主没有此方法的受控取消入口', 'Host does not expose controlled cancellation for this method'))
             error.code = 'NOT_SUPPORTED'
             reject(this._withRequestId(error, messageId))
             return
@@ -1857,7 +2236,7 @@
               timeoutId = null
             }
             const cancellationUnconfirmed = () => Object.assign(
-              new Error('取消请求未确认底层网络请求已结束'),
+              new Error(resolveSdkText('取消请求未确认底层网络请求已结束', 'Cancellation was not confirmed to have terminated the underlying network request')),
               { code: 'CANCELLATION_UNCONFIRMED' }
             )
             if (method === 'network_http_request') {
@@ -1878,15 +2257,16 @@
               } else if (error?.code) {
                 settleReject(error)
               } else {
-                settleReject(Object.assign(new Error('取消请求未获 Main 确认，原请求结果尚未确认'), {
-                  code: 'CANCELLATION_UNCONFIRMED', cause: error
-                }))
+                settleReject(Object.assign(
+                  new Error(resolveSdkText('取消请求未获 Main 确认，原请求结果尚未确认', 'Cancellation was not confirmed by Main; original request outcome is unconfirmed')),
+                  { code: 'CANCELLATION_UNCONFIRMED', cause: error }
+                ))
               }
             })
           }
           const onTimeout = () => {
             if (typeof cancel === 'function') {
-              const timeoutError = Object.assign(new Error('屏幕权限申请已超时'), { code: 'REQUEST_TIMEOUT' })
+              const timeoutError = Object.assign(new Error(resolveSdkText('屏幕权限申请已超时', 'Screen permission request timed out')), { code: 'REQUEST_TIMEOUT' })
               requestCancel('timeout', timeoutError)
               return
             }
@@ -1896,7 +2276,7 @@
           }
           if (timeout !== Infinity && timeout > 0) timeoutId = setTimeout(onTimeout, timeout)
           abortListener = () => {
-            const error = Object.assign(new Error('调用已取消'), { name: 'AbortError', code: 'CALLER_DESTROYED' })
+            const error = Object.assign(new Error(resolveSdkText('调用已取消', 'Call aborted')), { name: 'AbortError', code: 'CALLER_DESTROYED' })
             requestCancel('cancel', error)
           }
           signal?.addEventListener('abort', abortListener, { once: true })
@@ -2017,7 +2397,12 @@
         if (typeof methodCall !== 'function') {
           if (timeoutId) clearTimeout(timeoutId)
           this.pendingCalls.delete(messageId)
-          const error = new Error(`Electron preload 未开放方法: ${method}`)
+          const error = new Error(
+            resolveSdkText(
+              `Electron preload 未开放方法: ${method}`,
+              `Electron preload does not expose method: ${method}`
+            )
+          )
           error.code = 'METHOD_NOT_FOUND'
           reject(this._toPublicError(error, { method, messageId }))
           return
@@ -2039,10 +2424,15 @@
             if (timeoutId) clearTimeout(timeoutId)
             this.pendingCalls.delete(messageId)
             if (!response || response.messageId !== messageId) {
-              throw new Error('Electron response messageId mismatch')
+              throw new Error(
+                resolveSdkText(
+                  'Electron 响应 messageId 不匹配 (messageId mismatch)',
+                  'Electron response messageId mismatch'
+                )
+              )
             }
             if (response.success === false) {
-              const error = new Error(response.error?.message || 'Request failed')
+              const error = new Error(response.error?.message || resolveSdkText('请求失败', 'Request failed'))
               error.code = response.error?.code || 'REQUEST_FAILED'
               throw error
             }
@@ -2098,7 +2488,7 @@
             this.pendingCalls.delete(messageId)
 
             if (responseData.success === false) {
-              foundCall.reject(new Error(responseData.error || 'Request failed'))
+              foundCall.reject(new Error(responseData.error || resolveSdkText('请求失败', 'Request failed')))
             } else {
               foundCall.resolve(responseData)
             }
@@ -2150,7 +2540,7 @@
       clearPendingCalls() {
         for (const [callId, call] of this.pendingCalls.entries()) {
           if (call.timeoutId) clearTimeout(call.timeoutId)
-          call.reject(new Error('Transport cleared'))
+          call.reject(new Error(resolveSdkText('传输通道已清理', 'Transport cleared')))
         }
         this.pendingCalls.clear()
       }
@@ -2205,7 +2595,7 @@
         this.referenceDestroyed = false
         this.referenceCleanupMs = config.referenceCleanupMs ?? 30000
         if (!Number.isInteger(this.referenceCleanupMs) || this.referenceCleanupMs < 1 || this.referenceCleanupMs > 30000) {
-          throw this._referenceError('INVALID_REQUEST', '取消等待上限无效')
+          throw this._referenceError('INVALID_REQUEST', resolveSdkErrorText('invalidCancelCleanupLimit'))
         }
       }
       _referenceError(code, message) { const error = new Error(message); error.code = code; return error }
@@ -2265,7 +2655,7 @@
         const host = window.__ztoolsElectron
         const cancel = host?.transport?.cancellations?.[method]
         if (host?.contractVersion !== 2 || typeof cancel !== 'function') {
-          if (options.signal) return Promise.reject(this._referenceError('NOT_SUPPORTED', '宿主没有逐方法取消入口'))
+          if (options.signal) return Promise.reject(this._referenceError('NOT_SUPPORTED', resolveSdkErrorText('hostNoPerMethodCancel')))
           return super.call(method, params, options)
         }
         const invoke = host.transport.methods?.[method]
@@ -2273,13 +2663,13 @@
         const signal = options.signal
         const timeout = options.timeout ?? this.config.timeout
         const maximumTimeout = method === 'network_http_request' ? 300250 : 120000
-        if (this.referenceDestroyed || signal?.aborted) return Promise.reject(this._referenceError('CALLER_DESTROYED', '文件请求已取消'))
+        if (this.referenceDestroyed || signal?.aborted) return Promise.reject(this._referenceError('CALLER_DESTROYED', resolveSdkErrorText('fileRequestCancelled')))
         if (typeof invoke !== 'function' || (signal && (typeof signal.aborted !== 'boolean' ||
             typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) ||
             (timeout !== Infinity && (!Number.isInteger(timeout) || timeout < 1 || timeout > maximumTimeout))) {
-          return Promise.reject(this._referenceError('INVALID_REQUEST', '文件传输选项无效'))
+          return Promise.reject(this._referenceError('INVALID_REQUEST', resolveSdkErrorText('invalidFileTransferOptions')))
         }
-        if (this.referenceCalls.size >= 64) return Promise.reject(this._referenceError('PERMISSION_DENIED', '文件请求超过上限'))
+        if (this.referenceCalls.size >= 64) return Promise.reject(this._referenceError('PERMISSION_DENIED', resolveSdkErrorText('fileRequestLimitExceeded')))
         const messageId = this._generateMessageId(method)
         const mutating = new Set(['filesystem_write_file', 'filesystem_write_cache', 'filesystem_delete_file',
           'filesystem_copy_file', 'filesystem_move_file', 'filesystem_create_directory', 'filesystem_delete_directory',
@@ -2290,8 +2680,8 @@
           const releaseSlot = () => {
             if (invocationFinished && !cleanupPending) this.referenceCalls.delete(messageId)
           }
-          const failure = () => this._referenceError(mutating ? 'FILE_WRITE_OUTCOME_UNKNOWN' : 'FILE_ERROR', '文件请求结束未确认')
-          const cancellationUnconfirmed = () => this._referenceError('CANCELLATION_UNCONFIRMED', '取消请求未确认底层网络请求已结束')
+          const failure = () => this._referenceError(mutating ? 'FILE_WRITE_OUTCOME_UNKNOWN' : 'FILE_ERROR', resolveSdkErrorText('fileRequestOutcomeUnconfirmed'))
+          const cancellationUnconfirmed = () => this._referenceError('CANCELLATION_UNCONFIRMED', resolveSdkErrorText('networkCancelUnconfirmed'))
           const pendingFailure = () => method === 'network_http_request' && requested ? cancellationUnconfirmed() : failure()
           const settle = (value, error) => {
             if (settled) return
@@ -2403,7 +2793,7 @@
 
       _buildEnvelope(type, payload, options = {}) {
         return {
-          envelopeId: `env_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+          envelopeId: `env_${Date.now()}_${typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : (this._envelopeSeq = (this._envelopeSeq || 0) + 1)}`,
           version: 'v1',
           timestamp: Date.now(),
           type,
@@ -3281,7 +3671,7 @@
           }
 
           if (options.overwrite === false) {
-            const error = new Error('当前宿主不支持原子禁止覆盖写入')
+            const error = new Error(resolveSdkErrorText('hostNoAtomicNoOverwriteWrite'))
             error.code = 'NOT_SUPPORTED'
             throw error
           }
@@ -3402,7 +3792,7 @@
         if (this.transport.isElectronEnvironment()) {
           try {
             if (options.overwrite === false) {
-              const error = new Error('当前宿主缓存写入接口不支持原子禁止覆盖')
+              const error = new Error(resolveSdkErrorText('hostNoAtomicNoOverwriteCacheWrite'))
               error.code = 'NOT_SUPPORTED'
               throw error
             }
@@ -3761,43 +4151,47 @@
             typeof ref.grantId !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(ref.grantId) || !kinds.includes(ref.kind) ||
             Object.keys(ref).some(key => !['grantId', 'displayName', 'kind', 'operations', 'fileUrl'].includes(key)) ||
             !Array.isArray(ref.operations) || (right && !ref.operations.includes(right))) {
-          throw this._error('INVALID_REQUEST', '请使用当前SDK授权的文件引用，不能使用旧路径')
+          throw this._error('INVALID_REQUEST', resolveSdkText('请使用当前SDK授权的文件引用，不能使用旧路径', 'Please use an authorized SDK file reference instead of a legacy file path'))
         }
         return ref.grantId
       }
       _relative(value = '', empty = true) {
         if (typeof value !== 'string' || new TextEncoder().encode(value).length > 4096 || value.includes('\0') || (!empty && !value)) {
-          throw this._error('INVALID_REQUEST', '相对文件名无效')
+          throw this._error('INVALID_REQUEST', resolveSdkText('相对文件名无效', 'Invalid relative file path'))
         }
         if (value) {
           const parts = value.split('/')
           if (parts.length > 64 || parts.some(part => !part || part === '.' || part === '..' || /^\.ztools-save-/i.test(part))) {
-            throw this._error('INVALID_REQUEST', '相对文件名超出授权范围')
+            throw this._error('INVALID_REQUEST', resolveSdkText('相对文件名超出授权范围', 'Relative file path is outside the authorized scope'))
           }
         }
         return value
       }
       _options(options, keys) {
         if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !keys.includes(key))) {
-          throw this._error('INVALID_REQUEST', '文件选项无效')
+          throw this._error('INVALID_REQUEST', resolveSdkText('文件选项无效', 'Invalid file options'))
         }
-        if (options.replace !== undefined && typeof options.replace !== 'boolean') throw this._error('INVALID_REQUEST', 'replace必须为布尔值')
-        if (options.onProgress !== undefined && typeof options.onProgress !== 'function') throw this._error('INVALID_REQUEST', 'onProgress必须为函数')
+        if (options.replace !== undefined && typeof options.replace !== 'boolean') {
+          throw this._error('INVALID_REQUEST', resolveSdkText('replace必须为布尔值', 'replace must be a boolean'))
+        }
+        if (options.onProgress !== undefined && typeof options.onProgress !== 'function') {
+          throw this._error('INVALID_REQUEST', resolveSdkText('onProgress必须为函数', 'onProgress must be a function'))
+        }
         if (options.signal !== undefined && (!options.signal || typeof options.signal.aborted !== 'boolean' ||
             typeof options.signal.addEventListener !== 'function' || typeof options.signal.removeEventListener !== 'function')) {
-          throw this._error('INVALID_REQUEST', 'signal必须为AbortSignal')
+          throw this._error('INVALID_REQUEST', resolveSdkText('signal必须为AbortSignal', 'signal must be an AbortSignal'))
         }
         return options
       }
       async _call(method, params, options = {}, allowWriteOutcomeUnknown = false) {
         const bridge = window.__ztoolsElectron
-        if (options.signal?.aborted) throw this._error('CALLER_DESTROYED', '文件请求已取消')
+        if (options.signal?.aborted) throw this._error('CALLER_DESTROYED', resolveSdkText('文件请求已取消', 'File request aborted'))
         if (bridge?.contractVersion !== 2 || typeof bridge.transport?.methods?.[method] !== 'function') {
-          throw this._error('NOT_SUPPORTED', '文件引用需要已完成迁移的SDK合约2宿主')
+          throw this._error('NOT_SUPPORTED', resolveSdkText('文件引用需要已完成迁移的SDK合约2宿主', 'File references require a migrated SDK Contract 2 host'))
         }
         // Cancellation requires the per-method bridge and the actual Transport implementation, never local-only pretend cancellation.
         if (options.signal && (typeof bridge.transport?.cancellations?.[method] !== 'function' || this.transport.supportsAbortSignal !== true)) {
-          throw this._error('NOT_SUPPORTED', '当前宿主尚未开放此文件请求的取消入口')
+          throw this._error('NOT_SUPPORTED', resolveSdkText('当前宿主尚未开放此文件请求的取消入口', 'Current host does not expose cancellation for this file request'))
         }
         let result = await this.transport.call(method, params, { ...(options.signal ? { signal: options.signal } : {}),
           ...(options.timeout !== undefined ? { timeout: options.timeout } : {}) })
@@ -3805,7 +4199,7 @@
           result = this._writeRecord(result, ['success', 'status', 'size', 'reference']) ||
             this._writeRecord(result, ['success', 'status', 'size', 'issues']) ||
             this._writeRecord(result, ['success', 'status', 'code']) || this._writeRecord(result, ['success', 'error'])
-          if (!result) throw this._error('FILE_ERROR', '文件写入回执无效')
+          if (!result) throw this._error('FILE_ERROR', resolveSdkText('文件写入回执无效', 'Invalid file write receipt'))
           if (result.error) result.error = this._writeRecord(result.error, ['code', 'message'])
         }
         if (!result?.success) {
@@ -3813,7 +4207,7 @@
           if (allowWriteOutcomeUnknown && result?.success === false && result.status === 'result-unknown' &&
               result.code === 'FILE_WRITE_OUTCOME_UNKNOWN' && keys.length === 3 &&
               keys.every(key => ['success', 'status', 'code'].includes(key))) return result
-          throw this._error(result?.error?.code || 'FILE_ERROR', result?.error?.message || '文件引用操作失败')
+          throw this._error(result?.error?.code || 'FILE_ERROR', result?.error?.message || resolveSdkText('文件引用操作失败', 'File reference operation failed'))
         }
         return result
       }
@@ -3822,7 +4216,9 @@
         const result = await this._call('filesystem_read_file', { grantId: this._reference(ref, ['file', 'directory'], 'read'),
           relativePath: this._relative(options.relativePath), encoding: 'utf8' }, options)
         if (typeof result.content !== 'string' || !Number.isSafeInteger(result.size) || result.size < 0 || result.size > 16 * 1024 * 1024 ||
-            new TextEncoder().encode(result.content).length > 16 * 1024 * 1024) throw this._error('FILE_ERROR', '文件读取响应无效')
+            new TextEncoder().encode(result.content).length > 16 * 1024 * 1024) {
+          throw this._error('FILE_ERROR', resolveSdkText('文件读取响应无效', 'Invalid file read response'))
+        }
         options.onProgress?.(result.size, result.size)
         return result.content
       }
@@ -3837,27 +4233,31 @@
       async readFileRange(ref, offset, length, options = {}) {
         this._options(options, ['relativePath', 'signal'])
         if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 ||
-            length > 16 * 1024 * 1024 || offset > Number.MAX_SAFE_INTEGER - length) throw this._error('INVALID_REQUEST', '分段范围无效')
+            length > 16 * 1024 * 1024 || offset > Number.MAX_SAFE_INTEGER - length) {
+          throw this._error('INVALID_REQUEST', resolveSdkText('分段范围无效', 'Invalid file read range'))
+        }
         const result = await this._call('filesystem_read_file_range', { grantId: this._reference(ref, ['file', 'directory'], 'read'),
           relativePath: this._relative(options.relativePath), offset, length }, options)
         const bytes = this._decode(result.content, result.size)
-        if (result.offset !== offset || result.encoding !== 'base64' || bytes.length > length) throw this._error('FILE_ERROR', '分段读取响应无效')
+        if (result.offset !== offset || result.encoding !== 'base64' || bytes.length > length) {
+          throw this._error('FILE_ERROR', resolveSdkText('分段读取响应无效', 'Invalid range read response'))
+        }
         return bytes.buffer
       }
       _decode(content, size) {
         if (typeof content !== 'string' || !Number.isSafeInteger(size) || size < 0 || size > 16 * 1024 * 1024 || content.length > 24 * 1024 * 1024) {
-          throw this._error('FILE_ERROR', '文件字节响应超出上限')
+          throw this._error('FILE_ERROR', resolveSdkText('文件字节响应超出上限', 'File byte response exceeds limit'))
         }
         let binary
-        try { binary = atob(content) } catch { throw this._error('FILE_ERROR', '文件字节响应无效') }
-        if (binary.length !== size || btoa(binary) !== content) throw this._error('FILE_ERROR', '文件字节响应无效')
+        try { binary = atob(content) } catch { throw this._error('FILE_ERROR', resolveSdkText('文件字节响应无效', 'Invalid file byte response')) }
+        if (binary.length !== size || btoa(binary) !== content) throw this._error('FILE_ERROR', resolveSdkText('文件字节响应无效', 'Invalid file byte response'))
         return Uint8Array.from(binary, char => char.charCodeAt(0))
       }
       _content(content) {
         let value
-        try { value = encodeContent(content) } catch { throw this._error('INVALID_REQUEST', '文件内容必须为文本或字节数组') }
+        try { value = encodeContent(content) } catch { throw this._error('INVALID_REQUEST', resolveSdkText('文件内容必须为文本或字节数组', 'File content must be a string or byte array')) }
         const bytes = value.encoding === 'utf8' ? new TextEncoder().encode(value.content).length : atob(value.content).length
-        if (bytes > 16 * 1024 * 1024) throw this._error('FILE_TOO_LARGE', '单次文件写入超过16MiB上限')
+        if (bytes > 16 * 1024 * 1024) throw this._error('FILE_TOO_LARGE', resolveSdkText('单次文件写入超过16MiB上限', 'Single file write exceeds the 16 MiB limit'))
         return value
       }
       _writeRecord(value, fields) {
@@ -3907,20 +4307,20 @@
         if (result.success !== true || result.status !== 'committed' || !Number.isSafeInteger(result.size) ||
             result.size !== expectedBytes || !result.reference || keys.length !== 4 ||
             keys.some(key => !['success', 'status', 'size', 'reference'].includes(key))) {
-          throw this._error('FILE_ERROR', '文件写入回执无效')
+          throw this._error('FILE_ERROR', resolveSdkText('文件写入回执无效', 'Invalid file write receipt'))
         }
         const rawReference = this._writeRecord(result.reference, ['grantId', 'displayName', 'kind', 'operations', 'fileUrl'])
         const operation = Array.isArray(rawReference?.operations) && Object.getOwnPropertyDescriptor(rawReference.operations, '0')
         if (!rawReference || !Array.isArray(rawReference.operations) || rawReference.operations.length !== 1 ||
             Reflect.ownKeys(rawReference.operations).length !== 2 ||
             operation?.enumerable !== true || !Object.hasOwn(operation, 'value') || operation.value !== 'read') {
-          throw this._error('FILE_ERROR', '文件写入回执无效')
+          throw this._error('FILE_ERROR', resolveSdkText('文件写入回执无效', 'Invalid file write receipt'))
         }
         rawReference.operations = ['read']
         const reference = this._returnedReference(rawReference, ['file'])
         if (typeof reference.fileUrl !== 'string' ||
             reference.fileUrl !== 'ztools://file/' + reference.grantId + '/' + encodeURIComponent(reference.displayName)) {
-          throw this._error('FILE_ERROR', '文件写入回执产物 URL 无效')
+          throw this._error('FILE_ERROR', resolveSdkText('文件写入回执产物 URL 无效', 'Invalid artifact URL in file write receipt'))
         }
         return Object.freeze({ success: true, status: 'committed', size: result.size,
           reference: Object.freeze({ ...reference, operations: Object.freeze([...reference.operations]) }) })
@@ -3955,18 +4355,22 @@
           const bytes = new TextEncoder().encode(file.name).length
           names += bytes
           return bytes > 4096 || names > 1024 * 1024
-        })) throw this._error('FILE_ERROR', '目录枚举响应无效')
+        })) throw this._error('FILE_ERROR', resolveSdkText('目录枚举响应无效', 'Invalid directory listing response'))
         return files
       }
       async _find(method, directory, pattern, options) {
         this._options(options, ['relativePath', 'caseSensitive', 'signal'])
         if (typeof pattern !== 'string' || !pattern || new TextEncoder().encode(pattern).length > 256 ||
             Array.from(pattern).length > 128 || /[\/\0]/.test(pattern) ||
-            (options.caseSensitive !== undefined && typeof options.caseSensitive !== 'boolean')) throw this._error('INVALID_REQUEST', '文件查找模式无效')
+            (options.caseSensitive !== undefined && typeof options.caseSensitive !== 'boolean')) {
+          throw this._error('INVALID_REQUEST', resolveSdkText('文件查找模式无效', 'Invalid file search pattern'))
+        }
         const result = await this._call(method, { directoryGrantId: this._reference(directory, ['directory'], 'list'),
           relativePath: this._relative(options.relativePath), pattern, caseSensitive: options.caseSensitive ?? true }, options)
         const files = this._listedFiles(result.files)
-        if (files.some(file => file.isDirectory !== (method === 'filesystem_find_directories'))) throw this._error('FILE_ERROR', '文件查找响应类型无效')
+        if (files.some(file => file.isDirectory !== (method === 'filesystem_find_directories'))) {
+          throw this._error('FILE_ERROR', resolveSdkText('文件查找响应类型无效', 'Invalid file search response entry type'))
+        }
         return files
       }
       async findFiles(directory, pattern = '*', options = {}) { return this._find('filesystem_find_files', directory, pattern, options) }
@@ -3981,7 +4385,7 @@
               (value.fileUrl !== undefined && (value.kind !== 'file' || typeof value.fileUrl !== 'string' ||
                 value.fileUrl !== 'ztools://file/' + value.grantId + '/' + encodeURIComponent(value.displayName)))) throw new Error('invalid')
           return value
-        } catch { throw this._error('FILE_ERROR', '宿主文件引用响应无效') }
+        } catch { throw this._error('FILE_ERROR', resolveSdkText('宿主文件引用响应无效', 'Invalid host file reference response')) }
       }
       async deriveRead(directory, name, options = {}) { return this._returnedReference((await this._directory('filesystem_derive_read', directory, name, 'read', options)).reference, ['file']) }
       async deriveSave(directory, name, options = {}) { return this._returnedReference((await this._directory('filesystem_derive_save', directory, name, 'write', options)).reference, ['save']) }
@@ -3990,7 +4394,9 @@
         this._options(options, ['signal'])
         const result = await this._call('filesystem_describe', { grantId: this._reference(ref, ['file', 'directory']) }, options)
         if (typeof result.isDirectory !== 'boolean' || !Number.isSafeInteger(result.size) || result.size < 0 ||
-            !Number.isSafeInteger(result.lastModifiedMs)) throw this._error('FILE_ERROR', '文件元数据响应无效')
+            !Number.isSafeInteger(result.lastModifiedMs)) {
+          throw this._error('FILE_ERROR', resolveSdkText('文件元数据响应无效', 'Invalid file metadata response'))
+        }
         return result
       }
       async getFileSize(ref, options = {}) { return (await this.describe(ref, options)).size }
@@ -4014,7 +4420,7 @@
             new TextEncoder().encode(entry.displayName).length > 4096 || !['intent', 'staging', 'committing', 'unknown'].includes(entry.phase) ||
             !Number.isSafeInteger(entry.createdAt) || entry.createdAt < 0 ||
             (entry.expectedBytes !== null && (!Number.isSafeInteger(entry.expectedBytes) || entry.expectedBytes < 0 || entry.expectedBytes > 2 * 1024 ** 3))) {
-          throw this._error('FILE_ERROR', '写入恢复响应无效')
+          throw this._error('FILE_ERROR', resolveSdkText('写入恢复响应无效', 'Invalid write recovery response'))
         }
         if (inspected) {
           const observation = entry.observation
@@ -4022,7 +4428,7 @@
               Object.keys(observation).length !== 2 || !['unresolved', 'staging', 'committed-object'].includes(observation.state) ||
               (observation.reason === 'no-object-proof' ? observation.state !== 'unresolved' || Object.keys(observation).some(key => !['state', 'reason'].includes(key)) :
                 Object.keys(observation).some(key => !['state', 'size'].includes(key)) || !Number.isSafeInteger(observation.size) || observation.size < 0)) {
-            throw this._error('FILE_ERROR', '写入恢复观察结果无效')
+            throw this._error('FILE_ERROR', resolveSdkText('写入恢复观察结果无效', 'Invalid write recovery observation result'))
           }
           return Object.freeze({ ...entry, observation: Object.freeze({ ...observation }) })
         }
@@ -4031,11 +4437,11 @@
       async listWriteRecovery(options = {}) {
         this._options(options, ['signal'])
         const entries = (await this._call('filesystem_list_write_recovery', {}, options)).entries
-        if (!Array.isArray(entries) || entries.length > 256) throw this._error('FILE_ERROR', '写入恢复记录超出上限')
+        if (!Array.isArray(entries) || entries.length > 256) throw this._error('FILE_ERROR', resolveSdkText('写入恢复记录超出上限', 'Write recovery record count exceeds limit'))
         const ids = new Set()
         return Object.freeze(entries.map(entry => {
           const result = this._recoveryEntry(entry)
-          if (ids.has(result.recoveryId)) throw this._error('FILE_ERROR', '写入恢复记录重复')
+          if (ids.has(result.recoveryId)) throw this._error('FILE_ERROR', resolveSdkText('写入恢复记录重复', 'Duplicate write recovery record'))
           ids.add(result.recoveryId)
           return result
         }))
@@ -4043,17 +4449,19 @@
       async inspectWriteRecovery(recoveryId, options = {}) {
         this._options(options, ['signal'])
         if (typeof recoveryId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(recoveryId)) {
-          throw this._error('INVALID_REQUEST', '写入恢复记录ID无效')
+          throw this._error('INVALID_REQUEST', resolveSdkText('写入恢复记录ID无效', 'Invalid write recovery record ID'))
         }
         const entry = this._recoveryEntry((await this._call('filesystem_inspect_write_recovery', { recoveryId }, options)).entry, true)
-        if (entry.recoveryId !== recoveryId) throw this._error('FILE_ERROR', '写入恢复记录ID不匹配')
+        if (entry.recoveryId !== recoveryId) throw this._error('FILE_ERROR', resolveSdkText('写入恢复记录ID不匹配', 'Write recovery record ID mismatch'))
         return entry
       }
       async readCache(name, options = {}) {
         this._options(options, ['signal'])
         const result = await this._call('filesystem_read_cache', { name: this._relative(name, false), encoding: 'utf8' }, options)
         if (typeof result.content !== 'string' || !Number.isSafeInteger(result.size) || result.size < 0 || result.size > 16 * 1024 * 1024 ||
-            new TextEncoder().encode(result.content).length > 16 * 1024 * 1024) throw this._error('FILE_ERROR', '缓存读取响应无效')
+            new TextEncoder().encode(result.content).length > 16 * 1024 * 1024) {
+          throw this._error('FILE_ERROR', resolveSdkText('缓存读取响应无效', 'Invalid cache read response'))
+        }
         return result.content
       }
       async readCacheAsBinary(name, options = {}) {
@@ -4501,6 +4909,26 @@
     const CREDENTIAL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
     const MAX_CREDENTIAL_VALUE_BYTES = 64 * 1024
 
+
+    function getCredentialErrorMessage(code) {
+      switch (code) {
+        case 'INVALID_REQUEST':
+          return resolveSdkText('凭据请求格式无效', 'Invalid credential request format')
+        case 'PERMISSION_DENIED':
+          return resolveSdkText('当前插件实例无权访问凭据', 'Current plugin instance does not have permission to access credentials')
+        case 'NOT_SUPPORTED':
+          return resolveSdkText('宿主安全凭据存储不可用', 'Host secure credential storage is unavailable')
+        case 'FILE_TOO_LARGE':
+          return resolveSdkText('凭据超过 64 KiB 上限', 'Credential exceeds the 64 KiB limit')
+        case 'DATA_CORRUPT':
+          return resolveSdkText('安全凭据记录损坏或无法解密', 'Secure credential record is corrupted or cannot be decrypted')
+        case 'STORAGE_ERROR':
+          return resolveSdkText('安全凭据读写失败', 'Failed to read or write secure credential storage')
+        default:
+          return resolveSdkText('宿主安全凭据操作失败', 'Host secure credential operation failed')
+      }
+    }
+
     function credentialError(code, message) {
       const error = new Error(message)
       error.code = code
@@ -4509,7 +4937,7 @@
 
     function requireCredentialKey(key) {
       if (typeof key !== 'string' || !CREDENTIAL_KEY_PATTERN.test(key)) {
-        throw credentialError('INVALID_REQUEST', '凭据 key 格式无效')
+        throw credentialError('INVALID_REQUEST', resolveSdkText('凭据 key 格式无效', 'Invalid credential key format'))
       }
     }
 
@@ -4522,15 +4950,7 @@
       if (response.success !== true) {
         const error = isRecord(response.error) ? response.error : {}
         const code = typeof error.code === 'string' ? error.code : 'INTERNAL_ERROR'
-        const messages = {
-          INVALID_REQUEST: '凭据请求格式无效',
-          PERMISSION_DENIED: '当前插件实例无权访问凭据',
-          NOT_SUPPORTED: '宿主安全凭据存储不可用',
-          FILE_TOO_LARGE: '凭据超过 64 KiB 上限',
-          DATA_CORRUPT: '安全凭据记录损坏或无法解密',
-          STORAGE_ERROR: '安全凭据读写失败'
-        }
-        throw credentialError(code, messages[code] || '宿主安全凭据操作失败')
+        throw credentialError(code, getCredentialErrorMessage(code))
       }
       return Object.hasOwn(response, 'data') ? response.data : response
     }
@@ -4548,16 +4968,16 @@
             ['encryption-unavailable', 'insecure-backend', 'backend-unknown'].includes(result.reason)) {
           return { status: 'unavailable', reason: result.reason }
         }
-        throw credentialError('INTERNAL_ERROR', '凭据存储状态响应无效')
+        throw credentialError('INTERNAL_ERROR', resolveSdkText('凭据存储状态响应无效', 'Invalid credential store status response'))
       }
 
       async set(key, value) {
         requireCredentialKey(key)
         if (typeof value !== 'string' || new TextEncoder().encode(value).byteLength > MAX_CREDENTIAL_VALUE_BYTES) {
-          throw credentialError('INVALID_REQUEST', '凭据必须是 64 KiB 以内的字符串')
+          throw credentialError('INVALID_REQUEST', resolveSdkText('凭据必须是 64 KiB 以内的字符串', 'Credential value must be a string within 64 KiB'))
         }
         const result = await this.call('credential_v1_set', { key, value })
-        if (result !== 'OK') throw credentialError('INTERNAL_ERROR', '凭据写入结果无效')
+        if (result !== 'OK') throw credentialError('INTERNAL_ERROR', resolveSdkText('凭据写入结果无效', 'Invalid credential write result'))
         return true
       }
 
@@ -4567,13 +4987,13 @@
         if (isRecord(result) && result.status === 'missing') return null
         if (isRecord(result) && result.status === 'present' && typeof result.value === 'string' &&
             new TextEncoder().encode(result.value).byteLength <= MAX_CREDENTIAL_VALUE_BYTES) return result.value
-        throw credentialError('DATA_CORRUPT', '凭据读取结果无效')
+        throw credentialError('DATA_CORRUPT', resolveSdkText('凭据读取结果无效', 'Invalid credential read result'))
       }
 
       async delete(key) {
         requireCredentialKey(key)
         const result = await this.call('credential_v1_delete', { key })
-        if (result !== 'OK') throw credentialError('INTERNAL_ERROR', '凭据删除结果无效')
+        if (result !== 'OK') throw credentialError('INTERNAL_ERROR', resolveSdkText('凭据删除结果无效', 'Invalid credential delete result'))
         return true
       }
 
@@ -4582,17 +5002,9 @@
           return unwrapResponse(await this.transport.call(method, params))
         } catch (error) {
           if (typeof error?.code === 'string') {
-            const messages = {
-              INVALID_REQUEST: '凭据请求格式无效',
-              PERMISSION_DENIED: '当前插件实例无权访问凭据',
-              NOT_SUPPORTED: '宿主安全凭据存储不可用',
-              FILE_TOO_LARGE: '凭据超过 64 KiB 上限',
-              DATA_CORRUPT: '安全凭据记录损坏或无法解密',
-              STORAGE_ERROR: '安全凭据读写失败'
-            }
-            throw credentialError(error.code, messages[error.code] || '宿主安全凭据操作失败')
+            throw credentialError(error.code, getCredentialErrorMessage(error.code))
           }
-          throw credentialError('INTERNAL_ERROR', '宿主安全凭据操作失败')
+          throw credentialError('INTERNAL_ERROR', getCredentialErrorMessage('INTERNAL_ERROR'))
         }
       }
     }
@@ -4661,14 +5073,14 @@
             Object.keys(options).some(key => key !== 'requestIds') ||
             (requestIds !== undefined && (!Array.isArray(requestIds) || requestIds.length > 64 ||
               requestIds.some(value => typeof value !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(value))))) {
-          const error = new Error('诊断请求 ID 无效')
+          const error = new Error(resolveSdkText('诊断请求 ID 无效', 'Invalid diagnostics request IDs'))
           error.code = 'INVALID_REQUEST'
           throw error
         }
         const ids = requestIds === undefined ? [] : [...new Set(requestIds)]
         const data = await this.transport.call('diagnostics_get', ids.length ? { requestIds: ids } : {})
         if (!data || data.schemaVersion !== 1 || !Array.isArray(data.requestFailures) || data.requestFailures.length > ids.length) {
-          const error = new Error('宿主诊断响应无效')
+          const error = new Error(resolveSdkText('宿主诊断响应无效', 'Invalid host diagnostics response'))
           error.code = 'DIAGNOSTICS_INVALID'
           throw error
         }
@@ -4683,7 +5095,7 @@
               typeof failure.failureStage !== 'string' || !/^[a-z-]{1,32}$/.test(failure.failureStage) ||
               typeof failure.errorCode !== 'string' || !/^[A-Z][A-Z0-9_]{0,63}$/.test(failure.errorCode) ||
               typeof failure.occurredAt !== 'string' || !Number.isFinite(Date.parse(failure.occurredAt))) {
-            const error = new Error('宿主诊断记录无效')
+            const error = new Error(resolveSdkText('宿主诊断记录无效', 'Invalid host diagnostics record'))
             error.code = 'DIAGNOSTICS_INVALID'
             throw error
           }
@@ -4738,7 +5150,7 @@
         if (r && r.success) {
           return r
         }
-        throw new Error(r?.error || 'Get system info failed')
+        throw new Error(r?.error || resolveSdkText('获取系统信息失败', 'Failed to get system info'))
       }
 
       // ============ 系统扩展功能 (类似 uTools API) ============
@@ -4752,7 +5164,7 @@
         if (r && r.success && r.nativeId) {
           return r.nativeId
         }
-        throw new Error(r?.error || 'Get native ID failed')
+        throw new Error(r?.error || resolveSdkText('获取本机唯一标识失败', 'Failed to get native ID'))
       }
 
       /**
@@ -4899,7 +5311,7 @@
           typeof this.transport.isElectronEnvironment !== 'function' ||
           !this.transport.isElectronEnvironment()
         ) {
-          const error = new Error('运行时能力查询仅支持 Electron 宿主')
+          const error = new Error(resolveSdkText('运行时能力查询仅支持 Electron 宿主', 'Runtime capability queries are only supported in the Electron host'))
           error.code = 'NOT_SUPPORTED'
           throw error
         }
@@ -4912,20 +5324,20 @@
           typeof this.transport.isElectronEnvironment !== 'function' ||
           !this.transport.isElectronEnvironment()
         ) {
-          const error = new Error('运行时能力申请仅支持 Electron 宿主')
+          const error = new Error(resolveSdkText('运行时能力申请仅支持 Electron 宿主', 'Runtime capability requests are only supported in the Electron host'))
           error.code = 'NOT_SUPPORTED'
           throw error
         }
         const capability = request && typeof request === 'object' ? request.capability : undefined
         const timeout = options.timeout ?? 120000
         if (!Number.isInteger(timeout) || timeout < 1 || timeout > 120000) {
-          const error = new Error('屏幕权限申请等待时间必须为 1 到 120000 毫秒')
+          const error = new Error(resolveSdkText('屏幕权限申请等待时间必须为 1 到 120000 毫秒', 'Screen permission request timeout must be between 1 and 120000 ms'))
           error.code = 'INVALID_REQUEST'
           throw error
         }
         if (options.signal !== undefined && (!options.signal || typeof options.signal.aborted !== 'boolean' ||
             typeof options.signal.addEventListener !== 'function' || typeof options.signal.removeEventListener !== 'function')) {
-          const error = new Error('屏幕权限申请 signal 无效')
+          const error = new Error(resolveSdkText('屏幕权限申请 signal 无效', 'Invalid AbortSignal for screen permission request'))
           error.code = 'INVALID_REQUEST'
           throw error
         }
@@ -4941,7 +5353,7 @@
           typeof this.transport.isElectronEnvironment !== 'function' ||
           !this.transport.isElectronEnvironment()
         ) {
-          const error = new Error('运行时能力撤销仅支持 Electron 宿主')
+          const error = new Error(resolveSdkText('运行时能力撤销仅支持 Electron 宿主', 'Runtime capability revocation is only supported in the Electron host'))
           error.code = 'NOT_SUPPORTED'
           throw error
         }
@@ -4955,7 +5367,7 @@
           typeof this.transport.isElectronEnvironment !== 'function' ||
           !this.transport.isElectronEnvironment()
         ) {
-          const error = new Error('运行时能力管理仅支持 Electron 宿主')
+          const error = new Error(resolveSdkText('运行时能力管理仅支持 Electron 宿主', 'Runtime capability management is only supported in the Electron host'))
           error.code = 'NOT_SUPPORTED'
           throw error
         }
@@ -4968,7 +5380,7 @@
           typeof this.transport.isElectronEnvironment !== 'function' ||
           !this.transport.isElectronEnvironment()
         ) {
-          const error = new Error('运行时能力管理仅支持 Electron 宿主')
+          const error = new Error(resolveSdkText('运行时能力管理仅支持 Electron 宿主', 'Runtime capability management is only supported in the Electron host'))
           error.code = 'NOT_SUPPORTED'
           throw error
         }
@@ -4984,7 +5396,7 @@
           typeof this.transport.isElectronEnvironment !== 'function' ||
           !this.transport.isElectronEnvironment()
         ) {
-          const error = new Error('Runtime identity is only available from the Electron host')
+          const error = new Error(resolveSdkText('运行时身份信息仅支持在 Electron 宿主中获取', 'Runtime identity is only available from the Electron host'))
           error.code = 'NOT_SUPPORTED'
           throw error
         }
@@ -5093,7 +5505,7 @@
       /** 管理当前窗口及插件的定时防休眠；离开插件页面后仍由主进程保持。 */
       async managePowerSession(options) {
         const r = await this.transport.call('system_power_session', options)
-        if (!r?.success) throw new Error(r?.error?.message || r?.error || '防休眠操作失败')
+        if (!r?.success) throw new Error(r?.error?.message || r?.error || resolveSdkText('防休眠操作失败', 'Power sleep-prevention action failed'))
         return r.data ?? r
       }
 
@@ -5176,7 +5588,7 @@
        */
       async getHardwareSummary() {
         const result = await this.transport.call('system_get_hardware_summary', {})
-        const data = result?.data, failed = () => Object.assign(new Error('硬件概要响应无效'), { code: 'SYSTEM_ERROR' })
+        const data = result?.data, failed = () => Object.assign(new Error(resolveSdkText('硬件概要响应无效', 'Invalid hardware summary response')), { code: 'SYSTEM_ERROR' })
         if (result?.success !== true || !data || !['windows', 'macos'].includes(data.platform) || !['ia32', 'x64', 'arm64'].includes(data.processArch) || typeof data.osVersion !== 'string' || data.osVersion.length > 64 || !Array.isArray(data.cpuModels) || data.cpuModels.length > 32 || data.cpuModels.some(value => typeof value !== 'string' || !value || value.length > 512) || !Number.isSafeInteger(data.logicalCpuCount) || data.logicalCpuCount < 0 || data.logicalCpuCount > 65536 || !Number.isSafeInteger(data.totalMemory) || data.totalMemory < 0 || !data.fieldAvailability || ['cpuModels', 'logicalCpuCount', 'totalMemory', 'osVersion'].some(key => typeof data.fieldAvailability[key] !== 'boolean')) throw failed()
         if (data.fieldAvailability.cpuModels !== !!data.cpuModels.length || data.fieldAvailability.logicalCpuCount !== (data.logicalCpuCount > 0) || data.fieldAvailability.totalMemory !== (data.totalMemory > 0) || data.fieldAvailability.osVersion !== !!data.osVersion) throw failed()
         return Object.freeze({ platform: data.platform, processArch: data.processArch, osVersion: data.osVersion, cpuModels: Object.freeze([...data.cpuModels]), logicalCpuCount: data.logicalCpuCount, totalMemory: data.totalMemory, fieldAvailability: Object.freeze({ ...data.fieldAvailability }) })
@@ -5243,7 +5655,7 @@
             web: r.web || null
           }
         }
-        throw new Error(r?.error || 'Check update failed')
+        throw new Error(r?.error || resolveSdkText('检查更新失败', 'Check update failed'))
       }
 
       /**
@@ -5284,7 +5696,7 @@
         if (r && r.success) {
           return r
         }
-        throw new Error(r?.error || 'Update failed')
+        throw new Error(r?.error || resolveSdkText('执行更新失败', 'Update failed'))
       }
 
       /**
@@ -5299,7 +5711,7 @@
             webVersion: r.webVersion || '0'
           }
         }
-        throw new Error(r?.error || 'Get version failed')
+        throw new Error(r?.error || resolveSdkText('获取版本信息失败', 'Get version failed'))
       }
 
       // ============ 提权执行功能 ============
@@ -5320,7 +5732,7 @@
         if (r && r.success) {
           return r.result
         }
-        throw new Error(r?.error || 'Privileged execute failed')
+        throw new Error(r?.error || resolveSdkText('特权操作执行失败', 'Privileged execute failed'))
       }
 
       // ============ 快捷键管理 ============
@@ -5342,7 +5754,13 @@
 
     const CAPABILITY_REQUEST_TIMEOUT_MS = 120_000
 
-    function permissionError(message = '屏幕访问未获授权。如需使用，请关闭并重新打开该插件以再次发起授权申请。') {
+
+    function permissionError(
+      message = resolveSdkText(
+        '屏幕访问未获授权。如需使用，请关闭并重新打开该插件以再次发起授权申请。',
+        'Screen access is not authorized. Please close and reopen this plugin to request permission again.'
+      )
+    ) {
       return Object.assign(new Error(message), { code: 'PERMISSION_DENIED' })
     }
 
@@ -6306,11 +6724,18 @@
         if (window.__ztoolsElectron?.contractVersion === 2) {
           const refs = new ReferenceFileSystemAPI(this.transport)
           refs._options(options, ['signal'])
-          if (typeof text === 'string' && new TextEncoder().encode(text).length > 8 * 1024 * 1024) throw refs._error('RESPONSE_TOO_LARGE', '剪贴板文本超过8MiB')
+          if (typeof text === 'string' && new TextEncoder().encode(text).length > 8 * 1024 * 1024) {
+            throw refs._error('RESPONSE_TOO_LARGE', resolveSdkText('剪贴板文本超过8MiB', 'Clipboard text exceeds 8 MiB'))
+          }
           await refs._call('clipboard_copy_text', typeof text === 'string' ? { text } : { fileGrantId: refs._reference(text, ['file'], 'read') }, options)
           return true
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) {
+          throw Object.assign(
+            new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+            { code: 'NOT_SUPPORTED' }
+          )
+        }
         const MAX_IPC_SIZE = 200 * 1024 // 200KB 阈值
 
         // 大文本：写入临时文件，只传文件路径
@@ -6356,11 +6781,18 @@
         if (window.__ztoolsElectron?.contractVersion === 2) {
           const refs = new ReferenceFileSystemAPI(this.transport)
           refs._options(options, ['signal'])
-          if (typeof image === 'string' && new TextEncoder().encode(image).length > 700 * 1024) throw refs._error('FILE_TOO_LARGE', '大图请使用FileRef')
+          if (typeof image === 'string' && new TextEncoder().encode(image).length > 700 * 1024) {
+            throw refs._error('FILE_TOO_LARGE', resolveSdkText('大图请使用FileRef', 'Please use a FileRef for large images'))
+          }
           await refs._call('clipboard_copy_image', typeof image === 'string' ? { image } : { fileGrantId: refs._reference(image, ['file'], 'read') }, options)
           return true
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) {
+          throw Object.assign(
+            new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+            { code: 'NOT_SUPPORTED' }
+          )
+        }
         const r = await this.transport.call('clipboard_copy_image', { image })
         return r && r.success === true
       }
@@ -6396,10 +6828,17 @@
           const refs = new ReferenceFileSystemAPI(this.transport)
           refs._options(options, ['signal'])
           const result = await refs._call('clipboard_read_text', {}, options)
-          if (typeof result.text !== 'string' || new TextEncoder().encode(result.text).length > 8 * 1024 * 1024) throw refs._error('RESPONSE_TOO_LARGE', '剪贴板文本响应无效')
+          if (typeof result.text !== 'string' || new TextEncoder().encode(result.text).length > 8 * 1024 * 1024) {
+            throw refs._error('RESPONSE_TOO_LARGE', resolveSdkText('剪贴板文本响应无效', 'Invalid clipboard text response'))
+          }
           return result.text
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) {
+          throw Object.assign(
+            new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+            { code: 'NOT_SUPPORTED' }
+          )
+        }
         const r = await this.transport.call('clipboard_read_text', {})
         if (r && r.success && r.text !== undefined) {
           return r.text
@@ -6416,18 +6855,22 @@
         refs._options(options, ['signal'])
         const result = await refs._call('clipboard_read_image', {}, options)
         if (result.useReference === false) {
-          if (typeof result.image !== 'string' || (result.image !== '' && (!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(result.image) || result.image.length > 700 * 1024))) throw refs._error('CLIPBOARD_ERROR', '剪贴板图片响应无效')
+          if (typeof result.image !== 'string' || (result.image !== '' && (!/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(result.image) || result.image.length > 700 * 1024))) {
+            throw refs._error('CLIPBOARD_ERROR', resolveSdkText('剪贴板图片响应无效', 'Invalid clipboard image response'))
+          }
           return result.image
         }
         const reference = refs._returnedReference(result.reference, ['file'])
         try {
-          if (result.useReference !== true || result.fileUrl !== 'ztools://file/' + reference.grantId + '/' + encodeURIComponent(reference.displayName) || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024 || !Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 || result.width * result.height > 32 * 1024 * 1024) throw refs._error('CLIPBOARD_ERROR', '剪贴板图片引用响应无效')
+          if (result.useReference !== true || result.fileUrl !== 'ztools://file/' + reference.grantId + '/' + encodeURIComponent(reference.displayName) || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024 || !Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 || result.width * result.height > 32 * 1024 * 1024) {
+            throw refs._error('CLIPBOARD_ERROR', resolveSdkText('剪贴板图片引用响应无效', 'Invalid clipboard image reference response'))
+          }
           let released
           return Object.freeze({ type: 'reference', reference: Object.freeze({ ...reference, operations: Object.freeze([...reference.operations]) }), fileUrl: result.fileUrl, size: result.size, width: result.width, height: result.height,
             release: () => released ??= refs.revoke(reference),
             toDataURL: async (readOptions = {}) => {
               refs._options(readOptions, ['signal'])
-              if (released) throw refs._error('PERMISSION_DENIED', '图片引用已释放')
+              if (released) throw refs._error('PERMISSION_DENIED', resolveSdkText('图片引用已释放', 'Image reference has been released'))
               const bytes = new Uint8Array(await refs.readFileAsBinary(reference, readOptions))
               return 'data:image/png;base64,' + clipboardBytesToBase64(bytes)
             }
@@ -6442,7 +6885,12 @@
           try { return await result.toDataURL(options) }
           finally { await result.release() }
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) {
+          throw Object.assign(
+            new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+            { code: 'NOT_SUPPORTED' }
+          )
+        }
         const r = await this.transport.call('clipboard_read_image', {})
         if (r && r.success) {
           if (r.useTempFile) {
@@ -6464,7 +6912,7 @@
                   const blob = new Blob([binary], { type: 'image/png' })
                   return URL.createObjectURL(blob)
                 }
-                throw new Error('filesystem API not available')
+                throw new Error(resolveSdkText('文件系统 API 不可用', 'Filesystem API is not available'))
               }
             }
           } else {
@@ -6484,26 +6932,37 @@
         refs._options(options, ['signal'])
         const result = await refs._call('clipboard_read_files', {}, options), acquired = new Set()
         try {
-          if (!Array.isArray(result.files) || result.files.length > 256 || !Array.isArray(result.errors) || result.errors.length > 256) throw refs._error('CLIPBOARD_ERROR', '文件剪贴板响应无效')
+          if (!Array.isArray(result.files) || result.files.length > 256 || !Array.isArray(result.errors) || result.errors.length > 256) {
+            throw refs._error('CLIPBOARD_ERROR', resolveSdkText('文件剪贴板响应无效', 'Invalid clipboard files response'))
+          }
           const files = result.files.map(file => {
             const ref = refs._returnedReference(file, ['file', 'directory'])
-            if (acquired.has(ref.grantId)) throw refs._error('CLIPBOARD_ERROR', '文件剪贴板引用重复')
+            if (acquired.has(ref.grantId)) throw refs._error('CLIPBOARD_ERROR', resolveSdkText('文件剪贴板引用重复', 'Duplicate file reference in clipboard response'))
             acquired.add(ref.grantId)
-            if (ref.kind === 'directory' && (ref.operations.length !== 2 || !ref.operations.includes('read') || !ref.operations.includes('list'))) throw refs._error('CLIPBOARD_ERROR', '剪贴板目录权限无效')
+            if (ref.kind === 'directory' && (ref.operations.length !== 2 || !ref.operations.includes('read') || !ref.operations.includes('list'))) {
+              throw refs._error('CLIPBOARD_ERROR', resolveSdkText('剪贴板目录权限无效', 'Invalid clipboard directory permissions'))
+            }
             return Object.freeze({ ...ref, operations: Object.freeze([...ref.operations]) })
           })
           const errors = result.errors.map(error => {
-            if (!error || typeof error !== 'object' || Object.keys(error).some(key => !['index', 'code', 'message'].includes(key)) || !Number.isSafeInteger(error.index) || error.index < 0 || error.index >= 256 || typeof error.code !== 'string' || error.code.length > 64 || typeof error.message !== 'string' || error.message.length > 2048) throw refs._error('CLIPBOARD_ERROR', '文件剪贴板错误响应无效')
+            if (!error || typeof error !== 'object' || Object.keys(error).some(key => !['index', 'code', 'message'].includes(key)) || !Number.isSafeInteger(error.index) || error.index < 0 || error.index >= 256 || typeof error.code !== 'string' || error.code.length > 64 || typeof error.message !== 'string' || error.message.length > 2048) {
+              throw refs._error('CLIPBOARD_ERROR', resolveSdkText('文件剪贴板错误响应无效', 'Invalid clipboard file error response'))
+            }
             return Object.freeze({ ...error })
           })
-          if (options.signal?.aborted) throw refs._error('CALLER_DESTROYED', '文件剪贴板请求已取消')
+          if (options.signal?.aborted) throw refs._error('CALLER_DESTROYED', resolveSdkText('文件剪贴板请求已取消', 'Clipboard file request aborted'))
           return Object.freeze({ files: Object.freeze(files), errors: Object.freeze(errors) })
         } catch (error) { await Promise.all([...acquired].map(grantId => refs._call('filesystem_revoke', { grantId }))); throw error }
       }
 
       async readFiles(options = {}) {
         if (window.__ztoolsElectron?.contractVersion === 2) return (await this.readFilesDetailed(options)).files
-        if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) {
+          throw Object.assign(
+            new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+            { code: 'NOT_SUPPORTED' }
+          )
+        }
         const r = await this.transport.call('clipboard_read_files', {})
         if (r && r.success && r.files) {
           return r.files
@@ -6579,7 +7038,12 @@
           const refs = new ReferenceFileSystemAPI(this.transport)
           refs._options(options, ['signal']); await refs._call('clipboard_clear', {}, options); return true
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('当前剪贴板合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) {
+          throw Object.assign(
+            new Error(resolveSdkText('当前剪贴板合约不支持取消选项', 'Current clipboard contract does not support cancellation options')),
+            { code: 'NOT_SUPPORTED' }
+          )
+        }
         const r = await this.transport.call('clipboard_clear', {})
         return r && r.success === true
       }
@@ -6612,7 +7076,7 @@
        */
       onChange(handler) {
         if (typeof handler !== 'function') {
-          throw new Error('Handler must be a function')
+          throw new Error(resolveSdkText('监听器必须为函数', 'Handler must be a function'))
         }
 
         const existing = this.changeHandlers.get(handler)
@@ -6637,7 +7101,9 @@
        * @param {function} handler - 要取消的回调函数（可选）
        */
       offChange(handler) {
-        if (handler !== undefined && typeof handler !== 'function') throw new TypeError('Handler must be a function')
+        if (handler !== undefined && typeof handler !== 'function') {
+          throw new TypeError(resolveSdkText('监听器必须为函数', 'Handler must be a function'))
+        }
         if (handler === undefined) { for (const record of [...this.changeHandlers.values()]) record.dispose() }
         else this.changeHandlers.get(handler)?.dispose()
       }
@@ -6687,12 +7153,12 @@
         const result = await refs._call(method, params, { ...options, ...(method === 'screen_capture_region' ? { timeout: 120000 } : {}) })
         if (method === 'screen_capture_region' && result.cancelled !== undefined) {
           if (result.reference) await refs.revoke(refs._returnedReference(result.reference, ['file']))
-          if (result.cancelled !== true || Object.keys(result).some(key => !['success', 'cancelled'].includes(key))) throw refs._error('SCREEN_ERROR', '区域截图取消响应无效')
+          if (result.cancelled !== true || Object.keys(result).some(key => !['success', 'cancelled'].includes(key))) throw refs._error('SCREEN_ERROR', resolveSdkErrorText('invalidRegionCaptureCancelResponse'))
           return undefined
         }
         const reference = refs._returnedReference(result.reference, ['file'])
         try {
-          if (result.fileUrl !== 'ztools://file/' + reference.grantId + '/' + encodeURIComponent(reference.displayName) || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024 || !Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 || result.width * result.height > 32 * 1024 * 1024) throw refs._error('SCREEN_ERROR', '截图引用响应无效')
+          if (result.fileUrl !== 'ztools://file/' + reference.grantId + '/' + encodeURIComponent(reference.displayName) || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024 || !Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 || result.width * result.height > 32 * 1024 * 1024) throw refs._error('SCREEN_ERROR', resolveSdkErrorText('invalidScreenshotRefResponse'))
           return Object.freeze({ reference: Object.freeze({ ...reference, operations: Object.freeze([...reference.operations]) }), fileUrl: result.fileUrl, size: result.size, width: result.width, height: result.height })
         } catch (error) { await refs.revoke(reference); throw error }
       }
@@ -6708,7 +7174,7 @@
           if (typeof callback === 'function') callback(imageBase64)
           return imageBase64
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('当前截图合约不支持引用取消选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('screenshotCancelOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
         await ensureRuntimeCapability(this.sys, 'screen.capture')
         const params = rect ? { rect } : {}
         const r = await this.transport.call('screen_capture', params)
@@ -6857,16 +7323,16 @@
         refs._options(options, ['signal'])
         refs._options(params, mode === 'open' ? ['title', 'filters', 'properties'] : mode === 'save' ? ['title', 'filters', 'defaultName'] : ['title', 'access'])
         for (const key of ['title', 'filters', 'defaultName']) if (params[key] !== undefined && (typeof params[key] !== 'string' ||
-            params[key].includes('\0') || new TextEncoder().encode(params[key]).length > 4096)) throw refs._error('INVALID_REQUEST', '文件选择提示无效')
-        if (params.defaultName !== undefined) { refs._relative(params.defaultName, false); if (params.defaultName.includes('/')) throw refs._error('INVALID_REQUEST', '保存名称只能有一个文件名') }
+            params[key].includes('\0') || new TextEncoder().encode(params[key]).length > 4096)) throw refs._error('INVALID_REQUEST', resolveSdkErrorText('invalidFileDialogPrompt'))
+        if (params.defaultName !== undefined) { refs._relative(params.defaultName, false); if (params.defaultName.includes('/')) throw refs._error('INVALID_REQUEST', resolveSdkErrorText('saveNameSingleFileOnly')) }
         if (params.properties !== undefined && (!Array.isArray(params.properties) || !params.properties.length || params.properties.length > 3 ||
             new Set(params.properties).size !== params.properties.length || params.properties.some(item => !['openFile', 'openDirectory', 'multiSelections'].includes(item)))) {
-          throw refs._error('INVALID_REQUEST', '文件选择类型无效')
+          throw refs._error('INVALID_REQUEST', resolveSdkErrorText('invalidFileDialogFilterType'))
         }
-        if (params.access !== undefined && !['read', 'read-write'].includes(params.access)) throw refs._error('INVALID_REQUEST', '目录授权范围无效')
+        if (params.access !== undefined && !['read', 'read-write'].includes(params.access)) throw refs._error('INVALID_REQUEST', resolveSdkErrorText('invalidDirectoryAccessScope'))
         const result = await refs._call(method, params, { ...options, timeout: Infinity })
         if (Object.keys(result).some(key => !['success', 'canceled', 'references'].includes(key)) || typeof result.canceled !== 'boolean' ||
-            !Array.isArray(result.references) || result.references.length > 64 || (result.canceled && result.references.length)) throw refs._error('FILE_ERROR', '文件选择响应无效')
+            !Array.isArray(result.references) || result.references.length > 64 || (result.canceled && result.references.length)) throw refs._error('FILE_ERROR', resolveSdkErrorText('invalidFileDialogResponse'))
         for (const reference of result.references) refs._returnedReference(reference, mode === 'save' ? ['save'] : mode === 'folder' ? ['directory'] : ['file', 'directory'])
         return result
       }
@@ -6877,11 +7343,11 @@
 
     class ReferenceClipboardAPI extends ClipboardAPI {
       constructor(transport, events) { super(transport, events); this.references = new ReferenceFileSystemAPI(transport); this.referenceHandlers = new Map() }
-      _getTempFilePath() { return Promise.reject(this.references._error('NOT_SUPPORTED', '文件引用SDK不返回临时路径')) }
+      _getTempFilePath() { return Promise.reject(this.references._error('NOT_SUPPORTED', resolveSdkErrorText('refSdkNoTempPath'))) }
       async copyText(textOrFile, options = {}) {
         const refs = this.references; refs._options(options, ['signal'])
         const params = typeof textOrFile === 'string' ? { text: textOrFile } : { fileGrantId: refs._reference(textOrFile, ['file'], 'read') }
-        if (params.text !== undefined && new TextEncoder().encode(params.text).length > 8 * 1024 * 1024) throw refs._error('FILE_TOO_LARGE', '剪贴板文本超过8MiB')
+        if (params.text !== undefined && new TextEncoder().encode(params.text).length > 8 * 1024 * 1024) throw refs._error('FILE_TOO_LARGE', resolveSdkErrorText('clipboardTextTooLarge'))
         return refs._call('clipboard_copy_text', params, options)
       }
       async readFiles(options = {}) {
@@ -6892,25 +7358,25 @@
       _fileResult(result) {
         const refs = this.references
         if (Object.keys(result).some(key => !['success', 'files', 'errors'].includes(key)) || !Array.isArray(result.files) || result.files.length > 256 ||
-            !Array.isArray(result.errors) || result.errors.length > 256) throw refs._error('FILE_ERROR', '文件剪贴板响应无效')
+            !Array.isArray(result.errors) || result.errors.length > 256) throw refs._error('FILE_ERROR', resolveSdkErrorText('invalidFileClipboardResponse'))
         for (const file of result.files) refs._returnedReference(file, ['file', 'directory'])
-        for (const error of result.errors) if (!error || Object.keys(error).some(key => !['index', 'code', 'message'].includes(key)) || !Number.isInteger(error.index) || typeof error.code !== 'string' || typeof error.message !== 'string') throw refs._error('FILE_ERROR', '文件剪贴板错误响应无效')
+        for (const error of result.errors) if (!error || Object.keys(error).some(key => !['index', 'code', 'message'].includes(key)) || !Number.isInteger(error.index) || typeof error.code !== 'string' || typeof error.message !== 'string') throw refs._error('FILE_ERROR', resolveSdkErrorText('invalidFileClipboardErrorResponse'))
         return result
       }
       onChange(handler) {
         const refs = this.references
-        if (window.__ztoolsElectron?.contractVersion !== 2 || !this.events) throw refs._error('NOT_SUPPORTED', '文件引用事件宿主不可用')
-        if (typeof handler !== 'function') throw refs._error('INVALID_REQUEST', '剪贴板事件处理器无效')
-        if (this.referenceHandlers.size >= 256 && !this.referenceHandlers.has(handler)) throw refs._error('PERMISSION_DENIED', '剪贴板事件处理器超过上限')
+        if (window.__ztoolsElectron?.contractVersion !== 2 || !this.events) throw refs._error('NOT_SUPPORTED', resolveSdkErrorText('refEventHostUnavailable'))
+        if (typeof handler !== 'function') throw refs._error('INVALID_REQUEST', resolveSdkErrorText('invalidClipboardEventHandler'))
+        if (this.referenceHandlers.size >= 256 && !this.referenceHandlers.has(handler)) throw refs._error('PERMISSION_DENIED', resolveSdkErrorText('clipboardEventHandlerLimitExceeded'))
         if (!this.referenceHandlers.has(handler)) {
           const wrapped = envelope => {
             if (envelope?.type !== 'clipboard_change' || !envelope.payload) return
             const payload = envelope.payload
             if (payload.type === 'files') {
               if (payload.contractVersion !== 2 || Object.keys(payload).some(key => !['contractVersion', 'type', 'files', 'errors', 'hasData'].includes(key)) ||
-                  typeof payload.hasData !== 'boolean') throw refs._error('FILE_ERROR', '文件剪贴板事件契约无效')
+                  typeof payload.hasData !== 'boolean') throw refs._error('FILE_ERROR', resolveSdkErrorText('invalidFileClipboardEventContract'))
               this._fileResult({ success: true, files: payload.files, errors: payload.errors })
-              if (payload.hasData !== (payload.files.length > 0)) throw refs._error('FILE_ERROR', '文件剪贴板事件状态无效')
+              if (payload.hasData !== (payload.files.length > 0)) throw refs._error('FILE_ERROR', resolveSdkErrorText('invalidFileClipboardEventState'))
             }
             handler(payload)
           }
@@ -6932,13 +7398,13 @@
         const result = await refs._call('clipboard_read_image', {}, options)
         if (result.useReference === true) return referenceImageResult(refs, result, true)
         if (result.useReference !== false || Object.keys(result).some(key => !['success', 'useReference', 'image'].includes(key)) ||
-            typeof result.image !== 'string') throw refs._error('FILE_ERROR', '图片剪贴板响应无效')
+            typeof result.image !== 'string') throw refs._error('FILE_ERROR', resolveSdkErrorText('invalidImageClipboardResponse'))
         if (result.image) {
           const prefix = 'data:image/png;base64,'
-          if (!result.image.startsWith(prefix)) throw refs._error('FILE_ERROR', '图片数据响应无效')
+          if (!result.image.startsWith(prefix)) throw refs._error('FILE_ERROR', resolveSdkErrorText('invalidImageDataResponse'))
           const content = result.image.slice(prefix.length)
           const size = Math.floor(content.length / 4) * 3 - (content.endsWith('==') ? 2 : content.endsWith('=') ? 1 : 0)
-          if (size > 512 * 1024) throw refs._error('FILE_ERROR', '直接图片数据超出上限')
+          if (size > 512 * 1024) throw refs._error('FILE_ERROR', resolveSdkErrorText('directImageDataTooLarge'))
           refs._decode(content, size)
         }
         return result
@@ -6946,17 +7412,17 @@
       async copyFile(file, options = {}) { this.references._options(options, ['signal']); return this.references._call('clipboard_copy_file', { fileGrantId: this.references._reference(file, ['file'], 'read') }, options) }
       async copyFiles(files, options = {}) {
         this.references._options(options, ['signal'])
-        if (!Array.isArray(files) || !files.length || files.length > 256) return Promise.reject(this.references._error('INVALID_REQUEST', '文件剪贴板数量无效'))
+        if (!Array.isArray(files) || !files.length || files.length > 256) return Promise.reject(this.references._error('INVALID_REQUEST', resolveSdkErrorText('invalidFileClipboardCount')))
         return this.references._call('clipboard_copy_files', { fileGrantIds: files.map(file => this.references._reference(file, ['file'], 'read')) }, options)
       }
-      hideAndPasteFile() { return Promise.reject(this.references._error('NOT_SUPPORTED', '引用文件粘贴消费者尚未接线')) }
+      hideAndPasteFile() { return Promise.reject(this.references._error('NOT_SUPPORTED', resolveSdkErrorText('refFilePasteNotWired'))) }
     }
 
     function referenceImageResult(refs, result, clipboard = false) {
       if (Object.keys(result).some(key => !['success', 'reference', 'fileUrl', 'size', 'width', 'height', ...(clipboard ? ['useReference'] : [])].includes(key)) ||
           !Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 ||
           result.width * result.height > 32 * 1024 * 1024 || !Number.isSafeInteger(result.size) || result.size < 0 || result.size > 16 * 1024 * 1024 ||
-          typeof result.fileUrl !== 'string') throw refs._error('FILE_ERROR', '图片引用响应无效')
+          typeof result.fileUrl !== 'string') throw refs._error('FILE_ERROR', resolveSdkErrorText('invalidImageRefResponse'))
       refs._returnedReference({ ...result.reference, fileUrl: result.fileUrl }, ['file'])
       return result
     }
@@ -7252,21 +7718,21 @@
         const refs = this.references
         refs._options(options, upload ? ['headers', 'fieldName', 'timeout', 'signal', 'onProgress'] : ['headers', 'replace', 'timeout', 'signal', 'onProgress'])
         let parsed
-        try { parsed = new URL(url) } catch { throw refs._error('INVALID_REQUEST', '文件传输URL无效') }
+        try { parsed = new URL(url) } catch { throw refs._error('INVALID_REQUEST', resolveSdkErrorText('invalidFileTransferUrl')) }
         if (typeof url !== 'string' || new TextEncoder().encode(url).length > 8192 || /[\0\r\n]/.test(url) ||
-            !['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw refs._error('INVALID_REQUEST', '文件传输URL无效')
+            !['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw refs._error('INVALID_REQUEST', resolveSdkErrorText('invalidFileTransferUrl'))
         const timeout = options.timeout ?? 120000
-        if (!Number.isInteger(timeout) || timeout < 1 || timeout > 120000) throw refs._error('INVALID_REQUEST', '文件传输超时范围无效')
+        if (!Number.isInteger(timeout) || timeout < 1 || timeout > 120000) throw refs._error('INVALID_REQUEST', resolveSdkErrorText('invalidFileTransferTimeout'))
         if (options.headers !== undefined) {
-          if (!options.headers || typeof options.headers !== 'object' || Array.isArray(options.headers) || Object.keys(options.headers).length > 128) throw refs._error('INVALID_REQUEST', '文件传输headers无效')
+          if (!options.headers || typeof options.headers !== 'object' || Array.isArray(options.headers) || Object.keys(options.headers).length > 128) throw refs._error('INVALID_REQUEST', resolveSdkErrorText('invalidFileTransferHeaders'))
           let bytes = 0
           for (const [key, value] of Object.entries(options.headers)) {
-            if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/.test(key) || typeof value !== 'string' || /[\0\r\n]/.test(value) || new TextEncoder().encode(value).length > 8192) throw refs._error('INVALID_REQUEST', '文件传输headers无效')
+            if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/.test(key) || typeof value !== 'string' || /[\0\r\n]/.test(value) || new TextEncoder().encode(value).length > 8192) throw refs._error('INVALID_REQUEST', resolveSdkErrorText('invalidFileTransferHeaders'))
             bytes += new TextEncoder().encode(key + value).length
-            if (bytes > 64 * 1024) throw refs._error('INVALID_REQUEST', '文件传输headers超出上限')
+            if (bytes > 64 * 1024) throw refs._error('INVALID_REQUEST', resolveSdkErrorText('fileTransferHeadersTooLarge'))
           }
         }
-        if (upload && options.fieldName !== undefined && (typeof options.fieldName !== 'string' || !options.fieldName || /[\0\r\n]/.test(options.fieldName) || new TextEncoder().encode(options.fieldName).length > 256)) throw refs._error('INVALID_REQUEST', '上传字段名无效')
+        if (upload && options.fieldName !== undefined && (typeof options.fieldName !== 'string' || !options.fieldName || /[\0\r\n]/.test(options.fieldName) || new TextEncoder().encode(options.fieldName).length > 256)) throw refs._error('INVALID_REQUEST', resolveSdkErrorText('invalidUploadFieldName'))
         return { url: parsed.href, timeout, ...(options.headers !== undefined ? { headers: options.headers } : {}) }
       }
       async download(url, save, options = {}) {
@@ -7275,7 +7741,7 @@
         const result = await refs._call('network_http_download', { ...params, saveGrantId, replace: options.replace ?? false }, { signal: options.signal, timeout: params.timeout })
         if (Object.keys(result).some(key => !['success', 'grantId', 'size', 'statusCode', 'statusText'].includes(key)) || result.grantId !== saveGrantId ||
             !Number.isSafeInteger(result.size) || result.size < 0 || result.size > 1024 * 1024 * 1024 || !Number.isInteger(result.statusCode) ||
-            result.statusCode < 200 || result.statusCode >= 300 || typeof result.statusText !== 'string') throw refs._error('FILE_WRITE_OUTCOME_UNKNOWN', '下载完成后的响应无法确认')
+            result.statusCode < 200 || result.statusCode >= 300 || typeof result.statusText !== 'string') throw refs._error('FILE_WRITE_OUTCOME_UNKNOWN', resolveSdkErrorText('downloadResponseUnconfirmed'))
         options.onProgress?.(result.size, result.size)
         return result
       }
@@ -7284,7 +7750,7 @@
         const result = await refs._call('network_http_upload', { ...params, fileGrantId: refs._reference(file, ['file'], 'read'), fieldName: options.fieldName ?? 'file' }, { signal: options.signal, timeout: params.timeout })
         if (Object.keys(result).some(key => !['success', 'data'].includes(key)) || !result.data || Object.keys(result.data).some(key => !['statusCode', 'statusText', 'body'].includes(key)) ||
             !Number.isInteger(result.data.statusCode) || result.data.statusCode < 200 || result.data.statusCode >= 300 || typeof result.data.statusText !== 'string' ||
-            typeof result.data.body !== 'string' || new TextEncoder().encode(result.data.body).length > 16 * 1024 * 1024) throw refs._error('NETWORK_ERROR', '上传响应无效')
+            typeof result.data.body !== 'string' || new TextEncoder().encode(result.data.body).length > 16 * 1024 * 1024) throw refs._error('NETWORK_ERROR', resolveSdkErrorText('invalidUploadResponse'))
         options.onProgress?.(1, 1)
         return result
       }
@@ -7349,7 +7815,7 @@
        */
       async listPorts() {
         const response = await this.transport.call('process_list_ports', {}, { timeout: 15000 })
-        const failed = () => Object.assign(new Error('端口列表响应无效'), { code: 'PROCESS_ERROR' })
+        const failed = () => Object.assign(new Error(resolveSdkErrorText('invalidPortListResponse')), { code: 'PROCESS_ERROR' })
         if (!response || response.success !== true || !Array.isArray(response.data) || response.data.length > 20000 || !['darwin-netstat', 'darwin-lsof', 'windows-netstat'].includes(response.source) || !['all-sockets', 'visible-processes'].includes(response.visibility) || typeof response.queriedAt !== 'string' || !Number.isFinite(Date.parse(response.queriedAt))) throw failed()
         const rows = response.data.map(row => {
           if (!row || !['TCP', 'UDP'].includes(row.protocol) || typeof row.localAddress !== 'string' || row.localAddress.length > 128 || !Number.isSafeInteger(row.localPort) || row.localPort < 1 || row.localPort > 65535 || typeof row.remoteAddress !== 'string' || row.remoteAddress.length > 128 || !(row.remotePort === null || Number.isSafeInteger(row.remotePort) && row.remotePort >= 1 && row.remotePort <= 65535) || typeof row.state !== 'string' || !/^[A-Z0-9_]{1,32}$/.test(row.state) || !Number.isSafeInteger(row.pid) || row.pid < 0 || row.pid > 0xffffffff || typeof row.processName !== 'string' || row.processName.length > 512 || typeof row.fieldAvailability?.processName !== 'boolean' || row.fieldAvailability.processPath !== false || row.fieldAvailability.startTime !== false) throw failed()
@@ -7360,7 +7826,7 @@
       async list() {
         const response = await this.transport.call('process_list', {})
         if (!response || response.success !== true || !Array.isArray(response.data) || response.data.length > 10000) {
-          throw Object.assign(new Error('进程列表响应无效'), { code: 'PROCESS_ERROR' })
+          throw Object.assign(new Error(resolveSdkErrorText('invalidProcessListResponse')), { code: 'PROCESS_ERROR' })
         }
         return response.data
       }
@@ -7470,7 +7936,7 @@
        * @returns {Promise<void>} 当前明确拒绝NOT_SUPPORTED，不启动任务。
        */
       async runFFmpeg(args, onProgress) {
-        const error = new Error('FFmpeg任务的进度、完成与取消能力尚未接入')
+        const error = new Error(resolveSdkErrorText('ffmpegTaskControlNotWired'))
         error.code = 'NOT_SUPPORTED'
         throw error
       }
@@ -7484,17 +7950,17 @@
 
     class ReferenceOcrAPI extends ReferenceFileSystemAPI {
       _common(result) {
-        if (result.provider !== 'apple-vision-local' || !Number.isSafeInteger(result.revision) || result.revision < 1) throw this._error('FILE_ERROR', '本地OCR结果无效')
+        if (result.provider !== 'apple-vision-local' || !Number.isSafeInteger(result.revision) || result.revision < 1) throw this._error('FILE_ERROR', resolveSdkErrorText('invalidLocalOcrResult'))
       }
       _languages(value, maximum) {
-        if (!Array.isArray(value) || value.length > maximum || value.some(v => typeof v !== 'string' || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/.test(v)) || new Set(value).size !== value.length) throw this._error('INVALID_REQUEST', '本地OCR语言无效')
+        if (!Array.isArray(value) || value.length > maximum || value.some(v => typeof v !== 'string' || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/.test(v)) || new Set(value).size !== value.length) throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidLocalOcrLanguages'))
         return [...value]
       }
       async languages(options = {}) {
         this._options(options, ['signal'])
         const result = await this._call('ocr_local_languages', {}, options); this._common(result)
         const languages = this._languages(result.languages, 256)
-        if (!languages.length) throw this._error('FILE_ERROR', '本地OCR未提供语言')
+        if (!languages.length) throw this._error('FILE_ERROR', resolveSdkErrorText('localOcrNoLanguages'))
         return Object.freeze({ provider: result.provider, revision: result.revision, languages: Object.freeze(languages) })
       }
       async recognize(file, options = {}) {
@@ -7502,14 +7968,14 @@
         const languages = this._languages(options.languages ?? [], 8)
         const result = await this._call('ocr_recognize_reference', { fileGrantId: this._reference(file, ['file'], 'read'), languages }, { signal: options.signal, timeout: 35000 })
         this._common(result)
-        if (!Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width < 1 || result.height < 1 || result.width > 8192 || result.height > 8192 || result.width * result.height > 8 * 1024 * 1024 || typeof result.text !== 'string' || new TextEncoder().encode(result.text).length > 1024 * 1024 || !Array.isArray(result.lines) || result.lines.length > 10000) throw this._error('FILE_ERROR', '本地OCR结果无效')
+        if (!Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width < 1 || result.height < 1 || result.width > 8192 || result.height > 8192 || result.width * result.height > 8 * 1024 * 1024 || typeof result.text !== 'string' || new TextEncoder().encode(result.text).length > 1024 * 1024 || !Array.isArray(result.lines) || result.lines.length > 10000) throw this._error('FILE_ERROR', resolveSdkErrorText('invalidLocalOcrResult'))
         let bytes = 0
         const lines = result.lines.map(line => {
-          if (!line || typeof line.text !== 'string' || typeof line.confidence !== 'number' || !Number.isFinite(line.confidence) || line.confidence < 0 || line.confidence > 1 || !Array.isArray(line.box) || line.box.length !== 4 || line.box.some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) || line.box[0] + line.box[2] > 1.00001 || line.box[1] + line.box[3] > 1.00001) throw this._error('FILE_ERROR', '本地OCR行无效')
-          bytes += new TextEncoder().encode(line.text).length + 1; if (bytes > 1024 * 1024) throw this._error('FILE_ERROR', '本地OCR文字过多')
+          if (!line || typeof line.text !== 'string' || typeof line.confidence !== 'number' || !Number.isFinite(line.confidence) || line.confidence < 0 || line.confidence > 1 || !Array.isArray(line.box) || line.box.length !== 4 || line.box.some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) || line.box[0] + line.box[2] > 1.00001 || line.box[1] + line.box[3] > 1.00001) throw this._error('FILE_ERROR', resolveSdkErrorText('invalidLocalOcrLine'))
+          bytes += new TextEncoder().encode(line.text).length + 1; if (bytes > 1024 * 1024) throw this._error('FILE_ERROR', resolveSdkErrorText('localOcrTextTooLarge'))
           return Object.freeze({ text: line.text, confidence: line.confidence, box: Object.freeze([...line.box]) })
         })
-        if (lines.map(v => v.text).join('\n') !== result.text) throw this._error('FILE_ERROR', '本地OCR文字不一致')
+        if (lines.map(v => v.text).join('\n') !== result.text) throw this._error('FILE_ERROR', resolveSdkErrorText('localOcrTextMismatch'))
         return Object.freeze({ provider: result.provider, revision: result.revision, width: result.width, height: result.height, text: result.text, lines: Object.freeze(lines) })
       }
     }
@@ -7742,7 +8208,12 @@
         const r = await this.transport.call('update_check', { source: normalizedSource })
         // 严格协议：只接受扁平结构 { success, app, web }
         if (!r || typeof r !== 'object' || !('success' in r)) {
-          throw new Error('Invalid update_check response: missing success')
+          throw new Error(
+            resolveSdkText(
+              '更新检查响应无效：缺少 success 字段',
+              'Invalid update_check response: missing success'
+            )
+          )
         }
         return {
           success: r.success === true,
@@ -7767,7 +8238,9 @@
           fileSize: info.fileSize || 0
         }
         const downloaded = await this.transport.call('update_download_start', packageInfo, { timeout: Infinity })
-        if (revision !== this.updateRevision) throw Object.assign(new Error('更新已取消'), { code: 'CANCELLED' })
+        if (revision !== this.updateRevision) {
+          throw Object.assign(new Error(resolveSdkText('更新已取消', 'Update cancelled')), { code: 'CANCELLED' })
+        }
         if (!downloaded || downloaded.success !== true) return downloaded || { success: false }
         const installed = await this.transport.call('update_install_start', packageInfo, { timeout: Infinity })
         return installed || { success: false }
@@ -7843,7 +8316,7 @@
           const api = this._referenceAPI ??= new ReferenceImageAPI(this.transport)
           switch (funcName) {
             case 'ImageToBase64':
-              if (params.format !== undefined) throw Object.assign(new Error('引用编码保留原始PNG/JPEG格式'), { code: 'INVALID_REQUEST' })
+              if (params.format !== undefined) throw Object.assign(new Error(resolveSdkErrorText('refEncodePreservesFormat')), { code: 'INVALID_REQUEST' })
               return { result: await api.imageToBase64(params.input) }
             case 'Base64ToImage': await api.base64ToImage(params.input, params.output, params.format); break
             case 'GetInfo': return { result: await api.getInfo(params.path) }
@@ -7856,7 +8329,7 @@
             case 'Flip': await api.flip(params.input, params.output, params.direction); break
             case 'Compress': await api.compress(params.input, params.output, params.quality); break
             default: {
-              const error = new Error('此图片方法的跨平台provider尚未实现')
+              const error = new Error(resolveSdkErrorText('imageCrossPlatformProviderNotImplemented'))
               error.code = 'METHOD_NOT_FOUND'
               throw error
             }
@@ -7883,13 +8356,13 @@
 
       /** Contract 2 effect preview writes to private cache and returns a read-only FileRef. */
       async preview(input, operation, params = {}, options = {}) {
-        if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error('当前宿主尚未开放引用预览'), { code: 'NOT_SUPPORTED' })
+        if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error(resolveSdkErrorText('hostRefPreviewUnavailable')), { code: 'NOT_SUPPORTED' })
         return (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).preview(input, operation, params, options)
       }
 
-      _unwrapResult(response, operation = '图片处理') {
+      _unwrapResult(response, operation = resolveSdkErrorText('imageOpProcess')) {
         if (response == null) {
-          throw new Error(`${operation}返回空结果`)
+          throw new Error(resolveSdkErrorText('imageEmptyResult', { operation }))
         }
         if (response.error) {
           throw new Error(response.error)
@@ -7897,7 +8370,7 @@
         return response.result !== undefined ? response.result : response
       }
 
-      _isTrueResult(response, operation = '图片处理') {
+      _isTrueResult(response, operation = resolveSdkErrorText('imageOpProcess')) {
         const value = this._unwrapResult(response, operation)
         return value === true || value === 'true'
       }
@@ -7915,14 +8388,14 @@
           await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).convert(input, output, format, quality ?? 85, options)
           return true
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
         const result = await this._callAsync('Convert', {
           input,
           output,
           format,
           quality
         })
-        return this._isTrueResult(result, '图片格式转换')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpConvert'))
       }
 
       /**
@@ -7948,7 +8421,7 @@
           await api.resize(input, output, width, height, options)
           return true
         }
-        if (Object.keys(options).some(key => !['keepAspectRatio', 'quality'].includes(key))) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).some(key => !['keepAspectRatio', 'quality'].includes(key))) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
         const params = {
           input,
           output,
@@ -7961,7 +8434,7 @@
           params.quality = options.quality
         }
         const result = await this._callAsync('Resize', params)
-        return this._isTrueResult(result, '图片缩放')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpResize'))
       }
 
       /**
@@ -7977,14 +8450,14 @@
           await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).scale(input, output, scaleX, scaleY, options)
           return true
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
         const result = await this._callAsync('Scale', {
           input,
           output,
           scaleX: scaleX * 100, // 转换为百分比
           scaleY: scaleY * 100
         })
-        return this._isTrueResult(result, '图片按比例缩放')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpScale'))
       }
 
       /**
@@ -7999,7 +8472,7 @@
           await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).crop(input, output, rect, options)
           return true
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
         const result = await this._callAsync('Crop', {
           input,
           output,
@@ -8008,7 +8481,7 @@
           width: rect.width,
           height: rect.height
         })
-        return this._isTrueResult(result, '图片裁剪')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpCrop'))
       }
 
       /**
@@ -8023,13 +8496,13 @@
           await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).rotate(input, output, angle, options)
           return true
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
         const result = await this._callAsync('Rotate', {
           input,
           output,
           angle
         })
-        return this._isTrueResult(result, '图片旋转')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpRotate'))
       }
 
       /**
@@ -8044,13 +8517,13 @@
           await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).flip(input, output, direction, options)
           return true
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
         const result = await this._callAsync('Flip', {
           input,
           output,
           direction
         })
-        return this._isTrueResult(result, '图片翻转')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpFlip'))
       }
 
       /**
@@ -8065,14 +8538,14 @@
           await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).compress(input, output, quality, options)
           return true
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
         const result = await this._callAsync('Compress', {
             input,
             output,
             quality
           }
         )
-        return this._isTrueResult(result, '图片压缩')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpCompress'))
       }
 
       /**
@@ -8091,7 +8564,7 @@
             preserveAlpha
           }
         )
-        return this._isTrueResult(result, 'PNG 压缩')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpCompressPng'))
       }
 
       /**
@@ -8108,7 +8581,7 @@
             quality
           }
         )
-        return this._isTrueResult(result, 'PNG 有损压缩')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpCompressPngLossy'))
       }
 
       /**
@@ -8130,7 +8603,7 @@
             opacity: Math.round((options.opacity ?? 1.0) * 255) // 转换为0-255范围
           }
         )
-        return this._isTrueResult(result, '图片水印')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpWatermark'))
       }
 
       /**
@@ -8165,7 +8638,7 @@
             color: bgrColor
           }
         )
-        return this._isTrueResult(result, '图片文字标注')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpAnnotateText'))
       }
 
       /**
@@ -8181,7 +8654,7 @@
           output,
           direction
         })
-        return this._isTrueResult(result, '图片拼接')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpStitch'))
       }
 
       /**
@@ -8207,7 +8680,7 @@
             opacity: Math.round((options.opacity ?? 1.0) * 255)
           }
         )
-        return this._isTrueResult(result, '图片边框')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpBorder'))
       }
 
       /**
@@ -8235,7 +8708,7 @@
             backgroundColor: this._colorToInt(options.backgroundColor ?? '#ffffff')
           }
         )
-        return this._isTrueResult(result, '图片圆角')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpRoundCorners'))
       }
 
       /**
@@ -8245,24 +8718,24 @@
        * @returns {Promise<boolean>}
        */
       async previewGIF(images, options = {}) {
-        if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error('GIF预览需要引用图片处理器'), { code: 'NOT_SUPPORTED' })
+        if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error(resolveSdkErrorText('gifPreviewRequiresRefImageHandler')), { code: 'NOT_SUPPORTED' })
         return (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).previewGIF(images, options)
       }
       async imagesToGIF(images, output, options = {}) {
-        if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error('真实GIF编码需要引用图片处理器'), { code: 'NOT_SUPPORTED' })
+        if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error(resolveSdkErrorText('gifEncodeRequiresRefImageHandler')), { code: 'NOT_SUPPORTED' })
         await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).imagesToGIF(images, output, options)
         return true
       }
 
       async imagesToPDF(images, output, options = {}) {
         if (window.__ztoolsElectron?.contractVersion === 2) { await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).imagesToPDF(images, output, options); return true }
-        if (Object.keys(options).length) { const error = new Error('当前图片桥不支持新增PDF请求选项'); error.code = 'NOT_SUPPORTED'; throw error }
+        if (Object.keys(options).length) { const error = new Error(resolveSdkErrorText('pdfRequestOptionsUnsupported')); error.code = 'NOT_SUPPORTED'; throw error }
         const result = await this._callAsync('ImagesToPDF', {
             images: images.join(','),
             output
           }
         )
-        return this._isTrueResult(result, '图片转 PDF')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpToPdf'))
       }
 
       /**
@@ -8280,7 +8753,7 @@
             size: options.size || 256
           }
         )
-        return this._isTrueResult(result, '二维码生成')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpGenerateQr'))
       }
 
       /**
@@ -8293,7 +8766,7 @@
             input
           }
         )
-        return this._unwrapResult(result, '二维码解码')
+        return this._unwrapResult(result, resolveSdkErrorText('imageOpDecodeQr'))
       }
 
       /**
@@ -8314,7 +8787,7 @@
             keepAspectRatio
           }
         )
-        return this._isTrueResult(result, 'SVG 转 PNG')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpSvgToPng'))
       }
 
       /**
@@ -8324,12 +8797,12 @@
        */
       async getInfo(path, options = {}) {
         if (window.__ztoolsElectron?.contractVersion === 2) return (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).getInfo(path, options)
-        if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
         const result = await this._callAsync('GetInfo', {
             path
           }
         )
-        return this._unwrapResult(result, '获取图片信息')
+        return this._unwrapResult(result, resolveSdkErrorText('imageOpGetInfo'))
       }
 
       /**
@@ -8495,16 +8968,16 @@
        */
       async imageToBase64(input, format, options = {}) {
         if (window.__ztoolsElectron?.contractVersion === 2) {
-          if (format !== undefined) throw Object.assign(new Error('引用编码保留原始PNG/JPEG格式'), { code: 'INVALID_REQUEST' })
+          if (format !== undefined) throw Object.assign(new Error(resolveSdkErrorText('refEncodePreservesFormat')), { code: 'INVALID_REQUEST' })
           return (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).imageToBase64(input, options)
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
         const result = await this._callAsync('ImageToBase64', {
             input,
             format
           }
         )
-        const payload = this._unwrapResult(result, '图片转 Base64')
+        const payload = this._unwrapResult(result, resolveSdkErrorText('imageOpToBase64'))
 
         // 新方案：返回 {filePath, mimeType}
         const data = typeof payload === 'string' ? JSON.parse(payload) : payload
@@ -8549,14 +9022,14 @@
           await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).base64ToImage(input, output, format, options)
           return true
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
         const result = await this._callAsync('Base64ToImage', {
             input, // 新方案：传入文件路径
             output,
             format
           }
         )
-        return this._isTrueResult(result, 'Base64 转图片')
+        return this._isTrueResult(result, resolveSdkErrorText('imageOpFromBase64'))
       }
 
       /**
@@ -8622,29 +9095,29 @@
       async previewGIF(images, options = {}) {
         this._options(options, ['signal', 'interval', 'loop'])
         const interval = options.interval ?? 500, loop = options.loop ?? true
-        if (!Array.isArray(images) || !images.length || images.length > 64 || !Number.isSafeInteger(interval) || interval < 10 || interval > 10000 || interval % 10 !== 0 || typeof loop !== 'boolean') throw this._error('INVALID_REQUEST', 'GIF预览图片或间隔无效')
+        if (!Array.isArray(images) || !images.length || images.length > 64 || !Number.isSafeInteger(interval) || interval < 10 || interval > 10000 || interval % 10 !== 0 || typeof loop !== 'boolean') throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidGifPreviewParams'))
         const result = await this._call('image_preview_gif', { fileGrantIds: images.map(input => this._reference(input, ['file'], 'read')), interval, loop }, { signal: options.signal })
         const reference = this._returnedReference(result.reference, ['file'])
         try {
-          if (result.frameCount !== images.length || result.fileUrl !== 'ztools://file/' + reference.grantId + '/' + encodeURIComponent(reference.displayName) || !Number.isSafeInteger(result.size) || result.size < 14 || result.size > 16 * 1024 * 1024 || ![result.width, result.height].every(size => Number.isSafeInteger(size) && size > 0 && size <= 1024) || result.width * result.height * images.length > 4 * 1024 * 1024) throw this._error('FILE_ERROR', 'GIF预览响应无效')
+          if (result.frameCount !== images.length || result.fileUrl !== 'ztools://file/' + reference.grantId + '/' + encodeURIComponent(reference.displayName) || !Number.isSafeInteger(result.size) || result.size < 14 || result.size > 16 * 1024 * 1024 || ![result.width, result.height].every(size => Number.isSafeInteger(size) && size > 0 && size <= 1024) || result.width * result.height * images.length > 4 * 1024 * 1024) throw this._error('FILE_ERROR', resolveSdkErrorText('invalidGifPreviewResponse'))
           return Object.freeze({ reference: Object.freeze({ ...reference, operations: Object.freeze([...reference.operations]) }), fileUrl: result.fileUrl, size: result.size, frameCount: result.frameCount, width: result.width, height: result.height })
         } catch (error) { await this.revoke(reference); throw error }
       }
       async imagesToGIF(images, output, options = {}) {
         this._options(options, ['replace', 'signal', 'interval', 'loop'])
         const interval = options.interval ?? 500, loop = options.loop ?? true
-        if (!Array.isArray(images) || !images.length || images.length > 64 || !Number.isSafeInteger(interval) || interval < 10 || interval > 10000 || interval % 10 !== 0 || typeof loop !== 'boolean' || (options.replace !== undefined && typeof options.replace !== 'boolean')) throw this._error('INVALID_REQUEST', 'GIF输入图片或间隔无效')
+        if (!Array.isArray(images) || !images.length || images.length > 64 || !Number.isSafeInteger(interval) || interval < 10 || interval > 10000 || interval % 10 !== 0 || typeof loop !== 'boolean' || (options.replace !== undefined && typeof options.replace !== 'boolean')) throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidGifInputParams'))
         const result = await this._call('image_to_gif', { fileGrantIds: images.map(input => this._reference(input, ['file'], 'read')), saveGrantId: this._reference(output, ['save'], 'write'), interval, loop, replace: options.replace ?? false }, { signal: options.signal })
-        if (result.status !== 'committed' || result.frameCount !== images.length || !Number.isSafeInteger(result.size) || result.size < 14 || result.size > 16 * 1024 * 1024 || ![result.width, result.height].every(size => Number.isSafeInteger(size) && size > 0 && size <= 1024) || result.width * result.height * images.length > 4 * 1024 * 1024) throw this._error('FILE_WRITE_OUTCOME_UNKNOWN', 'GIF保存结果未确认')
+        if (result.status !== 'committed' || result.frameCount !== images.length || !Number.isSafeInteger(result.size) || result.size < 14 || result.size > 16 * 1024 * 1024 || ![result.width, result.height].every(size => Number.isSafeInteger(size) && size > 0 && size <= 1024) || result.width * result.height * images.length > 4 * 1024 * 1024) throw this._error('FILE_WRITE_OUTCOME_UNKNOWN', resolveSdkErrorText('gifSaveOutcomeUnconfirmed'))
         return Object.freeze({ status: result.status, size: result.size, frameCount: result.frameCount, width: result.width, height: result.height })
       }
       async imagesToPDF(images, output, options = {}) {
         this._options(options, ['replace', 'signal'])
-        if (!Array.isArray(images) || !images.length || images.length > 64 || (options.replace !== undefined && typeof options.replace !== 'boolean')) throw this._error('INVALID_REQUEST', 'PDF输入图片列表无效')
+        if (!Array.isArray(images) || !images.length || images.length > 64 || (options.replace !== undefined && typeof options.replace !== 'boolean')) throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidPdfImageList'))
         const result = await this._call('image_to_pdf', { fileGrantIds: images.map(input => this._reference(input, ['file'], 'read')),
           saveGrantId: this._reference(output, ['save'], 'write'), replace: options.replace ?? false }, options)
         if (!result || result.success !== true || result.status !== 'committed' || result.pageCount !== images.length ||
-            !Number.isSafeInteger(result.size) || result.size < 8 || result.size > 16 * 1024 * 1024) throw this._error('FILE_WRITE_OUTCOME_UNKNOWN', 'PDF保存结果未确认')
+            !Number.isSafeInteger(result.size) || result.size < 8 || result.size > 16 * 1024 * 1024) throw this._error('FILE_WRITE_OUTCOME_UNKNOWN', resolveSdkErrorText('pdfSaveOutcomeUnconfirmed'))
         return Object.freeze({ status: result.status, size: result.size, pageCount: result.pageCount })
       }
       async preview(input, operation, params = {}, options = {}) {
@@ -8653,17 +9126,17 @@
           operation === 'crop' ? ['rect'] : operation === 'rotate' ? ['angle'] : operation === 'flip' ? ['direction'] : []
         if (!['convert', 'compress', 'resize', 'scale', 'crop', 'rotate', 'flip'].includes(operation) ||
             !params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).some(key => !fields.includes(key))) {
-          throw this._error('INVALID_REQUEST', '图片预览参数无效')
+          throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidImagePreviewParams'))
         }
         const format = options.format ?? 'png'
         if (!['png', 'jpg'].includes(format) || (options.quality !== undefined && (!Number.isSafeInteger(options.quality) || options.quality < 1 || options.quality > 100))) {
-          throw this._error('INVALID_REQUEST', '图片预览格式或质量无效')
+          throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidImagePreviewFormatOrQuality'))
         }
         const result = await this._call('image_preview', { fileGrantId: this._reference(input, ['file'], 'read'), operation, ...params,
           format, ...(options.quality !== undefined ? { quality: options.quality } : {}) }, options)
         this._imageResult(result)
         this._returnedReference({ ...result.reference, fileUrl: result.fileUrl }, ['file'])
-        if (!Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024) throw this._error('FILE_ERROR', '图片预览响应无效')
+        if (!Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024) throw this._error('FILE_ERROR', resolveSdkErrorText('invalidImagePreviewResponse'))
         return Object.freeze({ reference: Object.freeze({ ...result.reference }), fileUrl: result.fileUrl, size: result.size,
           width: result.width, height: result.height, format: result.format })
       }
@@ -8672,20 +9145,20 @@
         const result = await this._call('image_encode_base64', { fileGrantId: this._reference(input, ['file'], 'read') }, options)
         this._returnedReference({ ...result.reference, fileUrl: result.fileUrl }, ['file'])
         if (!['image/png', 'image/jpeg'].includes(result.mimeType) || !Number.isSafeInteger(result.size) ||
-            result.size <= 0 || result.size > 16 * 1024 * 1024) throw this._error('FILE_ERROR', 'Base64编码响应无效')
+            result.size <= 0 || result.size > 16 * 1024 * 1024) throw this._error('FILE_ERROR', resolveSdkErrorText('invalidBase64Response'))
         return Object.freeze({ reference: Object.freeze({ ...result.reference }), fileUrl: result.fileUrl, mimeType: result.mimeType, size: result.size })
       }
       async base64ToImage(input, output, format, options = {}) {
         this._options(options, ['quality', 'replace', 'signal'])
         if (options.quality !== undefined && (!Number.isSafeInteger(options.quality) || options.quality < 1 || options.quality > 100)) {
-          throw this._error('INVALID_REQUEST', 'JPEG质量须为1到100')
+          throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidJpegQualityRange'))
         }
         const result = await this._call('image_decode_base64', { fileGrantId: this._reference(input, ['file'], 'read'),
           saveGrantId: this._reference(output, ['save'], 'write'), format: this._format(output, format),
           replace: options.replace ?? false, ...(options.quality !== undefined ? { quality: options.quality } : {}) }, options)
         this._imageResult(result)
         if (result.status !== 'committed' || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024) {
-          throw this._error('FILE_WRITE_OUTCOME_UNKNOWN', '图片保存收据无效，请核实目标文件')
+          throw this._error('FILE_WRITE_OUTCOME_UNKNOWN', resolveSdkErrorText('invalidImageSaveReceipt'))
         }
         return Object.freeze({ status: result.status, width: result.width, height: result.height, format: result.format, size: result.size })
       }
@@ -8698,18 +9171,18 @@
       _imageResult(result) {
         if (!Number.isSafeInteger(result.width) || !Number.isSafeInteger(result.height) || result.width <= 0 || result.height <= 0 ||
             result.width > 8192 || result.height > 8192 || result.width * result.height > 8 * 1024 * 1024 || !['png', 'jpg'].includes(result.format)) {
-          throw this._error('FILE_ERROR', '图片处理响应无效')
+          throw this._error('FILE_ERROR', resolveSdkErrorText('invalidImageProcessResponse'))
         }
       }
       _format(output, explicit) {
         const format = explicit ?? (/\.jpe?g$/i.test(output?.displayName ?? '') ? 'jpg' : /\.png$/i.test(output?.displayName ?? '') ? 'png' : null)
-        if (!['png', 'jpg'].includes(format)) throw this._error('INVALID_REQUEST', '请明确选择PNG或JPEG输出格式')
+        if (!['png', 'jpg'].includes(format)) throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidImageOutputFormat'))
         return format
       }
       async _transform(operation, input, output, params, options) {
         this._options(options, ['format', 'replace', 'quality', 'keepAspectRatio', 'signal'])
         if (options.quality !== undefined && (!Number.isSafeInteger(options.quality) || options.quality < 1 || options.quality > 100)) {
-          throw this._error('INVALID_REQUEST', 'JPEG质量须为1到100')
+          throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidJpegQualityRange'))
         }
         const result = await this._call('image_transform', { operation,
           fileGrantId: this._reference(input, ['file'], 'read'), saveGrantId: this._reference(output, ['save'], 'write'),
@@ -8717,7 +9190,7 @@
           ...(options.quality !== undefined ? { quality: options.quality } : {}), ...params }, options)
         this._imageResult(result)
         if (result.status !== 'committed' || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024) {
-          throw this._error('FILE_WRITE_OUTCOME_UNKNOWN', '图片保存收据无效，请核实目标文件')
+          throw this._error('FILE_WRITE_OUTCOME_UNKNOWN', resolveSdkErrorText('invalidImageSaveReceipt'))
         }
         return Object.freeze({ status: result.status, width: result.width, height: result.height, format: result.format, size: result.size })
       }
@@ -8729,14 +9202,14 @@
         this._options(options, ['format', 'replace', 'quality', 'keepAspectRatio', 'signal'])
         if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0 || width > 8192 || height > 8192 ||
             width * height > 8 * 1024 * 1024 || (options.keepAspectRatio !== undefined && typeof options.keepAspectRatio !== 'boolean')) {
-          throw this._error('INVALID_REQUEST', '图片缩放尺寸无效')
+          throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidImageResizeDimensions'))
         }
         return this._transform('resize', input, output, { width, height, keepAspectRatio: options.keepAspectRatio ?? true }, options)
       }
       async scale(input, output, scaleX, scaleY = scaleX, options = {}) {
         this._options(options, ['format', 'replace', 'quality', 'signal'])
         if ([scaleX, scaleY].some(scale => typeof scale !== 'number' || !Number.isFinite(scale) || scale < 0.1 || scale > 5)) {
-          throw this._error('INVALID_REQUEST', '图片缩放比例须为0.1到5')
+          throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidImageScaleRatio'))
         }
         return this._transform('scale', input, output, { scaleX, scaleY }, options)
       }
@@ -8745,18 +9218,18 @@
         if (!rect || typeof rect !== 'object' || Array.isArray(rect) || Object.keys(rect).length !== 4 ||
             Object.keys(rect).some(key => !['x', 'y', 'width', 'height'].includes(key)) ||
             ['x', 'y', 'width', 'height'].some(key => !Number.isSafeInteger(rect[key])) || rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0) {
-          throw this._error('INVALID_REQUEST', '图片裁剪范围无效')
+          throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidImageCropBounds'))
         }
         return this._transform('crop', input, output, { rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } }, options)
       }
       async rotate(input, output, angle, options = {}) {
         this._options(options, ['format', 'replace', 'quality', 'signal'])
-        if (typeof angle !== 'number' || !Number.isFinite(angle) || Math.abs(angle) > 36000) throw this._error('INVALID_REQUEST', '图片旋转角度无效')
+        if (typeof angle !== 'number' || !Number.isFinite(angle) || Math.abs(angle) > 36000) throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidImageRotateAngle'))
         return this._transform('rotate', input, output, { angle }, options)
       }
       async flip(input, output, direction = 'horizontal', options = {}) {
         this._options(options, ['format', 'replace', 'quality', 'signal'])
-        if (!['horizontal', 'vertical'].includes(direction)) throw this._error('INVALID_REQUEST', '图片翻转方向无效')
+        if (!['horizontal', 'vertical'].includes(direction)) throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidImageFlipDirection'))
         return this._transform('flip', input, output, { direction }, options)
       }
       async compress(input, output, quality = 85, options = {}) {
@@ -9043,6 +9516,7 @@
      */
     const PROGRESS_EVENT_TYPE = 'dllplugin_progress'
     const CALLBACK_RESULT_EVENT_TYPE = 'dllplugin_callback_result'
+
 
 
     function copyTaskStartMetadata(taskInfo, value) {
@@ -9369,7 +9843,10 @@
               hasResultData = true
             } catch (e) {
               dllError('Failed to parse callback result JSON:', e)
-              error = '回调结果解析失败: ' + (e instanceof Error ? e.message : String(e))
+              error = resolveSdkText(
+                '回调结果解析失败: ',
+                'Failed to parse callback result: '
+              ) + (e instanceof Error ? e.message : String(e))
             }
           } else if (payload.data !== undefined) {
             resultData = payload.data
@@ -9442,7 +9919,7 @@
               this._emit('cancelled', { taskId })
             }
           } else if (resultStatus === 'error') {
-            error = error || 'DLL 回调调用失败'
+            error = error || resolveSdkText('DLL 回调调用失败', 'DLL callback invocation failed')
             taskInfo.status = 'error'
             if (hasResultData) taskInfo.result = resultData
             taskInfo.error = error
@@ -9538,7 +10015,7 @@
           if (response && response.success) {
             return response.plugins || []
           } else {
-            throw new Error((response && response.error) || '获取 DLL 插件列表失败')
+            throw new Error((response && response.error) || resolveSdkText('获取 DLL 插件列表失败', 'Failed to get DLL plugin list'))
           }
         } catch (e) {
           dllError('Failed to get DLL plugin list:', e)
@@ -9563,11 +10040,11 @@
       async call(pluginName, funcName, params = {}, options = {}) {
         try {
           if (!pluginName || typeof pluginName !== 'string') {
-            throw new Error('插件名称无效')
+            throw new Error(resolveSdkText('插件名称无效', 'Invalid plugin name'))
           }
 
           if (!funcName || typeof funcName !== 'string') {
-            throw new Error('函数名称无效')
+            throw new Error(resolveSdkText('函数名称无效', 'Invalid function name'))
           }
 
           const response = await this.transport.call(
@@ -9583,7 +10060,7 @@
           if (response && response.success) {
             return response.data
           } else {
-            throw new Error(response.error || 'DLL 插件调用失败')
+            throw new Error(response.error || resolveSdkText('DLL 插件调用失败', 'DLL plugin call failed'))
           }
         } catch (e) {
           dllError(`Failed to call DLL plugin ${pluginName}.${funcName}:`, e)
@@ -9605,16 +10082,22 @@
         let definitiveNoStartCleared = false
         try {
           if (!pluginName || typeof pluginName !== 'string') {
-            throw new Error('插件名称无效')
+            throw new Error(resolveSdkText('插件名称无效', 'Invalid plugin name'))
           }
 
           if (!funcName || typeof funcName !== 'string') {
-            throw new Error('函数名称无效')
+            throw new Error(resolveSdkText('函数名称无效', 'Invalid function name'))
           }
 
           // 生成 taskId（如果未提供）
           if (!params.taskId) {
-            params.taskId = `callback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+            const randomSuffix =
+              typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+                : typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
+                  ? Array.from(crypto.getRandomValues(new Uint32Array(2)), (n) => n.toString(36)).join('').slice(0, 12)
+                  : String((this._callbackSeq = (this._callbackSeq || 0) + 1))
+            params.taskId = `callback_${Date.now()}_${randomSuffix}`
           }
 
           taskId = params.taskId
@@ -9623,7 +10106,7 @@
             this._startingTasks.has(taskId) ||
             this._callbackHandlers.has(taskId)
           ) {
-            throw new Error('DLL 回调任务ID已被占用')
+            throw new Error(resolveSdkText('DLL 回调任务ID已被占用', 'DLL callback task ID is already in use'))
           }
           this._startingTasks.add(taskId)
           reservedTaskId = true
@@ -9715,7 +10198,7 @@
               ? response.error
               : null
             const error = new Error(
-              responseError?.message || response?.error || 'DLL 插件回调调用失败'
+              responseError?.message || response?.error || resolveSdkText('DLL 插件回调调用失败', 'DLL plugin callback invocation failed')
             )
             const code = response?.code || responseError?.code
             Object.assign(error, {
@@ -9750,7 +10233,7 @@
         try {
           const response = await this.transport.call('dllplugin_clear_callback_task', { taskId })
           if (!response || response.success !== true) {
-            throw new Error(response?.error || '清理 DLL 回调任务失败')
+            throw new Error(response?.error || resolveSdkText('清理 DLL 回调任务失败', 'Failed to clear DLL callback task'))
           }
           const callbackHandler = this._callbackHandlers.get(taskId)
           if (callbackHandler) {
@@ -9804,11 +10287,17 @@
       async callAsync(pluginName, funcName, params = {}) {
         try {
           if (!pluginName || typeof pluginName !== 'string') {
-            throw dllTaskFailure({ code: 'INVALID_REQUEST', workNotStarted: true, taskStartResolved: 'not-started' }, '插件名称无效')
+            throw dllTaskFailure(
+              { code: 'INVALID_REQUEST', workNotStarted: true, taskStartResolved: 'not-started' },
+              resolveSdkText('插件名称无效', 'Invalid plugin name')
+            )
           }
 
           if (!funcName || typeof funcName !== 'string') {
-            throw dllTaskFailure({ code: 'INVALID_REQUEST', workNotStarted: true, taskStartResolved: 'not-started' }, '函数名称无效')
+            throw dllTaskFailure(
+              { code: 'INVALID_REQUEST', workNotStarted: true, taskStartResolved: 'not-started' },
+              resolveSdkText('函数名称无效', 'Invalid function name')
+            )
           }
 
           const response = await this.transport.call('dllplugin_call_async', {
@@ -9819,7 +10308,9 @@
 
           if (response && response.success) {
             const taskId = response.taskId
-            if (typeof taskId !== 'string' || !taskId) throw taskObservationFailure({}, '', '宿主返回无效任务ID')
+            if (typeof taskId !== 'string' || !taskId) {
+              throw taskObservationFailure({}, '', resolveSdkText('宿主返回无效任务ID', 'Host returned an invalid task ID'))
+            }
 
             const now = Date.now()
             const taskInfo = this._tasks.get(taskId)
@@ -9860,10 +10351,10 @@
               })
             }
 
-            dllLog(`异步任务已登记: ${taskId}`)
+            dllLog(`Async task registered: ${taskId}`)
             return taskId
           } else {
-            throw dllTaskFailure(response, response?.error || 'DLL 插件异步调用失败', response?.taskId)
+            throw dllTaskFailure(response, response?.error || resolveSdkText('DLL 插件异步调用失败', 'DLL plugin async call failed'), response?.taskId)
           }
         } catch (e) {
           dllError(`Failed to call DLL plugin async ${pluginName}.${funcName}:`, e)
@@ -9882,10 +10373,10 @@
         try {
           // 参数验证
           if (!pluginName || typeof pluginName !== 'string') {
-            throw new Error('插件名称无效: ' + pluginName)
+            throw new Error(resolveSdkText('插件名称无效: ', 'Invalid plugin name: ') + pluginName)
           }
           if (!taskId || typeof taskId !== 'string') {
-            throw new Error('任务ID无效: ' + taskId)
+            throw new Error(resolveSdkText('任务ID无效: ', 'Invalid task ID: ') + taskId)
           }
 
           // 调用后端查询任务状态
@@ -9896,7 +10387,7 @@
 
           // 处理响应
           if (!response) {
-            throw new Error('查询任务返回空响应')
+            throw new Error(resolveSdkText('查询任务返回空响应', 'Task query returned an empty response'))
           }
 
           const hasTaskStatus = typeof response.taskStatus === 'string' && response.taskStatus.length > 0
@@ -9993,7 +10484,7 @@
 
           // 如果查询失败，抛出错误
           if (!response.queryOk) {
-            throw new Error(response.taskError || '查询任务失败')
+            throw new Error(response.taskError || resolveSdkText('查询任务失败', 'Failed to query task status'))
           }
 
           return result
@@ -10011,29 +10502,46 @@
        */
       async waitTask(taskId, pollInterval = 1000, timeout = 0, options = {}) {
         const taskInfo = this._tasks.get(taskId)
-        if (!taskInfo) throw new Error('未知的任务ID: ' + taskId)
+        if (!taskInfo) throw new Error(resolveSdkText('未知的任务ID: ', 'Unknown task ID: ') + taskId)
         const signal = options?.signal
         if (!Number.isFinite(pollInterval) || pollInterval <= 0 || pollInterval > 60_000 ||
             !Number.isFinite(timeout) || timeout < 0 || timeout > 86_400_000 ||
             (signal !== undefined && (!signal || typeof signal.aborted !== 'boolean' ||
               typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function'))) {
-          throw Object.assign(new Error('DLL 任务观察参数无效'), { code: 'INVALID_REQUEST' })
+          throw Object.assign(
+            new Error(resolveSdkText('DLL 任务观察参数无效', 'Invalid DLL task observation parameters')),
+            { code: 'INVALID_REQUEST' }
+          )
         }
         const deadline = timeout > 0 ? Date.now() + timeout : Infinity
         const checkObservation = () => {
           if (signal?.aborted) {
-            throw Object.assign(taskObservationFailure(taskInfo, taskId, '已停止观察任务，原生结果仍须确认',
-              'DLL_TASK_OBSERVATION_ABORTED'), { name: 'AbortError' })
+            throw Object.assign(
+              taskObservationFailure(
+                taskInfo,
+                taskId,
+                resolveSdkText('已停止观察任务，原生结果仍须确认', 'Stopped observing task; native outcome remains unconfirmed'),
+                'DLL_TASK_OBSERVATION_ABORTED'
+              ),
+              { name: 'AbortError' }
+            )
           }
           if (Date.now() >= deadline) {
-            throw taskObservationFailure(taskInfo, taskId, '任务等待超时，原生结果仍须确认', 'DLL_TASK_WAIT_TIMEOUT')
+            throw taskObservationFailure(
+              taskInfo,
+              taskId,
+              resolveSdkText('任务等待超时，原生结果仍须确认', 'Timed out waiting for task; native outcome remains unconfirmed'),
+              'DLL_TASK_WAIT_TIMEOUT'
+            )
           }
         }
         const terminalResult = () => {
           if (taskInfo.status === 'completed') return { done: true, data: taskInfo.result }
           if (taskInfo.status === 'error' || taskInfo.status === 'cancelled') {
             throw Object.assign(dllTaskFailure(taskInfo, taskInfo.error ||
-              (taskInfo.status === 'cancelled' ? '任务已取消' : '任务执行失败'), taskId), { taskDone: true })
+              (taskInfo.status === 'cancelled'
+                ? resolveSdkText('任务已取消', 'Task cancelled')
+                : resolveSdkText('任务执行失败', 'Task execution failed')), taskId), { taskDone: true })
           }
           return { done: false }
         }
@@ -10090,10 +10598,10 @@
               taskInfo.updatedAt = Date.now()
             }
 
-            dllLog(`已请求取消任务: ${taskId}`)
+            dllLog(`Task cancellation requested: ${taskId}`)
             return true
           } else {
-            throw new Error(response.error || '取消任务失败')
+            throw new Error(response.error || resolveSdkText('取消任务失败', 'Failed to cancel task'))
           }
         } catch (e) {
           dllError('Failed to cancel task:', e)
@@ -10146,7 +10654,7 @@
        * 标准化插件返回结果
        * @private
        */
-      _normalizeResult(result, defaultMessage = '截图失败') {
+      _normalizeResult(result, defaultMessage = resolveSdkText('截图失败', 'Screenshot failed')) {
         if (!result || typeof result !== 'object') {
           throw new Error(defaultMessage)
         }
@@ -10171,14 +10679,14 @@
           height: result.height || 0,
           rect: result.rect || null,
           screenCount: result.screenCount || 0,
-          message: result.message || '操作成功'
+          message: result.message || resolveSdkText('操作成功', 'Operation succeeded')
         }
       }
 
       _awaitCapture(promise, signal) {
         return new Promise((resolve, reject) => {
           const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason) }
-          if (signal.aborted) { Promise.resolve(promise).catch(() => {}); abort(); return }
+          if (signal.aborted) { Promise.resolve(promise).catch(() => undefined); abort(); return }
           signal.addEventListener('abort', abort, { once: true })
           Promise.resolve(promise).then(value => { signal.removeEventListener('abort', abort); resolve(value) }, error => { signal.removeEventListener('abort', abort); reject(error) })
         })
@@ -10190,10 +10698,20 @@
             signal.throwIfAborted()
             const status = await this._awaitCapture(this.dllplugin.queryTask(pluginName, taskId), signal)
             signal.throwIfAborted()
-            if (!status || typeof status !== 'object' || typeof status.completed !== 'boolean') throw new Error('截图任务状态无效')
+            if (!status || typeof status !== 'object' || typeof status.completed !== 'boolean') {
+              throw new Error(resolveSdkText('截图任务状态无效', 'Invalid screenshot task status'))
+            }
             if (status.completed) {
-              if (status.status === 'cancelled') return { success: false, cancelled: true, error: status.error || '截图已取消' }
-              if (status.status === 'error') throw new Error(status.error || '截图失败')
+              if (status.status === 'cancelled') {
+                return {
+                  success: false,
+                  cancelled: true,
+                  error: status.error || resolveSdkText('截图已取消', 'Screenshot cancelled')
+                }
+              }
+              if (status.status === 'error') {
+                throw new Error(status.error || resolveSdkText('截图失败', 'Screenshot failed'))
+              }
               return status.data
             }
             await new Promise((resolve, reject) => {
@@ -10204,7 +10722,7 @@
             })
           }
         } catch (error) {
-          if (signal.aborted) void this.dllplugin.cancelTask(pluginName, taskId).catch(() => {})
+          if (signal.aborted) void this.dllplugin.cancelTask(pluginName, taskId).catch(() => undefined)
           throw error
         }
       }
@@ -10235,14 +10753,22 @@
       async captureRegion(options = {}) {
         const pollInterval = options.pollInterval ?? 200, timeout = options.timeout ?? 300000
         if (!Number.isInteger(pollInterval) || pollInterval < 10 || pollInterval > 5000 || !Number.isInteger(timeout) || timeout < 1 || timeout > 600000 ||
-            (options.signal !== undefined && (!options.signal || typeof options.signal.addEventListener !== 'function' || typeof options.signal.aborted !== 'boolean'))) throw new Error('截图取消/超时参数无效')
+            (options.signal !== undefined && (!options.signal || typeof options.signal.addEventListener !== 'function' || typeof options.signal.aborted !== 'boolean'))) {
+          throw new Error(resolveSdkText('截图取消/超时参数无效', 'Invalid screenshot cancellation/timeout parameters'))
+        }
         await ensureRuntimeCapability(this.sys, 'screen.capture', options)
         const controller = new AbortController()
-        const cancelError = Object.assign(new Error('截图已取消'), { name: 'AbortError', code: 'CALLER_DESTROYED' })
+        const cancelError = Object.assign(
+          new Error(resolveSdkText('截图已取消', 'Screenshot cancelled')),
+          { name: 'AbortError', code: 'CALLER_DESTROYED' }
+        )
         const abort = () => controller.abort(cancelError)
         if (options.signal?.aborted) abort()
         else options.signal?.addEventListener('abort', abort, { once: true })
-        const timer = setTimeout(() => controller.abort(Object.assign(new Error('截图等待超时'), { code: 'REQUEST_TIMEOUT' })), timeout)
+        const timer = setTimeout(
+          () => controller.abort(Object.assign(new Error(resolveSdkText('截图等待超时', 'Screenshot capture timed out')), { code: 'REQUEST_TIMEOUT' })),
+          timeout
+        )
         const pluginName = this._getPluginName()
         let taskId
         try {
@@ -10253,10 +10779,10 @@
             openFolder: options.openFolder === true, enableToolbar: options.enableToolbar === true,
             enablePinToScreen: options.enablePinToScreen === true, autoFinishOnSelect: options.autoFinishOnSelect === true
           })
-          void creation.then(id => { if (controller.signal.aborted) void this.dllplugin.cancelTask(pluginName, id).catch(() => {}) }, () => {})
+          void creation.then(id => { if (controller.signal.aborted) void this.dllplugin.cancelTask(pluginName, id).catch(() => undefined) }, () => undefined)
           taskId = await this._awaitCapture(creation, controller.signal)
           const result = await this._waitCaptureRegionTask(pluginName, taskId, pollInterval, controller.signal)
-          return this._normalizeResult(result, '区域截图失败')
+          return this._normalizeResult(result, resolveSdkText('区域截图失败', 'Region screenshot failed'))
         } finally {
           clearTimeout(timer)
           options.signal?.removeEventListener('abort', abort)
@@ -10281,7 +10807,7 @@
           screens: Array.isArray(options.screens) ? options.screens : undefined,
           openFolder: options.openFolder === true
         })
-        return this._normalizeResult(result, '全屏截图失败')
+        return this._normalizeResult(result, resolveSdkText('全屏截图失败', 'Fullscreen screenshot failed'))
       }
 
       /**
@@ -10295,7 +10821,7 @@
        */
       async captureWindow(options = {}) {
         if (!options.windowTitle) {
-          throw new Error('windowTitle 参数必填')
+          throw new Error(resolveSdkText('windowTitle 参数必填', 'windowTitle parameter is required'))
         }
 
         await ensureRuntimeCapability(this.sys, 'screen.capture')
@@ -10307,7 +10833,7 @@
           outputFormat: options.outputFormat || 'png',
           openFolder: options.openFolder === true
         })
-        return this._normalizeResult(result, '窗口截图失败')
+        return this._normalizeResult(result, resolveSdkText('窗口截图失败', 'Window screenshot failed'))
       }
 
       /**
@@ -10318,7 +10844,7 @@
         const pluginName = this._getPluginName()
         const result = await this.dllplugin.call(pluginName, 'GetWindowList', {})
         if (result?.success === false) {
-          throw new Error(result.error || result.message || '获取窗口列表失败')
+          throw new Error(result.error || result.message || resolveSdkText('获取窗口列表失败', 'Failed to get window list'))
         }
         return Array.isArray(result?.windows) ? result.windows : []
       }
@@ -10331,7 +10857,7 @@
         const pluginName = this._getPluginName()
         const result = await this.dllplugin.call(pluginName, 'GetScreenList', {})
         if (result?.success === false) {
-          throw new Error(result.error || result.message || '获取屏幕列表失败')
+          throw new Error(result.error || result.message || resolveSdkText('获取屏幕列表失败', 'Failed to get screen list'))
         }
         return Array.isArray(result?.screens) ? result.screens : []
       }
@@ -10429,11 +10955,17 @@
         if (window.__ztoolsElectron?.contractVersion === 2) {
           const refs = new ReferenceFileSystemAPI(this.transport)
           refs._options(options, ['sources', 'output', 'format', 'password', 'level', 'storePaths', 'replace', 'signal'])
-          if ((options.format !== undefined && options.format !== 'zip') || (options.password !== undefined && options.password !== '') || (options.storePaths !== undefined && typeof options.storePaths !== 'boolean')) throw refs._error('NOT_SUPPORTED', '当前引用provider只生成未加密ZIP')
+          if ((options.format !== undefined && options.format !== 'zip') || (options.password !== undefined && options.password !== '') || (options.storePaths !== undefined && typeof options.storePaths !== 'boolean')) {
+            throw refs._error('NOT_SUPPORTED', resolveSdkText('当前引用provider只生成未加密ZIP', 'Current reference provider only supports unencrypted ZIP archives'))
+          }
           const sources = Array.isArray(options.sources) ? options.sources : [options.sources]
-          if (!sources.length || sources.length > 64 || !Number.isInteger(options.level ?? 6) || (options.level ?? 6) < 0 || (options.level ?? 6) > 9 || (options.replace !== undefined && typeof options.replace !== 'boolean')) throw refs._error('INVALID_REQUEST', 'ZIP来源/压缩级别无效')
+          if (!sources.length || sources.length > 64 || !Number.isInteger(options.level ?? 6) || (options.level ?? 6) < 0 || (options.level ?? 6) > 9 || (options.replace !== undefined && typeof options.replace !== 'boolean')) {
+            throw refs._error('INVALID_REQUEST', resolveSdkText('ZIP来源/压缩级别无效', 'Invalid ZIP sources or compression level'))
+          }
           const result = await refs._call('zip_compress', { fileGrantIds: sources.map(source => refs._reference(source, ['file', 'directory'], 'read')), saveGrantId: refs._reference(options.output, ['save'], 'write'), level: options.level ?? 6, replace: options.replace ?? false, storePaths: options.storePaths ?? true }, { signal: options.signal })
-          if (result.status !== 'committed' || result.sourceCount !== sources.length || !Number.isSafeInteger(result.fileCount) || result.fileCount < 0 || result.fileCount > 1024 || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024) throw refs._error('FILE_WRITE_OUTCOME_UNKNOWN', 'ZIP保存结果未确认')
+          if (result.status !== 'committed' || result.sourceCount !== sources.length || !Number.isSafeInteger(result.fileCount) || result.fileCount < 0 || result.fileCount > 1024 || !Number.isSafeInteger(result.size) || result.size <= 0 || result.size > 16 * 1024 * 1024) {
+            throw refs._error('FILE_WRITE_OUTCOME_UNKNOWN', resolveSdkText('ZIP保存结果未确认', 'ZIP save outcome could not be confirmed'))
+          }
           return true
         }
         const {
@@ -10447,7 +10979,7 @@
         } = options
 
         if (!sources || !output) {
-          throw new Error('sources 和 output 参数必填')
+          throw new Error(resolveSdkText('sources 和 output 参数必填', 'Both sources and output parameters are required'))
         }
 
         // 统一处理 sources 为字符串（多个路径用逗号分隔）
@@ -10527,16 +11059,25 @@
         if (window.__ztoolsElectron?.contractVersion === 2) {
           const refs = new ReferenceFileSystemAPI(this.transport)
           refs._options(options, ['archive', 'output', 'password', 'replace', 'signal'])
-          if ((options.password !== undefined && options.password !== '') || options.replace === true) throw refs._error('NOT_SUPPORTED', '引用解压仅支持未加密ZIP且不覆盖已有文件')
+          if ((options.password !== undefined && options.password !== '') || options.replace === true) {
+            throw refs._error('NOT_SUPPORTED', resolveSdkText('引用解压仅支持未加密ZIP且不覆盖已有文件', 'Reference extraction only supports unencrypted ZIP archives without overwriting existing files'))
+          }
           const result = await refs._call('zip_extract', { fileGrantId: refs._reference(options.archive, ['file'], 'read'), directoryGrantId: refs._reference(options.output, ['directory'], 'write') }, { signal: options.signal })
-          if (!['committed', 'partial'].includes(result.status) || !Array.isArray(result.completed) || !Array.isArray(result.createdDirectories) || result.completed.length > 1024 || result.createdDirectories.length > 65536 || [...result.completed, ...result.createdDirectories].some(name => typeof name !== 'string')) throw refs._error('FILE_WRITE_OUTCOME_UNKNOWN', '解压结果未确认')
-          if (result.status === 'partial') throw Object.assign(refs._error(result.error?.code || 'FILE_ERROR', result.error?.message || '解压部分完成'), { completed: result.completed, createdDirectories: result.createdDirectories, uncertain: result.uncertain })
+          if (!['committed', 'partial'].includes(result.status) || !Array.isArray(result.completed) || !Array.isArray(result.createdDirectories) || result.completed.length > 1024 || result.createdDirectories.length > 65536 || [...result.completed, ...result.createdDirectories].some(name => typeof name !== 'string')) {
+            throw refs._error('FILE_WRITE_OUTCOME_UNKNOWN', resolveSdkText('解压结果未确认', 'Extraction outcome could not be confirmed'))
+          }
+          if (result.status === 'partial') {
+            throw Object.assign(
+              refs._error(result.error?.code || 'FILE_ERROR', result.error?.message || resolveSdkText('解压部分完成', 'Extraction partially completed')),
+              { completed: result.completed, createdDirectories: result.createdDirectories, uncertain: result.uncertain }
+            )
+          }
           return true
         }
         const { archive, output, password = '', onProgress } = options
 
         if (!archive || !output) {
-          throw new Error('archive 和 output 参数必填')
+          throw new Error(resolveSdkText('archive 和 output 参数必填', 'Both archive and output parameters are required'))
         }
 
         const params = {
@@ -10596,12 +11137,19 @@
           const refs = new ReferenceFileSystemAPI(this.transport)
           refs._options(options, ['signal'])
           const result = await refs._call('zip_list', { fileGrantId: refs._reference(archive, ['file'], 'read') }, options)
-          if (!Array.isArray(result.files) || result.files.length > 1024 || result.files.some(file => !file || typeof file.name !== 'string' || typeof file.isDirectory !== 'boolean' || !Number.isSafeInteger(file.size) || file.size < 0)) throw refs._error('FILE_ERROR', 'ZIP列表响应无效')
+          if (!Array.isArray(result.files) || result.files.length > 1024 || result.files.some(file => !file || typeof file.name !== 'string' || typeof file.isDirectory !== 'boolean' || !Number.isSafeInteger(file.size) || file.size < 0)) {
+            throw refs._error('FILE_ERROR', resolveSdkText('ZIP列表响应无效', 'Invalid ZIP entry list response'))
+          }
           return result.files
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('当前ZIP合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) {
+          throw Object.assign(
+            new Error(resolveSdkText('当前ZIP合约不支持取消选项', 'Current ZIP contract does not support cancellation options')),
+            { code: 'NOT_SUPPORTED' }
+          )
+        }
         if (!archive) {
-          throw new Error('archive 参数必填')
+          throw new Error(resolveSdkText('archive 参数必填', 'archive parameter is required'))
         }
 
         const pluginName = await this._getPluginName()
@@ -10630,12 +11178,19 @@
           const refs = new ReferenceFileSystemAPI(this.transport)
           refs._options(options, ['signal'])
           const result = await refs._call('zip_test', { fileGrantId: refs._reference(archive, ['file'], 'read') }, options)
-          if (typeof result.valid !== 'boolean') throw refs._error('FILE_ERROR', 'ZIP校验响应无效')
+          if (typeof result.valid !== 'boolean') {
+            throw refs._error('FILE_ERROR', resolveSdkText('ZIP校验响应无效', 'Invalid ZIP validation response'))
+          }
           return result.valid
         }
-        if (Object.keys(options).length) throw Object.assign(new Error('当前ZIP合约不支持取消选项'), { code: 'NOT_SUPPORTED' })
+        if (Object.keys(options).length) {
+          throw Object.assign(
+            new Error(resolveSdkText('当前ZIP合约不支持取消选项', 'Current ZIP contract does not support cancellation options')),
+            { code: 'NOT_SUPPORTED' }
+          )
+        }
         if (!archive) {
-          throw new Error('archive 参数必填')
+          throw new Error(resolveSdkText('archive 参数必填', 'archive parameter is required'))
         }
 
         const pluginName = await this._getPluginName()
@@ -10683,20 +11238,20 @@
     class ReferenceSQLiteAPI extends ReferenceFileSystemAPI {
       async readBrowserSnapshot(file, options = {}) {
         this._options(options, ['kind', 'limit', 'keyword', 'signal'])
-        if (!['chromium-history', 'firefox-history', 'firefox-bookmarks'].includes(options.kind) || !Number.isSafeInteger(options.limit ?? 200) || (options.limit ?? 200) < 1 || (options.limit ?? 200) > 1000 || typeof (options.keyword ?? '') !== 'string' || new TextEncoder().encode(options.keyword ?? '').length > 1024 || (options.keyword ?? '').includes(String.fromCharCode(0)) || (options.kind === 'firefox-bookmarks' && options.keyword)) throw this._error('INVALID_REQUEST', '浏览器快照选项无效')
+        if (!['chromium-history', 'firefox-history', 'firefox-bookmarks'].includes(options.kind) || !Number.isSafeInteger(options.limit ?? 200) || (options.limit ?? 200) < 1 || (options.limit ?? 200) > 1000 || typeof (options.keyword ?? '') !== 'string' || new TextEncoder().encode(options.keyword ?? '').length > 1024 || (options.keyword ?? '').includes(String.fromCharCode(0)) || (options.kind === 'firefox-bookmarks' && options.keyword)) throw this._error('INVALID_REQUEST', resolveSdkErrorText('invalidBrowserSnapshotOptions'))
         const result = await this._call('sqlite_read_browser_snapshot', { fileGrantId: this._reference(file, ['file'], 'read'), kind: options.kind, limit: options.limit ?? 200, keyword: options.keyword ?? '' }, { signal: options.signal })
-        if (!Array.isArray(result.columns) || !result.columns.length || result.columns.length > 8 || result.columns.some(name => typeof name !== 'string' || name.length > 128) || !Array.isArray(result.rows) || result.rows.length > (options.limit ?? 200) || typeof result.truncated !== 'boolean' || typeof result.sqliteVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(result.sqliteVersion)) throw this._error('FILE_ERROR', 'SQLite响应无效')
+        if (!Array.isArray(result.columns) || !result.columns.length || result.columns.length > 8 || result.columns.some(name => typeof name !== 'string' || name.length > 128) || !Array.isArray(result.rows) || result.rows.length > (options.limit ?? 200) || typeof result.truncated !== 'boolean' || typeof result.sqliteVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(result.sqliteVersion)) throw this._error('FILE_ERROR', resolveSdkErrorText('invalidSqliteResponse'))
         let bytes = 0
         const rows = result.rows.map(row => {
-          if (!Array.isArray(row) || row.length !== result.columns.length) throw this._error('FILE_ERROR', 'SQLite行无效')
+          if (!Array.isArray(row) || row.length !== result.columns.length) throw this._error('FILE_ERROR', resolveSdkErrorText('invalidSqliteRow'))
           for (const cell of row) {
-            if (typeof cell === 'string') { const length = new TextEncoder().encode(cell).length; if (length > 512 * 1024) throw this._error('FILE_TOO_LARGE', 'SQLite字段超过上限'); bytes += length }
-            else if (cell !== null && (typeof cell !== 'number' || !Number.isFinite(cell))) throw this._error('FILE_ERROR', 'SQLite字段无效')
+            if (typeof cell === 'string') { const length = new TextEncoder().encode(cell).length; if (length > 512 * 1024) throw this._error('FILE_TOO_LARGE', resolveSdkErrorText('sqliteFieldTooLarge')); bytes += length }
+            else if (cell !== null && (typeof cell !== 'number' || !Number.isFinite(cell))) throw this._error('FILE_ERROR', resolveSdkErrorText('invalidSqliteField'))
             else bytes += 8
           }
           return Object.freeze([...row])
         })
-        if (bytes > 8 * 1024 * 1024) throw this._error('RESPONSE_TOO_LARGE', 'SQLite结果超过8MiB')
+        if (bytes > 8 * 1024 * 1024) throw this._error('RESPONSE_TOO_LARGE', resolveSdkErrorText('sqliteResultTooLarge'))
         return Object.freeze({ columns: Object.freeze([...result.columns]), rows: Object.freeze(rows), truncated: result.truncated, sqliteVersion: result.sqliteVersion })
       }
     }
@@ -10724,6 +11279,7 @@
       'network_http_upload', 'clipboard_read_files', 'filesystem_list_write_recovery', 'filesystem_inspect_write_recovery', 'sqlite_read_browser_snapshot', 'ocr_local_languages', 'ocr_recognize_reference', 'clipboard_read_text', 'image_get_info', 'zip_list', 'zip_test', 'screen_get_cursor_pos', 'screen_get_primary_display', 'screen_get_all_displays', 'screen_get_display_nearest', 'screen_get_display_matching'
     ])
 
+
     function useReferenceClientContract() {
       const host = typeof window !== 'undefined' ? window.__ztoolsElectron : null
       if (host?.contractVersion !== 2) return false
@@ -10733,7 +11289,12 @@
       const hasOwnFunction = (bridge, method) => bridge && typeof bridge === 'object' && !Array.isArray(bridge) &&
         Object.prototype.hasOwnProperty.call(bridge, method) && typeof bridge[method] === 'function'
       if (!SDK2_REFERENCE_METHODS.every(method => hasOwnFunction(methods, method) && hasOwnFunction(cancellations, method))) {
-        const error = new Error('SDK合约2宿主缺少完整的逐方法调用与取消入口')
+        const error = new Error(
+          resolveSdkText(
+            'SDK合约2宿主缺少完整的逐方法调用与取消入口',
+            'SDK Contract 2 host is missing complete per-method call and cancellation bridges'
+          )
+        )
         error.code = 'NOT_SUPPORTED'
         throw error
       }
@@ -11058,6 +11619,26 @@
       }
 
       client.nativeTooltipInterceptor?.start()
+
+      // 幂等订阅宿主语言热切换事件（不依赖 plugin-sdk.js，避免重复绑定）
+      if (
+        !window.__ztools_api_locale_hooked &&
+        client.events &&
+        typeof client.events.on === 'function'
+      ) {
+        window.__ztools_api_locale_hooked = true
+        client.events.on('system.LocaleChange', (envelope) => {
+          try {
+            const payload = envelope && (envelope.payload || envelope.data || envelope)
+            const nextLocale = typeof payload === 'string' ? payload : payload && payload.locale
+            if (typeof nextLocale === 'string' && nextLocale.trim().length > 0) {
+              applyApiLocaleChange(nextLocale)
+            }
+          } catch (err) {
+            console.error('[ztools] system.LocaleChange dispatch error:', err)
+          }
+        })
+      }
 
       // console.log('[ztools] API initialized, version:', client.getVersion())
       // console.log('[ztools] Environment:', environment.getInfo())

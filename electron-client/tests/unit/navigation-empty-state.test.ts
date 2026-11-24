@@ -11,7 +11,7 @@ test('macOS 空窗口与空菜单保持空，不生成示例', async () => {
 
 test('macOS 枚举权限失败明确拒绝，不返回演示进程或菜单', async () => {
   const service = new NavigationService({ platform: 'darwin', execFile: async () => { throw new Error('not authorized') } })
-  await assert.rejects(service.listOpenWindows(), /辅助功能与自动化权限.*not authorized/)
-  await assert.rejects(service.searchMenuItems(), /辅助功能与自动化权限/)
+  await assert.rejects(service.listOpenWindows(), /accessibility and automation permissions.*not authorized/)
+  await assert.rejects(service.searchMenuItems(), /accessibility and automation permissions/)
   await service.stop()
 })

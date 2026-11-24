@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { errorCodes, ZToolsError } from '../../../contracts/errors.js'
+import { getResolvedLocale, ZTOOLS_LOCALE_ENV_KEY } from '../../i18n/index.js'
 import type { FileClipboardAdapter } from '../../services/clipboard-service.js'
 
 const LIMIT = 128 * 1024
@@ -33,7 +34,7 @@ const execute: MacClipboardRunner = (executable, payload, signal) => new Promise
   // Paths travel over stdin, never argv, shell, or a user-selected executable.
   const child = execFile(executable, [], {
     encoding: 'utf8', shell: false, timeout: 5000, maxBuffer: LIMIT, signal,
-    env: { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8' }
+    env: { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8', [ZTOOLS_LOCALE_ENV_KEY]: getResolvedLocale() }
   }, (error, stdout) => error ? reject(error) : resolve(stdout))
   child.stdin?.on('error', () => {}) // Exit/exec failure is reported by the callback.
   child.stdin?.end(payload, 'utf8')

@@ -16,6 +16,7 @@ import { WebBrowserService, SEARCH_ENGINES } from '../../src/main/services/web-b
 import { GeekToolsService } from '../../src/main/services/geek-tools-service.js'
 import { ClipboardHistoryService } from '../../src/main/services/clipboard-history-service.js'
 import { HudService } from '../../src/main/services/hud-service.js'
+import { getLocaleSetting, setLocale } from '../../src/main/i18n/index.js'
 
 test('ZTools M1.5 Group 3 Geek Development & Intelligent Interaction Test Suite', async (t) => {
   const tmpRoot = path.join(os.tmpdir(), `ztools-test-group3-${Date.now()}-${Math.random().toString(36).slice(2)}`)
@@ -221,6 +222,9 @@ test('ZTools M1.5 Group 3 Geek Development & Intelligent Interaction Test Suite'
   // 3. M1.5-19: Focus Service (专注时钟与番茄工作法)
   // ===========================================================================
   await t.test('3. FocusService: Pomodoro Lifecycle, State Machine & HUD', async (st) => {
+    const previousLocale = getLocaleSetting()
+    setLocale('zh-CN')
+    st.after(() => setLocale(previousLocale, 'zh-CN'))
     let lastHudMsg = ''
     const mockHudService = {
       showHUD: async (msg: unknown) => {
@@ -630,10 +634,10 @@ test('ZTools M1.5 Group 3 Geek Development & Intelligent Interaction Test Suite'
       nextStdout = 'not_found\n'
       const gone = await svc.activateWindow(2001)
       assert.equal(gone.success, false)
-      assert.equal(gone.error, '窗口所属的应用已退出')
+      assert.equal(gone.error, 'Application owning the window has exited')
       const goneClose = await svc.closeWindow(2001)
       assert.equal(goneClose.success, false)
-      assert.equal(goneClose.error, '窗口所属的应用已退出')
+      assert.equal(goneClose.error, 'Application owning the window has exited')
 
       // 超时或未授予自动化权限
       nextError = new Error('Not authorized to send Apple events to System Events')
@@ -724,7 +728,7 @@ test('ZTools M1.5 Group 3 Geek Development & Intelligent Interaction Test Suite'
         { name: '侧车成功', sidecar: { manageWindow: async (a: string) => ({ success: true, action: a }) }, ok: true },
         { name: '侧车失败', sidecar: { manageWindow: async (a: string) => (a.startsWith('activate:') ? { success: true, action: a } : { success: false, action: a, error: '窗口不支持调整' }) }, ok: false, error: /窗口不支持调整/ },
         { name: '侧车抛错', sidecar: { manageWindow: async (a: string) => { if (a.startsWith('activate:')) return { success: true, action: a }; throw new Error('管道断开') } }, ok: false, error: /管道断开/ },
-        { name: '无侧车', sidecar: null, ok: false, error: /原生辅助进程/ }
+        { name: '无侧车', sidecar: null, ok: false, error: /native helper process/ }
       ]
       for (const c of layoutCases) {
         const svc = new NavigationService({

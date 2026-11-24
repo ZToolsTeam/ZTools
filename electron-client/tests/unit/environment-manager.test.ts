@@ -49,9 +49,9 @@ test('字面量导出段往返保留空值、空格、引号、多行、反引�
   assert.deepEqual(readEnvironmentProfile(raw).entries, entries)
   assert.equal(readEnvironmentProfile(raw).before, before)
   assert.equal(replaceEnvironmentProfile(raw, entries), raw)
-  assert.throws(() => replaceEnvironmentProfile(before, new Map([['VALUE', `first\n${ENV_END}\nlast`]])), /边界标记/)
-  assert.throws(() => readEnvironmentProfile(`${ENV_BEGIN}\nexport X=$(touch bad)\n${ENV_END}\n`), /无效/)
-  assert.throws(() => readEnvironmentProfile(`${ENV_BEGIN}\n${ENV_BEGIN}\n${ENV_END}\n`), /重复/)
+  assert.throws(() => replaceEnvironmentProfile(before, new Map([['VALUE', `first\n${ENV_END}\nlast`]])), /boundary markers/)
+  assert.throws(() => readEnvironmentProfile(`${ENV_BEGIN}\nexport X=$(touch bad)\n${ENV_END}\n`), /invalid/)
+  assert.throws(() => readEnvironmentProfile(`${ENV_BEGIN}\n${ENV_BEGIN}\n${ENV_END}\n`), /duplicated/)
 })
 test('真实 Mac 宿主读写、独立新 shell 验证、重建服务读取和备份恢复', { skip: !mac }, async t => {
   const f = await fixture(t), original = await fs.readFile(f.profile, 'utf8')
@@ -85,13 +85,13 @@ test('PATH 清理只删除确认不存在目录，保留空项、外部卷和既
   // 已有配置里只剩失效目录（外部写入）时，清理仍拒绝产生空 PATH
   const raw = await fs.readFile(f.profile, 'utf8')
   await fs.writeFile(f.profile, raw.replace(/^export PATH=.*$/m, `export PATH='${absent}'`))
-  await assert.rejects(f.prepare({ kind: 'clean', source: 'user' }), /为空/)
+  await assert.rejects(f.prepare({ kind: 'clean', source: 'user' }), /leave PATH empty/)
 })
 test('macOS 拒绝会破坏终端的 PATH：$、反引号、~、相对目录、缺少 /usr/bin 或 /bin，原配置不变', { skip: !mac }, async t => {
   const f = await fixture(t), before = await fs.readFile(f.profile, 'utf8')
   const cases: Array<[string, RegExp]> = [
-    ['$PATH:/opt/bin', /不会展开/], ['/usr/bin:/bin:`id`', /反引号/], ['~/bin:/usr/bin:/bin', /~ 不会展开/],
-    ['relative:/usr/bin:/bin', /必须以 \/ 开头/], ['/opt/homebrew/bin:/bin', /\/usr\/bin 和 \/bin/], ['/usr/bin', /\/usr\/bin 和 \/bin/], ['', /\/usr\/bin 和 \/bin/]
+    ['$PATH:/opt/bin', /not expanded/], ['/usr/bin:/bin:`id`', /backticks/], ['~/bin:/usr/bin:/bin', /~ is not expanded/],
+    ['relative:/usr/bin:/bin', /must start with \//], ['/opt/homebrew/bin:/bin', /\/usr\/bin and \/bin/], ['/usr/bin', /\/usr\/bin and \/bin/], ['', /\/usr\/bin and \/bin/]
   ]
   for (const [value, message] of cases) {
     await assert.rejects(f.prepare({ kind: 'set', source: 'user', key: 'PATH', value }), message)
@@ -104,7 +104,7 @@ test('macOS 拒绝会破坏终端的 PATH：$、反引号、~、相对目录、�
 test('darwinPathProblem 与插件规则一致', () => {
   assert.equal(darwinPathProblem('/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'), '')
   assert.equal(darwinPathProblem('/usr/bin::/bin'), '')
-  assert.match(darwinPathProblem('/usr/bin:/bin:$HOME/bin'), /不会展开/)
+  assert.match(darwinPathProblem('/usr/bin:/bin:$HOME/bin'), /not expanded/)
   assert.match(darwinPathProblem('~/.cargo/bin:/usr/bin:/bin'), /~/)
   assert.match(darwinPathProblem('./node_modules/.bin:/usr/bin:/bin'), /\//)
   assert.match(darwinPathProblem('/usr/local/bin'), /\/usr\/bin/)
@@ -113,7 +113,7 @@ test('备份失败、损坏及外部编辑均停止写入，不覆盖原文件',
   const f = await fixture(t), original = await fs.readFile(f.profile, 'utf8')
   const first = await f.prepare({ kind: 'set', source: 'user', key: 'ZTOOLS_ENV_CASE', value: 'new' })
   await fs.appendFile(f.profile, '# external edit\n')
-  await assert.rejects(f.call({ action: 'apply', planId: first.planId }), /配置已变化/)
+  await assert.rejects(f.call({ action: 'apply', planId: first.planId }), /Configuration changed/)
   assert.equal(await fs.readFile(f.profile, 'utf8'), original + '# external edit\n')
   const latest = await f.apply({ kind: 'set', source: 'user', key: 'ZTOOLS_ENV_CASE', value: 'new' }), good = await fs.readFile(f.profile, 'utf8')
   await fs.appendFile(path.join(f.root, 'backups', `${latest.backupId}.json`), 'bad')
@@ -126,9 +126,9 @@ test('备份失败、损坏及外部编辑均停止写入，不覆盖原文件',
 test('跨窗口计划、已取消计划和旧快照无法写入', { skip: !mac }, async t => {
   const f = await fixture(t), before = await fs.readFile(f.profile, 'utf8'), snapshot = await f.list()
   const plan = await f.prepare({ kind: 'set', source: 'user', key: 'ZTOOLS_ENV_CASE', value: 'new' }, snapshot)
-  await assert.rejects(f.call({ action: 'apply', planId: plan.planId }, { ...caller, webContentsId: 38 }), /不存在或已过期/)
-  await f.call({ action: 'cancel' }); await assert.rejects(f.call({ action: 'apply', planId: plan.planId }), /不存在或已过期/)
-  await f.list(); await assert.rejects(f.prepare({ kind: 'set', source: 'user', key: 'ZTOOLS_ENV_CASE', value: 'new' }, snapshot), /过期/)
+  await assert.rejects(f.call({ action: 'apply', planId: plan.planId }, { ...caller, webContentsId: 38 }), /does not exist or has expired/)
+  await f.call({ action: 'cancel' }); await assert.rejects(f.call({ action: 'apply', planId: plan.planId }), /does not exist or has expired/)
+  await f.list(); await assert.rejects(f.prepare({ kind: 'set', source: 'user', key: 'ZTOOLS_ENV_CASE', value: 'new' }, snapshot), /expired/)
   assert.equal(await fs.readFile(f.profile, 'utf8'), before)
 })
 test('语法检查不执行启动脚本，语法错误保持原配置', { skip: !mac }, async t => {
@@ -137,7 +137,7 @@ test('语法检查不执行启动脚本，语法错误保持原配置', { skip: 
   await f.prepare({ kind: 'set', source: 'user', key: 'VALUE', value: 'literal' })
   await assert.rejects(fs.access(marker))
   await fs.writeFile(f.profile, 'if then\n')
-  await assert.rejects(f.prepare({ kind: 'set', source: 'user', key: 'VALUE', value: 'literal' }), /组件执行失败/)
+  await assert.rejects(f.prepare({ kind: 'set', source: 'user', key: 'VALUE', value: 'literal' }), /helper execution failed/)
   assert.equal(await fs.readFile(f.profile, 'utf8'), 'if then\n')
 })
 test('合法 here-document 保留，未闭合正文及函数或引号中的伪管理段拒绝', { skip: !mac }, async t => {
@@ -146,7 +146,7 @@ test('合法 here-document 保留，未闭合正文及函数或引号中的伪�
   await f.apply({ kind: 'set', source: 'user', key: 'VALUE', value: 'literal' })
   assert.ok((await fs.readFile(f.profile, 'utf8')).startsWith(complete))
   await fs.writeFile(f.profile, "cat <<'DONE'\nhello\n")
-  await assert.rejects(f.prepare({ kind: 'set', source: 'user', key: 'VALUE', value: 'literal' }), /顶层命令/)
+  await assert.rejects(f.prepare({ kind: 'set', source: 'user', key: 'VALUE', value: 'literal' }), /top-level command/)
   const block = `${ENV_BEGIN}\nexport VALUE='body'\n${ENV_END}\n`
   for (const raw of [`cat <<'DONE'\n${block}DONE\n`, `function example() {\n${block}}\n`, `echo '\n${block}'\n`]) {
     await fs.writeFile(f.profile, raw); await assert.rejects(f.list()); assert.equal(await fs.readFile(f.profile, 'utf8'), raw)
@@ -156,7 +156,7 @@ test('Bash 不新建高优先级配置遮蔽已有登录脚本', { skip: !mac },
   const f = await fixture(t), provider = new SystemEnvironmentProvider(() => new NativePathAccessAdapter(helper, 15000), 'darwin', f.environment, f.root, '/bin/bash')
   for (const name of ['.bash_login', '.profile']) {
     const existing = path.join(f.root, name); await fs.writeFile(existing, "export ORIGINAL_KEEP='kept'\n")
-    await assert.rejects(provider.read('user', signal()), /不能新建 .bash_profile/)
+    await assert.rejects(provider.read('user', signal()), /cannot create \.bash_profile/)
     assert.equal(await fs.readFile(existing, 'utf8'), "export ORIGINAL_KEEP='kept'\n")
     await fs.unlink(existing)
   }
@@ -184,7 +184,7 @@ test('写入阶段的备份失败和读回不一致均不允许成功', { skip: 
   } finally { await failed.stop() }
   const originalWrite = f.provider.write.bind(f.provider)
   f.provider.write = async () => undefined // 注入系统返回但未落盘的失败边界。
-  await assert.rejects(f.apply({ kind: 'set', source: 'user', key: 'VALUE', value: 'new' }), /读回不一致/)
+  await assert.rejects(f.apply({ kind: 'set', source: 'user', key: 'VALUE', value: 'new' }), /Read-back verification mismatch/)
   assert.equal(await fs.readFile(f.profile, 'utf8'), original)
   f.provider.write = originalWrite
 })
@@ -195,7 +195,7 @@ test('软链接、硬链接和只读配置不会被修改', { skip: !mac }, asyn
   await fs.unlink(f.profile); await fs.link(target, f.profile); await assert.rejects(f.list())
   await fs.unlink(f.profile); await fs.copyFile(target, f.profile); await fs.chmod(f.profile, 0o400)
   const plan = await f.prepare({ kind: 'set', source: 'user', key: 'VALUE', value: 'literal' })
-  await assert.rejects(f.call({ action: 'apply', planId: plan.planId }), /只读/)
+  await assert.rejects(f.call({ action: 'apply', planId: plan.planId }), /read-only/)
   assert.equal(await fs.readFile(f.profile, 'utf8'), text)
 })
 test('真实原生并发编辑不丢失：移动前追加、原位被占用、移出原对象被继续写入', { skip: !mac }, async t => {
@@ -228,7 +228,7 @@ test('真实原生并发编辑不丢失：移动前追加、原位被占用、�
         assert.equal(await fs.readFile(f.profile, 'utf8'), next)
         assert.equal(await fs.readFile(preserved, 'utf8'), original + external)
       } else {
-        await assert.rejects(pending, phase === 'before-move' ? /并发编辑/ : /原位恢复未确认.*请检查原配置/)
+        await assert.rejects(pending, phase === 'before-move' ? /Concurrent edit/ : /in-place restore not confirmed.*Check original configuration/)
         assert.equal(await fs.readFile(f.profile, 'utf8'), phase === 'before-move' ? original + external : external)
         if (phase === 'occupy-target') assert.equal(await fs.readFile(originalPath, 'utf8'), original)
       }
@@ -240,9 +240,9 @@ test('真实原生并发编辑不丢失：移动前追加、原位被占用、�
 test('真实命令取消等待子进程退出，非零退出和输出超限不能报成功', { skip: !mac }, async () => {
   const abort = new AbortController()
   const pending = runEnvironmentCommand('/bin/sleep', ['10'], undefined, abort.signal)
-  abort.abort(); await assert.rejects(pending, /取消/)
-  await assert.rejects(runEnvironmentCommand('/bin/sh', ['-c', 'exit 2'], undefined, signal()), /组件执行失败/)
-  await assert.rejects(runEnvironmentCommand('/usr/bin/yes', ['line'], undefined, signal()), /组件执行失败/)
+  abort.abort(); await assert.rejects(pending, /canceled/)
+  await assert.rejects(runEnvironmentCommand('/bin/sh', ['-c', 'exit 2'], undefined, signal()), /helper execution failed/)
+  await assert.rejects(runEnvironmentCommand('/usr/bin/yes', ['line'], undefined, signal()), /helper execution failed/)
 })
 test('文件组件退出失败也保留真实原件路径，不被清理异常覆盖', { skip: !mac }, async t => {
   const f = await fixture(t), original = await fs.readFile(f.profile, 'utf8')
@@ -251,7 +251,7 @@ test('文件组件退出失败也保留真实原件路径，不被清理异常�
   }
   const provider = new SystemEnvironmentProvider(() => new StopFailureAdapter(helper, 15000), 'darwin', f.environment, f.root, '/bin/zsh')
   const before = await provider.read('user', signal()), after = provider.change(before, 'VALUE', 'new')
-  await assert.rejects(provider.write(before, after, signal()), /退出未确认.*原文件.*\.ztools-env-recovery-/)
+  await assert.rejects(provider.write(before, after, signal()), /exit not confirmed.*original file.*\.ztools-env-recovery-/)
   const directories = (await fs.readdir(f.root)).filter(name => name.startsWith('.ztools-env-recovery-'))
   assert.equal(directories.length, 1)
   assert.equal(await fs.readFile(path.join(f.root, directories[0]!, 'original'), 'utf8'), original)

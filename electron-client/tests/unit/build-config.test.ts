@@ -86,9 +86,9 @@ test('resolveBuildApiBase: env wins (empty means forced offline), then frontend 
 
 test('resolveBuildApiBase fails the build on an explicitly configured but invalid base', () => {
   assert.throws(() => resolveBuildApiBase({ env: { [BUILD_API_BASE_ENV]: 'http://api.example' } }), /https/)
-  assert.throws(() => resolveBuildApiBase({ env: { [BUILD_API_BASE_ENV]: 'not a url' } }), /有效/)
+  assert.throws(() => resolveBuildApiBase({ env: { [BUILD_API_BASE_ENV]: 'not a url' } }), /valid absolute URL/)
   assert.throws(() => resolveBuildApiBase({ env: {}, frontendEnvProduction: 'VITE_API_BASE_URL=http://api.example' }), /https/)
-  assert.throws(() => resolveBuildApiBase({ env: {}, frontendEnvProduction: 'VITE_API_BASE_URL=https://u:p@api.example' }), /账号/)
+  assert.throws(() => resolveBuildApiBase({ env: {}, frontendEnvProduction: 'VITE_API_BASE_URL=https://u:p@api.example' }), /credentials/)
 })
 
 test('readBuildConfig degrades to offline on missing, corrupt, wrong-version or tampered config', async (t) => {

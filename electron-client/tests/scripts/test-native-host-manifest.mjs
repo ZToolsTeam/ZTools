@@ -22,16 +22,26 @@ test('build trust only names approved plugins with fixed hashes and explicit fun
   assert.match(manifest, /plugin id="batch-audio"/)
   assert.match(manifest, /plugin id="batch-video"/)
   assert.match(manifest, /plugin id="record"/)
-  assert.equal((manifest.match(/<plugin /g) ?? []).length, 4)
-  assert.equal((manifest.match(/sha256="[a-f0-9]{64}" arch="x86"/g) ?? []).length, 4)
+  assert.match(manifest, /plugin id="screenshot"/)
+  assert.match(manifest, /plugin id="screen-color-picker"/)
+  assert.equal((manifest.match(/<plugin /g) ?? []).length, 6)
+  assert.equal((manifest.match(/sha256="[a-f0-9]{64}" arch="x86"/g) ?? []).length, 6)
   const record = manifest.match(/<plugin id="record">[\s\S]*?<\/plugin>/)?.[0]
   assert.ok(record)
   assert.match(record, /dll id="RecordPlugin" path="lib\/RecordPlugin\.dll"/)
-  assert.equal((record.match(/<function /g) ?? []).length, 9)
+  assert.equal((record.match(/<function /g) ?? []).length, 10)
   for (const name of ['StartRecord', 'StopRecord', 'GetRecordingProgress', 'GetMediaInfo', 'ConvertMedia',
-    'GetConvertTaskStatus', 'CancelConvertTask', 'ExtractFrame', 'ConvertToGif']) {
+    'GetConvertTaskStatus', 'CancelConvertTask', 'ExtractFrame', 'ConvertToGif', '__setLocale']) {
     assert.ok(record.includes(`<function name="${name}"/>`), `record 缺少函数白名单 ${name}`)
   }
+  const screenshot = manifest.match(/<plugin id="screenshot">[\s\S]*?<\/plugin>/)?.[0]
+  assert.ok(screenshot)
+  assert.match(screenshot, /dll id="ScreenCapturePlugin" path="lib\/ScreenCapturePlugin\.dll"/)
+  assert.ok(screenshot.includes('<function name="__setLocale"/>'), 'screenshot 缺少 __setLocale 白名单')
+  const colorPicker = manifest.match(/<plugin id="screen-color-picker">[\s\S]*?<\/plugin>/)?.[0]
+  assert.ok(colorPicker)
+  assert.match(colorPicker, /dll id="ScreenColorPickerPlugin" path="lib\/ScreenColorPickerPlugin\.dll"/)
+  assert.ok(colorPicker.includes('<function name="__setLocale"/>'), 'screen-color-picker 缺少 __setLocale 白名单')
   // clipboard-manager 必须取自 DLLPlugins/outputs 的 DLL，而不是旧版运行时目录 bin/Data/Plugins 中的旧文件
   const clipboardDll = path.resolve(root, '..', 'DLLPlugins', 'outputs',
     'clipboard-manager', 'lib', 'ClipboardManagerPlugin.dll')

@@ -358,6 +358,47 @@ describe('内置插件与可见性', () => {
     expect(isBundledPlugin('../json-format')).toBe(false)
     vi.unstubAllGlobals()
   })
+
+  it('readBundledPluginFile 报错文案随当前语言切换并保留稳定错误码', async () => {
+    const { getCurrentLocale, setI18nLocale } = await import('@/i18n')
+    const originalLocale = getCurrentLocale()
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: false, status: 404 })
+    vi.stubGlobal('fetch', fetchSpy)
+    try {
+      setI18nLocale('en-US')
+      await expect(readBundledPluginFile('cleaner', 'plugin.json')).rejects.toMatchObject({
+        code: 'PLUGIN_RESOURCE_NOT_FOUND',
+        message: 'Not a bundled plugin: cleaner'
+      })
+      await expect(readBundledPluginFile('json-format', '../secret.js')).rejects.toMatchObject({
+        code: 'PATH_TRAVERSAL_BLOCKED',
+        message: 'Invalid plugin resource path: ../secret.js'
+      })
+      await expect(readBundledPluginFile('json-format', 'dist/missing.js')).rejects.toMatchObject({
+        code: 'PLUGIN_RESOURCE_NOT_FOUND',
+        status: 404,
+        message: 'Failed to load bundled plugin resource [json-format/dist/missing.js]: HTTP 404'
+      })
+
+      setI18nLocale('zh-CN')
+      await expect(readBundledPluginFile('cleaner', 'plugin.json')).rejects.toMatchObject({
+        code: 'PLUGIN_RESOURCE_NOT_FOUND',
+        message: '不是内置插件: cleaner'
+      })
+      await expect(readBundledPluginFile('json-format', '../secret.js')).rejects.toMatchObject({
+        code: 'PATH_TRAVERSAL_BLOCKED',
+        message: '非法的插件资源路径: ../secret.js'
+      })
+      await expect(readBundledPluginFile('json-format', 'dist/missing.js')).rejects.toMatchObject({
+        code: 'PLUGIN_RESOURCE_NOT_FOUND',
+        status: 404,
+        message: '无法加载内置插件资源 [json-format/dist/missing.js]: HTTP 404'
+      })
+    } finally {
+      setI18nLocale(originalLocale)
+      vi.unstubAllGlobals()
+    }
+  })
 })
 
 describe('声明式插件加载器', () => {

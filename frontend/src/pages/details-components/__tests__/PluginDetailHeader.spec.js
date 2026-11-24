@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import PluginDetailHeader from '../PluginDetailHeader.vue'
 import { formatBytes } from '@/utils/formatBytes'
+import { getCurrentLocale, setI18nLocale } from '@/i18n'
 
 const t = (platform) => ({ id: `${platform}-electron-any`, platform, runtime: 'electron', arch: 'any' })
 const mountHeader = (plugin, props = {}) =>
@@ -69,6 +70,35 @@ describe('插件详情头部元信息', () => {
     expect(mountHeader({ pluginId: 'a', name: 'A' }, { hasUpdate: true }).find('.status-tag.tone-accent').text()).toBe('有新版本')
     expect(mountHeader({ pluginId: 'a', name: 'A' }, { updateInfo: { incompatible: true } }).find('.status-tag.tone-warning').text()).toBe('需升级客户端')
     expect(mountHeader({ pluginId: 'a', name: 'A' }, { isInstalled: true }).find('.status-tag').exists()).toBe(false)
+  })
+
+  it('[国际化] en-US 下安装次数与评分提示正确区分单复数且不暴露管道符', () => {
+    const originalLocale = getCurrentLocale()
+    try {
+      setI18nLocale('en-US')
+      const singleInstall = mountHeader(
+        { pluginId: 's', name: 'S', version: '1.0.0', downloads: 1 },
+        { ratingSummary: { average: null, count: 1 } }
+      )
+      expect(metaTexts(singleInstall)).toContain('1 install')
+      expect(singleInstall.find('.meta-rating').attributes('title')).toBe('1 rating; average shown at 3+')
+
+      const multiInstall = mountHeader(
+        { pluginId: 'm', name: 'M', version: '1.0.0', downloads: 12345 },
+        { ratingSummary: { average: 4.56, count: 23 } }
+      )
+      expect(metaTexts(multiInstall)).toContain('12,345 installs')
+      expect(multiInstall.find('.meta-rating').attributes('title')).toBe('Avg 4.6 / 5 (23 ratings)')
+
+      const twoRatings = mountHeader(
+        { pluginId: 't', name: 'T', version: '1.0.0', downloads: 2 },
+        { ratingSummary: { average: null, count: 2 } }
+      )
+      expect(metaTexts(twoRatings)).toContain('2 installs')
+      expect(twoRatings.find('.meta-rating').attributes('title')).toBe('2 ratings; average shown at 3+')
+    } finally {
+      setI18nLocale(originalLocale)
+    }
   })
 })
 

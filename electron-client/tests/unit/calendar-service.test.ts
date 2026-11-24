@@ -222,9 +222,9 @@ test('[契约] calendar_* 方法参数校验：放行插件实际发送的字段
   validateMethodParams('calendar_list_events', { search: '健身', startTime: Date.now(), limit: 500, order: 'desc' })
   validateMethodParams('calendar_count_events', { startTime: 0, endTime: Date.now(), search: 'x' })
   for (const bad of [{ limit: 0 }, { limit: 1001 }, { limit: 1.5 }, { order: 'up' }, { startTime: 'today' }, { search: 'x'.repeat(257) }, { evil: 1 }]) {
-    assert.throws(() => validateMethodParams('calendar_list_events', bad), /无效|超出范围|未知字段/, JSON.stringify(bad))
+    assert.throws(() => validateMethodParams('calendar_list_events', bad), /invalid|out of range|unknown fields/i, JSON.stringify(bad))
   }
-  assert.throws(() => validateMethodParams('calendar_count_events', { limit: 5 }), /未知字段/)
+  assert.throws(() => validateMethodParams('calendar_count_events', { limit: 5 }), /unknown fields/i)
   validateMethodParams('calendar_export_ics', { eventIds: ['a', 'b'] })
   validateMethodParams('calendar_export_ics', { eventIds: [] })
   assert.throws(() => validateMethodParams('calendar_export_ics', { eventIds: 'a' }))
@@ -297,7 +297,7 @@ test('ICS 折行与转义的边界：恰好 75 字节不折行，76 字节折行
   assert.equal(escapeIcsText(''), '')
 })
 
-test('删除不存在的日程返回中文原因，已有日程删除成功且不能重复删除', (t) => {
+test('删除不存在的日程返回原因，已有日程删除成功且不能重复删除', (t) => {
   const service = new CalendarService()
   t.after(() => service.stop())
   const now = Date.now()
@@ -306,7 +306,7 @@ test('删除不存在的日程返回中文原因，已有日程删除成功且�
   for (const id of [event.id, 'missing', '']) {
     assert.throws(() => service.deleteEvent(id), (error: { code?: string; message?: string }) => {
       assert.equal(error.code, 'INVALID_REQUEST')
-      assert.match(error.message ?? '', /日程不存在或已被删除/)
+      assert.match(error.message ?? '', /Calendar event does not exist or has been deleted/i)
       return true
     })
   }

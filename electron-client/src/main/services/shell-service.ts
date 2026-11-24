@@ -26,10 +26,10 @@ export class ShellService {
     const target = await this.#resolve(params.fullPath, caller, 'read', false)
     const stats = await this.#stat(target)
     if (!stats.isFile() && !stats.isDirectory()) {
-      throw new ZToolsError(errorCodes.shellError, '只允许打开普通文件或目录')
+      throw new ZToolsError(errorCodes.shellError, 'Only regular files or directories can be opened')
     }
     const message = await this.adapter.openPath(target)
-    if (message !== '') throw new ZToolsError(errorCodes.shellError, '打开失败')
+    if (message !== '') throw new ZToolsError(errorCodes.shellError, 'Failed to open path')
     return { success: true }
   }
 
@@ -38,13 +38,13 @@ export class ShellService {
     const target = await this.#resolve(params.fullPath, caller, 'trash', false)
     const stats = await this.#stat(target)
     if (!stats.isFile() && !stats.isDirectory()) {
-      throw new ZToolsError(errorCodes.shellError, '只允许回收普通文件或目录')
+      throw new ZToolsError(errorCodes.shellError, 'Only regular files or directories can be moved to trash')
     }
     try {
       await this.adapter.trashItem(target)
       return { success: true }
     } catch {
-      throw new ZToolsError(errorCodes.shellError, '移动到回收站失败')
+      throw new ZToolsError(errorCodes.shellError, 'Failed to move item to trash')
     }
   }
 
@@ -54,19 +54,19 @@ export class ShellService {
       const stats = await fs.stat(target)
       if (stats.isDirectory()) {
         const message = await this.adapter.openPath(target)
-        if (message !== '') throw new ZToolsError(errorCodes.shellError, '打开目录失败')
+        if (message !== '') throw new ZToolsError(errorCodes.shellError, 'Failed to open directory')
       } else if (stats.isFile()) {
         this.adapter.showItemInFolder(target)
       } else {
-        throw new ZToolsError(errorCodes.shellError, '目标不是普通文件或目录')
+        throw new ZToolsError(errorCodes.shellError, 'Target is not a regular file or directory')
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       const parent = path.dirname(target)
       const parentStats = await this.#stat(parent)
-      if (!parentStats.isDirectory()) throw new ZToolsError(errorCodes.shellError, '目标父目录不存在')
+      if (!parentStats.isDirectory()) throw new ZToolsError(errorCodes.shellError, 'Target parent directory does not exist')
       const message = await this.adapter.openPath(parent)
-      if (message !== '') throw new ZToolsError(errorCodes.shellError, '打开目录失败')
+      if (message !== '') throw new ZToolsError(errorCodes.shellError, 'Failed to open directory')
     }
     return { success: true }
   }
@@ -76,20 +76,20 @@ export class ShellService {
     try {
       target = new URL(params.url)
     } catch {
-      throw new ZToolsError(errorCodes.invalidRequest, 'url 无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid URL')
     }
     if (
       (target.protocol !== 'http:' && target.protocol !== 'https:') ||
       target.username !== '' ||
       target.password !== ''
     ) {
-      throw new ZToolsError(errorCodes.invalidRequest, '只允许无凭据的 HTTP/HTTPS URL')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Only credential-free HTTP/HTTPS URLs are allowed')
     }
     try {
       await this.adapter.openExternal(target.href, { activate: true })
       return { success: true }
     } catch {
-      throw new ZToolsError(errorCodes.shellError, '打开外部 URL 失败')
+      throw new ZToolsError(errorCodes.shellError, 'Failed to open external URL')
     }
   }
 
@@ -99,7 +99,7 @@ export class ShellService {
   }
 
   exec(): never {
-    throw new ZToolsError(errorCodes.notSupported, 'Electron 不允许 renderer 执行任意 shell 命令')
+    throw new ZToolsError(errorCodes.notSupported, 'Arbitrary shell execution from renderer is not allowed in Electron')
   }
 
   async #resolve(
@@ -110,7 +110,7 @@ export class ShellService {
   ): Promise<string> {
     if (value.toLowerCase().startsWith('ztools://file/')) {
       if (!this.files.canLoadFileCapability(value, caller.webContentsId)) {
-        throw new ZToolsError(errorCodes.permissionDenied, '文件 capability 不属于当前窗口')
+        throw new ZToolsError(errorCodes.permissionDenied, 'File capability does not belong to the current window')
       }
       const target = await this.files.resolveFileCapability(value)
       return this.files.resolveAuthorizedPath(target, caller, access, allowMissing)
@@ -123,9 +123,9 @@ export class ShellService {
       return await fs.stat(target)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        throw new ZToolsError(errorCodes.shellError, '文件或目录不存在')
+        throw new ZToolsError(errorCodes.shellError, 'File or directory does not exist')
       }
-      throw new ZToolsError(errorCodes.shellError, '无法访问文件或目录')
+      throw new ZToolsError(errorCodes.shellError, 'Unable to access file or directory')
     }
   }
 }

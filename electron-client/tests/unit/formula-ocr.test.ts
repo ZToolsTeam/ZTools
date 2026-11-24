@@ -117,7 +117,7 @@ test('裁边：按背景找出笔画外接框并留白；深色背景识别为�
   assert.equal(analyzeContent(transparent)!.darkBackground, false)
   assert.equal(analyzeContent(canvas(30, 30)), undefined)
   assert.equal(analyzeContent(canvas(30, 30, [250, 250, 250, 255])), undefined, '轻微底色不算内容')
-  assert.throws(() => analyzeContent({ width: 10, height: 10, data: new Uint8Array(4) }), /像素数据无效/)
+  assert.throws(() => analyzeContent({ width: 10, height: 10, data: new Uint8Array(4) }), /Invalid image pixel data/)
 })
 
 test('模型输入：反色得到白底深字；384×384 归一化到 [-1, 1] 并按 RGB 排列；尺寸不符报错', () => {
@@ -185,9 +185,9 @@ test('贪心解码：从起始符开始逐个取最大概率词元，遇结束�
   assert.deepEqual(seen, [[1], [1, 100], [1, 100, 200]])
   assert.ok(result.score > 0.99 && result.score <= 1)
 
-  await assert.rejects(greedyDecode(scriptedRunner([5], 10).runner, new Float32Array(3)), /输出维度无效/)
+  await assert.rejects(greedyDecode(scriptedRunner([5], 10).runner, new Float32Array(3)), /Invalid formula OCR model output dimensions/)
   const endless = scriptedRunner(Array(MAX_FORMULA_TOKENS + 5).fill(7))
-  await assert.rejects(greedyDecode(endless.runner, new Float32Array(3)), /公式过长/)
+  await assert.rejects(greedyDecode(endless.runner, new Float32Array(3)), /Formula is too long/)
   assert.equal(endless.seen.length, MAX_FORMULA_TOKENS, '达到上限后不再继续推理')
 })
 
@@ -200,10 +200,10 @@ test('词表与还原：字节级 BPE 还原 ASCII、空格与中文；跳过特
   vocab['å½ĵ'] = 12; delete vocab.t12
   const words = parseVocabulary(JSON.stringify({ model: { type: 'BPE', vocab } }))
   assert.equal(decodeTokens([1, 10, 11, 12, 2, 0], words), '\\frac x当')
-  assert.throws(() => decodeTokens([FORMULA_TOKENS.vocabSize + 1], words), /词表外/)
-  assert.throws(() => parseVocabulary(JSON.stringify({ model: { type: 'WordPiece', vocab } })), /格式无效/)
-  assert.throws(() => parseVocabulary(JSON.stringify({ model: { type: 'BPE', vocab: { a: 0 } } })), /不匹配/)
-  assert.throws(() => parseVocabulary(JSON.stringify({ model: { type: 'BPE', vocab: { ...vocab, bad: 99999 } } })), /编号无效/)
+  assert.throws(() => decodeTokens([FORMULA_TOKENS.vocabSize + 1], words), /out-of-vocabulary/)
+  assert.throws(() => parseVocabulary(JSON.stringify({ model: { type: 'WordPiece', vocab } })), /vocabulary format/)
+  assert.throws(() => parseVocabulary(JSON.stringify({ model: { type: 'BPE', vocab: { a: 0 } } })), /does not match/)
+  assert.throws(() => parseVocabulary(JSON.stringify({ model: { type: 'BPE', vocab: { ...vocab, bad: 99999 } } })), /token ID/)
 })
 
 test('保真：向量、粗体数字、算子上下限、文本空格、分组与注释只去掉首尾空白', () => {
@@ -274,7 +274,7 @@ test('公式识别子进程：返回 LaTeX 与分数（分数限制在 0–1）�
     const pending = engine.recognize(image)
     await tick()
     workers[0]!.reply({ id: workers[0]!.requests.at(-1)!.id, ...bad })
-    await assert.rejects(pending, /公式识别进程返回了无效结果/)
+    await assert.rejects(pending, /Formula OCR worker returned an invalid result/)
   }
   const failed = engine.recognize(image)
   await tick()
@@ -405,7 +405,7 @@ test('模型下载：一个地址失败（HTTP 错误、校验值不一致、大
     await store.settled()
     const status = await store.status()
     assert.equal(status.state, 'failed')
-    assert.match((status as { error: string }).error, /下载 w\.onnx 失败（cdn\.example：HTTP 503；mirror\.example：文件大小与清单不一致）/)
+    assert.match((status as { error: string }).error, /Failed to download w\.onnx \(cdn\.example: HTTP 503; mirror\.example: File size does not match manifest\)/)
     assert.deepEqual(fs.readdirSync(dir), [], '失败不留下临时文件或标记')
   })
 
@@ -520,17 +520,17 @@ test('宿主：公式模式识别图片、剪贴板与框选，模型没下载�
       regionSelector: { selectScreenRegion: async () => { selections++; return undefined }, stop: async () => undefined }
     })
     assert.deepEqual(await viaPlatform(() => missing.handleOcr('captureRegionAndRecognize', { mode: 'formula' })),
-      { ok: false, success: false, modelMissing: true, error: '公式识别模型还没有下载' })
+      { ok: false, success: false, modelMissing: true, errorCode: 'MODEL_MISSING', error: '公式识别模型还没有下载' })
     assert.equal(selections, 1, '模型没下载时不让用户先框选')
 
     const unsure = new MediaOcrHostPluginHandler(ctx, { formulaOcr: fakeFormula({ recognizeImage: async () => ({ latex: 'y', score: 0.5 }) }) })
     assert.equal((await unsure.handleOcr('recognizeImage', { path: image, mode: 'formula' }) as { lowConfidence: boolean }).lowConfidence, true)
     const blank = new MediaOcrHostPluginHandler(ctx, { formulaOcr: fakeFormula({ recognizeImage: async () => ({ latex: '', score: 0 }) }) })
-    assert.deepEqual(await blank.handleOcr('recognizeImage', { path: image, mode: 'formula' }), { ok: false, success: false, empty: true, error: '没有识别到公式' })
+    assert.deepEqual(await blank.handleOcr('recognizeImage', { path: image, mode: 'formula' }), { ok: false, success: false, empty: true, errorCode: 'FORMULA_NO_RESULT', error: '没有识别到公式' })
     const crash = new MediaOcrHostPluginHandler(ctx, { formulaOcr: fakeFormula({ recognizeImage: async () => { throw new Error('公式识别进程意外退出（退出码 9）') } }) })
     assert.match((await crash.handleOcr('recognizeImage', { path: image, mode: 'formula' }) as { error: string }).error, /意外退出/)
     const unsupported = new MediaOcrHostPluginHandler(ctx, {})
-    assert.deepEqual(await unsupported.handleOcr('recognizeImage', { path: image, mode: 'formula' }), { ok: false, success: false, error: '当前客户端不支持公式识别' })
+    assert.deepEqual(await unsupported.handleOcr('recognizeImage', { path: image, mode: 'formula' }), { ok: false, success: false, errorCode: 'NOT_SUPPORTED', error: '当前客户端不支持公式识别' })
   } finally {
     await fsp.rm(dir, { recursive: true, force: true })
   }
@@ -611,7 +611,7 @@ test('识别入口：模型文件在使用中被删除，提示重新下载并�
     })
     assert.equal((await store.status()).state, 'ready')
     fs.rmSync(path.join(dir, 'encoder_model.onnx'))
-    await assert.rejects(ocr.recognizeImage('/tmp/a.png'), /模型文件缺失，请重新下载模型/)
+    await assert.rejects(ocr.recognizeImage('/tmp/a.png'), /model files are missing/)
     assert.equal((await store.status()).state, 'missing')
     ocr.stop()
   })

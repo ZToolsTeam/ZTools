@@ -106,7 +106,7 @@ test('Node modules and dynamic module loading are rejected before application ou
   }
 })
 
-function runPromptPreload(code, { isMainFrame = true, href = RUNTIME_CAPABILITY_PROMPT_URL } = {}) {
+function runPromptPreload(code, { isMainFrame = true, href = RUNTIME_CAPABILITY_PROMPT_URL, argv } = {}) {
   const exposed = new Map(), listeners = new Map(), calls = []
   const electron = {
     contextBridge: { exposeInMainWorld: (name, value) => exposed.set(name, value) }
@@ -118,12 +118,13 @@ function runPromptPreload(code, { isMainFrame = true, href = RUNTIME_CAPABILITY_
     },
     invoke(channel, value) { calls.push({ channel, value }); return Promise.resolve({ success: true }) }
   }
+  const proc = argv === undefined ? { isMainFrame } : { isMainFrame, argv }
   vm.runInNewContext(code, {
     require: name => {
       if (name !== 'electron') throw new Error('SANDBOX_MODULE_UNAVAILABLE:' + name)
       return electron
     },
-    exports: {}, module: { exports: {} }, process: { isMainFrame }, location: { href }
+    exports: {}, module: { exports: {} }, process: proc, location: { href }
   }, { timeout: 1000 })
   return { exposed, listeners, calls }
 }
@@ -135,9 +136,16 @@ test('runtime permission prompt preload exposes only fixed one-shot methods to i
   const main = runPromptPreload(code)
   const api = main.exposed.get('ztoolsRuntimeCapabilityPrompt')
   assert.ok(api)
-  assert.deepEqual(Object.keys(api).sort(), ['answer', 'onRequest'])
+  assert.deepEqual(Object.keys(api).sort(), ['answer', 'locale', 'onRequest'])
+  assert.equal(api.locale, 'en-US')
+  assert.equal(Object.isFrozen(api), true)
   assert.equal([...main.exposed.keys()].length, 1)
   assert.equal(main.listeners.size, 0)
+
+  const zhMain = runPromptPreload(code, { argv: ['electron', '--ztools-locale=zh-CN'] })
+  assert.equal(zhMain.exposed.get('ztoolsRuntimeCapabilityPrompt')?.locale, 'zh-CN')
+  const invalidLocaleMain = runPromptPreload(code, { argv: ['electron', '--ztools-locale=ja-JP'] })
+  assert.equal(invalidLocaleMain.exposed.get('ztoolsRuntimeCapabilityPrompt')?.locale, 'en-US')
 
   const received = []
   const unsubscribe = api.onRequest(value => received.push(value))

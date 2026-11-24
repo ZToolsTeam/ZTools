@@ -15,6 +15,6 @@ test('Homebrew JSON 同时保留 formula/cask、安装版本和可升级状态',
 test('Homebrew 空安装保持空；畸形或截断 JSON 明确失败', () => {
   assert.deepEqual(parseInstalledBrewPackages('{"formulae":[],"casks":[]}'), [])
   assert.throws(() => parseInstalledBrewPackages('{'))
-  assert.throws(() => parseInstalledBrewPackages('{}'), /缺少/)
-  assert.throws(() => parseInstalledBrewPackages('{"formulae":[null],"casks":[]}'), /条目格式无效/)
+  assert.throws(() => parseInstalledBrewPackages('{}'), /missing formulae\/casks/)
+  assert.throws(() => parseInstalledBrewPackages('{"formulae":[null],"casks":[]}'), /Invalid Homebrew package entry format/)
 })

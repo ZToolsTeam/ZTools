@@ -21,10 +21,10 @@ export function parseMacNetworkServices(output: string): { name: string; device:
   for (const line of output.split(/\r?\n/)) {
     const service = /^\((\d+|\*)\)\s+(.+)$/.exec(line)
     if (service) {
-      if (pending) throw new Error('网络服务缺少设备映射，已停止读取')
+      if (pending) throw new Error('Network service is missing a device mapping; reading stopped')
       const name = service[2] ?? ''
       pending = service[1] === '*' || name.startsWith('*') ? null : name
-      if (pending && !validNetworkService(pending)) throw new Error('网络服务名称无法安全识别')
+      if (pending && !validNetworkService(pending)) throw new Error('Network service name cannot be safely recognized')
       continue
     }
     if (!pending) continue
@@ -32,20 +32,20 @@ export function parseMacNetworkServices(output: string): { name: string; device:
     if (!hardware) continue
     const device = (hardware[1] ?? '').trim()
     if (device) {
-      if (!/^[a-zA-Z0-9_.:-]{1,64}$/.test(device) || names.has(pending)) throw new Error('网络服务映射重复或无效')
+      if (!/^[a-zA-Z0-9_.:-]{1,64}$/.test(device) || names.has(pending)) throw new Error('Duplicate or invalid network service mapping')
       result.push({ name: pending, device }); names.add(pending)
     }
     pending = null
   }
-  if (pending || result.length > 128) throw new Error('网络服务列表不完整或过大')
-  if (!result.length && !output.includes('An asterisk (*) denotes')) throw new Error('无法识别系统网络服务列表')
+  if (pending || result.length > 128) throw new Error('Network service list is incomplete or too large')
+  if (!result.length && !output.includes('An asterisk (*) denotes')) throw new Error('Unable to parse system network service list')
   return result
 }
 export function parseMacDnsServers(output: string, service: string): string[] {
   const text = output.trim()
   if (text === `There aren't any DNS Servers set on ${service}.`) return []
   const servers = text.split(/\r?\n/).map(v => v.trim())
-  if (!validDnsServers(servers) || !servers.length) throw new Error('无法确认原 DNS 配置，已停止操作')
+  if (!validDnsServers(servers) || !servers.length) throw new Error('Unable to verify existing DNS configuration; operation stopped')
   return servers
 }
 export interface DnsNetworkProvider {
@@ -70,13 +70,13 @@ export class MacDnsNetworkProvider implements DnsNetworkProvider {
     return result
   }
   async read(service: string, signal: AbortSignal) {
-    if (!validNetworkService(service)) throw new Error('网络服务名称无效')
+    if (!validNetworkService(service)) throw new Error('Invalid network service name')
     return parseMacDnsServers(await this.run('/usr/sbin/networksetup', ['-getdnsservers', service], signal), service)
   }
   async write(service: string, device: string, expected: string[], servers: string[], signal: AbortSignal) {
-    if (!validNetworkService(service) || !/^[a-zA-Z0-9_.:-]{1,64}$/.test(device) || !validDnsServers(expected) || !validDnsServers(servers)) throw new Error('DNS 配置无效')
+    if (!validNetworkService(service) || !/^[a-zA-Z0-9_.:-]{1,64}$/.test(device) || !validDnsServers(expected) || !validDnsServers(servers)) throw new Error('Invalid DNS configuration')
     const stat = this.helperPath && fs.lstatSync(this.helperPath, { throwIfNoEntry: false })
-    if (!this.helperPath || !path.isAbsolute(this.helperPath) || !stat || !stat.isFile() || stat.isSymbolicLink()) throw new Error('DNS 安全配置组件未构建，请更新客户端')
+    if (!this.helperPath || !path.isAbsolute(this.helperPath) || !stat || !stat.isFile() || stat.isSymbolicLink()) throw new Error('Secure DNS helper component is not built; please update the client')
     const output = await this.writeCommand(this.helperPath, ['--apply', service, device, JSON.stringify(expected), JSON.stringify(servers), '--authorize'], signal, 90000)
     let result: Record<string, unknown> | null
     try { result = JSON.parse(output) as Record<string, unknown> | null } catch { throw new DnsWriteOutcomeUnknownError() }
@@ -87,8 +87,8 @@ export class MacDnsNetworkProvider implements DnsNetworkProvider {
     if (!result || result.version !== 1 || typeof result.success !== 'boolean' || typeof result.code !== 'string' ||
       !(result.success ? ['UNCHANGED', 'APPLIED'] : failures).includes(result.code)) throw new DnsWriteOutcomeUnknownError()
     if (!result.success) {
-      const code = result.code === 'ADMIN_PERMISSION_REQUIRED' ? '未获得系统授权，DNS 没有写入' : result.code
-      throw new Error(`系统 DNS 写入未成功：${code}`)
+      const code = result.code === 'ADMIN_PERMISSION_REQUIRED' ? 'system authorization was not granted; DNS was not written' : result.code
+      throw new Error(`System DNS write failed: ${code}`)
     }
   }
   async flush(signal: AbortSignal) {

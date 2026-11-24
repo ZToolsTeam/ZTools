@@ -13,20 +13,20 @@ const displayMetadata = (tags: MediaTags) => Object.fromEntries(Object.entries(t
 
 /** 只启动随应用分发的 ExifTool；关闭用户配置加载，不执行 shell 或插件传来的命令。 */
 export function exifToolCommand(platform = process.platform): { file: string; prefix: string[] } {
-  if (platform !== 'darwin' && platform !== 'win32') throw new Error('当前系统不支持媒体元数据处理')
+  if (platform !== 'darwin' && platform !== 'win32') throw new Error('Media metadata processing is not supported on this platform')
   let vendor: unknown
   try { vendor = platform === 'win32' ? require('exiftool-vendored.exe') : require('exiftool-vendored.pl') }
-  catch { throw new Error('媒体处理组件缺失，请重新安装客户端') }
-  if (typeof vendor !== 'string') throw new Error('媒体处理组件缺失，请重新安装客户端')
+  catch { throw new Error('Media processing component is missing; reinstall the client') }
+  if (typeof vendor !== 'string') throw new Error('Media processing component is missing; reinstall the client')
   const executable = vendor.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1')
   return platform === 'win32' ? { file: executable, prefix: [] } : { file: '/usr/bin/perl', prefix: [executable] }
 }
 
 export async function runExifTool(args: string[], signal: AbortSignal): Promise<string> {
   signal.throwIfAborted()
-  if (args.some(arg => arg.includes('\0'))) throw new Error('媒体处理参数含空字符')
+  if (args.some(arg => arg.includes('\0'))) throw new Error('Media processing arguments contain null bytes')
   const useArgumentStream = process.platform === 'win32'
-  if (useArgumentStream && args.some(arg => !arg || /^[#\s]|[\r\n]/.test(arg))) throw new Error('媒体处理参数不符合逐行参数格式')
+  if (useArgumentStream && args.some(arg => !arg || /^[#\s]|[\r\n]/.test(arg))) throw new Error('Media processing arguments do not match line-delimited argument format')
   // ExifTool 的 JSON 不依赖系统语言；固定为所有平台支持的 C locale，避免 Perl 继承无效 locale 后报错。
   const command = exifToolCommand(), env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: 'C', LC_CTYPE: 'C', LANG: 'C' }
   for (const key of Object.keys(env)) if (/^(?:PERL|EXIFTOOL)/i.test(key)) delete env[key]
@@ -41,7 +41,7 @@ export async function runExifTool(args: string[], signal: AbortSignal): Promise<
     child.stdin?.on('error', error => { failure ??= error })
     child.stdin?.end(useArgumentStream ? args.join('\n') + '\n' : undefined, 'utf8')
     child.once('close', () => {
-      if (signal.aborted) reject(signal.reason ?? new Error('媒体处理已取消'))
+      if (signal.aborted) reject(signal.reason ?? new Error('Media processing cancelled'))
       else if (failure) reject(failure)
       else resolve(output)
     })
@@ -51,11 +51,11 @@ export async function runExifTool(args: string[], signal: AbortSignal): Promise<
 export async function readMediaTags(file: string, signal: AbortSignal): Promise<MediaTags> {
   const text = await runExifTool(['-j', '-G1:4', '-s', '-n', '-a', '-struct', '-all', '-ImageDataHash', '-api', 'ImageHashType=SHA256', file], signal)
   const parsed: unknown = JSON.parse(text)
-  if (!Array.isArray(parsed) || parsed.length !== 1 || !parsed[0] || typeof parsed[0] !== 'object') throw new Error('无法解析媒体元数据')
+  if (!Array.isArray(parsed) || parsed.length !== 1 || !parsed[0] || typeof parsed[0] !== 'object') throw new Error('Failed to parse media metadata')
   const tags = parsed[0] as MediaTags
   const errors = Object.entries(tags).filter(([key]) => /:(?:Warning|Error)$/.test(key))
-  if (errors.length) throw new Error('媒体解析未通过：' + errors.map(([, value]) => String(value)).join('；'))
-  if (typeof tagValue(tags, 'FileType') !== 'string') throw new Error('无法识别文件格式')
+  if (errors.length) throw new Error('Media metadata parsing failed: ' + errors.map(([, value]) => String(value)).join('; '))
+  if (typeof tagValue(tags, 'FileType') !== 'string') throw new Error('Unrecognized file format')
   return tags
 }
 
@@ -71,9 +71,9 @@ export function summarizeMedia(tags: MediaTags) {
 /** 定位模式同时丢弃可包含位置副本的 XMP/IPTC/厂商注记，保留标准 EXIF 拍摄参数。 */
 export async function cleanMediaCopy(file: string, mode: 'location' | 'metadata', before: MediaTags, signal: AbortSignal): Promise<Buffer> {
   const type = String(tagValue(before, 'FileType'))
-  if (!cleanableTypes.has(type)) throw new Error('目前只支持 JPEG、PNG、HEIC 照片的清理；音视频仅查看参数')
+  if (!cleanableTypes.has(type)) throw new Error('Only JPEG, PNG, and HEIC photos can be cleaned; audio and video files are inspect-only')
   const hash = tagValue(before, 'ImageDataHash')
-  if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/i.test(hash)) throw new Error('无法验证图像数据，已停止处理')
+  if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/i.test(hash)) throw new Error('Unable to verify image data hash; processing aborted')
   const copyDisplay = exifDisplayTags.map(tag => {
     const present = Object.keys(before).some(key => /^(?:IFD\d|ExifIFD|InteropIFD):/.test(key) && key.endsWith(':' + tag))
     // 新建 EXIF 目录会自动补 YCbCrPositioning 等默认值；原图没有的声明也不新增。
@@ -86,14 +86,14 @@ export async function cleanMediaCopy(file: string, mode: 'location' | 'metadata'
   await runExifTool(['-overwrite_original', ...remove, file], signal)
   const after = await readMediaTags(file, signal)
   for (const key of ['FileType', 'ImageDataHash', 'ImageWidth', 'ImageHeight', 'Orientation', 'ProfileID']) {
-    if (JSON.stringify(tagValue(before, key)) !== JSON.stringify(tagValue(after, key))) throw new Error('图像内容或显示参数发生变化，已停止保存')
+    if (JSON.stringify(tagValue(before, key)) !== JSON.stringify(tagValue(after, key))) throw new Error('Image content or display parameters changed unexpectedly; save aborted')
   }
-  if (JSON.stringify(displayMetadata(before)) !== JSON.stringify(displayMetadata(after))) throw new Error('色彩解释参数发生变化，已停止保存')
-  if (Object.keys(after).some(isLocationTag)) throw new Error('仍检测到定位标签，已停止保存')
-  if (mode === 'metadata' && Object.keys(after).some(key => /^(?:XMP|IPTC|GPS|MakerNotes|Photoshop)(?:[-:]|$)/i.test(key))) throw new Error('仍检测到待清理元数据，已停止保存')
-  if (mode === 'metadata' && Object.keys(after).some(key => !key.startsWith('System:') && /:(?:Make|Model|.*SerialNumber|OwnerName|Artist|Creator|Author|Copyright|DateTimeOriginal|CreateDate|ModifyDate|LensMake|LensModel|UserComment|Comment|Description)$/.test(key))) throw new Error('仍检测到拍摄或作者信息，已停止保存')
+  if (JSON.stringify(displayMetadata(before)) !== JSON.stringify(displayMetadata(after))) throw new Error('Color interpretation metadata changed unexpectedly; save aborted')
+  if (Object.keys(after).some(isLocationTag)) throw new Error('Location tags were still detected after cleaning; save aborted')
+  if (mode === 'metadata' && Object.keys(after).some(key => /^(?:XMP|IPTC|GPS|MakerNotes|Photoshop)(?:[-:]|$)/i.test(key))) throw new Error('Target metadata was still detected after cleaning; save aborted')
+  if (mode === 'metadata' && Object.keys(after).some(key => !key.startsWith('System:') && /:(?:Make|Model|.*SerialNumber|OwnerName|Artist|Creator|Author|Copyright|DateTimeOriginal|CreateDate|ModifyDate|LensMake|LensModel|UserComment|Comment|Description)$/.test(key))) throw new Error('Camera or author metadata was still detected after cleaning; save aborted')
   const stat = await fs.stat(file)
-  if (!stat.isFile() || stat.size < 1 || stat.size > 16 * 1024 * 1024) throw new Error('处理结果大小无效')
+  if (!stat.isFile() || stat.size < 1 || stat.size > 16 * 1024 * 1024) throw new Error('Invalid cleaned media file size')
   return fs.readFile(file)
 }
 

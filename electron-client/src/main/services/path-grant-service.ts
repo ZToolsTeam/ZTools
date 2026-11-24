@@ -34,7 +34,7 @@ export interface PathResourceLease {
   read(offset: number, length: number): Promise<Buffer>
   close(): void
 }
-const denied = () => new ZToolsError(errorCodes.permissionDenied, '文件授权无效或已撤销')
+const denied = () => new ZToolsError(errorCodes.permissionDenied, 'File grant is invalid or has been revoked')
 
 export function grantPathSegments(relativePath: string, platform: 'win32' | 'darwin' = process.platform === 'darwin' ? 'darwin' : 'win32'): string[] {
   if (typeof relativePath !== 'string' || relativePath.length > 4096 || relativePath.includes('\0') || (platform === 'win32' && relativePath.includes('\\'))) throw denied()
@@ -103,7 +103,7 @@ export class PathGrantService {
           [...this.#creating.values()].filter(item => item.owner === owner).length + (this.#artifactReservationsByOwner.get(owner) ?? 0) >= 256 || this.#creating.size >= 256) throw denied()
       if (this.#grants.size + this.#creating.size + this.#artifactReservations >= 256) throw denied()
       const adapter = 'forOwner' in this.adapter ? this.adapter.forOwner(owner) : this.adapter
-      if (kind === 'selected' && !adapter.pinSelected) throw new ZToolsError(errorCodes.nativeHostUnavailable, '原生文件选择访问能力不可用')
+      if (kind === 'selected' && !adapter.pinSelected) throw new ZToolsError(errorCodes.nativeHostUnavailable, 'Native file selection access is unavailable')
       const object = kind === 'selected' ? await adapter.pinSelected!(selectedPath, combined) : await adapter.pin(selectedPath, kind, immutableRights, combined)
       try {
         this.#assertOwner(owner)
@@ -112,7 +112,7 @@ export class PathGrantService {
         return this.#register(owner, object, selectedRights, adapter)
       } catch (error) {
         try { await this.#bounded(adapter.release(object)) }
-        catch { creation.releaseFailed = true; throw new ZToolsError(errorCodes.fileError, '文件授权释放未确认') }
+        catch { creation.releaseFailed = true; throw new ZToolsError(errorCodes.fileError, 'File grant release could not be confirmed') }
         throw error
       }
     })()
@@ -156,9 +156,9 @@ export class PathGrantService {
       if (grant.object.kind !== 'save') throw denied()
       const result = await grant.adapter.save(grant.object, snapshot, replace, combined)
       if (result.status !== 'committed' || result.bytesWritten !== snapshot.length || combined.aborted) {
-        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '保存结果未确认；不能保证输出未提交')
+        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Save outcome could not be confirmed; output may have been committed')
       }
-      if (result.cleanupIssues !== undefined) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '保存已提交，但日志清理未确认；不能重试写入')
+      if (result.cleanupIssues !== undefined) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Save committed, but journal cleanup could not be confirmed; do not retry write')
       return result
     }, true, signal).finally(() => { this.#saveCalls--; this.#saveBytes -= snapshot.length })
   }
@@ -191,7 +191,7 @@ export class PathGrantService {
       if (grant !== save || grant.object.kind !== 'save') throw denied()
       const result = await grant.adapter.save(grant.object, snapshot, replace, combined)
       if (result.status !== 'committed' || result.bytesWritten !== snapshot.length) {
-        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '保存结果未确认；不能保证输出未提交')
+        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Save outcome could not be confirmed; output may have been committed')
       }
       committed = { status: 'committed', bytesWritten: result.bytesWritten }
       if (result.cleanupIssues !== undefined) {
@@ -205,19 +205,19 @@ export class PathGrantService {
         if (combined.aborted) throw denied()
         file = await grant.adapter.pinCommittedSave(grant.object, combined)
         this.#assertOwner(owner)
-        if (combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '保存结果未确认；不能保证输出未提交')
+        if (combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Save outcome could not be confirmed; output may have been committed')
         if (grant.state !== 'active' || file.kind !== 'file' || file.displayName !== grant.object.displayName)
-          throw new ZToolsError(errorCodes.fileError, '文件保存已确认，但只读产物引用不可用')
+          throw new ZToolsError(errorCodes.fileError, 'File save committed, but read-only artifact reference is unavailable')
         const metadata = await grant.adapter.describe(file, combined)
-        if (combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '保存结果未确认；不能保证输出未提交')
+        if (combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Save outcome could not be confirmed; output may have been committed')
         if (metadata.isDirectory || metadata.size !== result.bytesWritten)
-          throw new ZToolsError(errorCodes.fileError, '文件保存已确认，但产物大小与写入回执不匹配')
+          throw new ZToolsError(errorCodes.fileError, 'File save committed, but artifact size does not match write receipt')
         const observed = await grant.adapter.read(file, [], snapshot.length, combined)
-        if (combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '保存结果未确认；不能保证输出未提交')
+        if (combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Save outcome could not be confirmed; output may have been committed')
         if (!Buffer.isBuffer(observed) || !observed.equals(snapshot))
-          throw new ZToolsError(errorCodes.fileError, '文件保存已确认，但产物内容与写入回执不匹配')
+          throw new ZToolsError(errorCodes.fileError, 'File save committed, but artifact contents do not match write receipt')
         if (grant.expiresAt <= this.now())
-          throw new ZToolsError(errorCodes.fileError, '文件保存已确认，但保存授权在产物引用生成前过期')
+          throw new ZToolsError(errorCodes.fileError, 'File save committed, but save grant expired before artifact reference creation')
         created = this.#register(owner, file, Object.freeze(['read']), grant.adapter, undefined, grant.expiresAt) as ArtifactReference
         this.#releaseArtifact(owner); reservationConsumed = true
         file = undefined
@@ -261,7 +261,7 @@ export class PathGrantService {
       const result = await grant.adapter.streamSave(grant.object, expectedBytes, chunks, replace, combined)
       if (result.status !== 'committed' || !Number.isSafeInteger(result.bytesWritten) || result.bytesWritten < 0 || result.bytesWritten > 2 * 1024 * 1024 * 1024 ||
           (expectedBytes !== undefined && result.bytesWritten !== expectedBytes) || combined.aborted || result.cleanupIssues !== undefined) {
-        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '流式保存提交结果未确认；不能保证目标未改变')
+        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Stream save commit outcome could not be confirmed; target may have changed')
       }
       return result
     }, true, signal).finally(() => { this.#streamCalls-- })
@@ -274,7 +274,7 @@ export class PathGrantService {
       const combined = AbortSignal.any([sourceSignal, destinationSignal])
       const result = await source.adapter.copy(source.object, destination.object, replace, combined)
       if (result.status !== 'committed' || !Number.isSafeInteger(result.bytesWritten) || result.bytesWritten < 0 || result.bytesWritten > 2 * 1024 * 1024 * 1024 || combined.aborted || result.cleanupIssues !== undefined) {
-        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '复制结果未确认；不能保证输出未提交，源文件未删除')
+        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Copy outcome could not be confirmed; output may have been committed and source was not deleted')
       }
       return result
     }, true, signal), true, signal)
@@ -285,7 +285,7 @@ export class PathGrantService {
     return this.#operation(owner, directoryGrantId, relativePath, 'write', async (grant, segments, combined) => {
       if (grant.object.kind !== 'directory' || !segments.length) throw denied()
       const result = await grant.adapter.remove(grant.object, segments, isDirectory, combined)
-      if (result.status !== 'committed' || combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '删除结果未确认；不能保证目标未删除')
+      if (result.status !== 'committed' || combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Remove outcome could not be confirmed; target may have been deleted')
       return result
     }, true, signal)
   }
@@ -296,7 +296,7 @@ export class PathGrantService {
       if (source.object.kind !== 'directory' || !segments.length || destination.object.kind !== 'save') throw denied()
       const combined = AbortSignal.any([sourceSignal, destinationSignal])
       const result = await source.adapter.move(source.object, segments, destination.object, replace, combined)
-      if (result.status !== 'committed' || combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '移动结果未确认；不能保证源或目标未改变')
+      if (result.status !== 'committed' || combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Move outcome could not be confirmed; source or target may have changed')
       return result
     }, true, signal), true, signal)
   }
@@ -305,7 +305,7 @@ export class PathGrantService {
     return this.#operation(owner, directoryGrantId, relativePath, 'write', async (grant, segments, combined) => {
       if (grant.object.kind !== 'directory' || !segments.length) throw denied()
       const result = await grant.adapter.createDirectory(grant.object, segments, combined)
-      if (!['created', 'existing'].includes(result.status) || combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '创建目录结果未确认；不能保证目录未创建')
+      if (!['created', 'existing'].includes(result.status) || combined.aborted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Directory creation outcome could not be confirmed; directory may have been created')
       return result
     }, true, signal)
   }
@@ -347,7 +347,7 @@ export class PathGrantService {
         return registered
       } catch (error) {
         try { await this.#bounded(parent.adapter.release(object)) }
-        catch { parent.cleanupFailed = true; throw new ZToolsError(errorCodes.fileError, '派生文件授权释放未确认') }
+        catch { parent.cleanupFailed = true; throw new ZToolsError(errorCodes.fileError, 'Derived file grant release could not be confirmed') }
         throw error
       }
     }, false, signal) } catch (error) {
@@ -355,7 +355,7 @@ export class PathGrantService {
       const child = registered && this.#grants.get(registered.grantId)
       if (child) {
         try { await this.#close(child) }
-        catch { if (parentForCleanup) parentForCleanup.cleanupFailed = true; throw new ZToolsError(errorCodes.fileError, '派生文件授权释放未确认') }
+        catch { if (parentForCleanup) parentForCleanup.cleanupFailed = true; throw new ZToolsError(errorCodes.fileError, 'Derived file grant release could not be confirmed') }
       }
       throw error
     }
@@ -391,7 +391,7 @@ export class PathGrantService {
       const actionResult = serializeWrite ? this.#serializeWrite(grant, execute) : Promise.resolve().then(execute)
       const pending = actionResult.then(data => {
         if (combined.aborted) {
-          if (writeCommit) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '保存结果未确认；不能保证输出未提交')
+          if (writeCommit) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Save outcome could not be confirmed; output may have been committed')
           throw denied()
         }
         return data
@@ -542,7 +542,7 @@ export class PathGrantService {
         incomplete = creating.some(([, item]) => item.releaseFailed) || results.slice(creating.length).some(result => result.status === 'rejected')
       } catch { incomplete = true }
       try { await this.#bounded(this.adapter.stop()) } catch { incomplete = true }
-      if (incomplete || this.#ownerCleanupFailed) throw new ZToolsError(errorCodes.fileError, '文件授权释放未确认')
+      if (incomplete || this.#ownerCleanupFailed) throw new ZToolsError(errorCodes.fileError, 'File grant release could not be confirmed')
     })()
     return this.#stopping
   }
@@ -561,7 +561,7 @@ export class PathGrantService {
       const pending = [...grant.pending]
       const results = await this.#bounded(Promise.allSettled([...pending, ...children]))
       await this.#bounded(grant.adapter.release(grant.object))
-      if (grant.cleanupFailed || results.slice(pending.length).some(result => result.status === 'rejected')) throw new ZToolsError(errorCodes.fileError, '派生保存授权释放未确认')
+      if (grant.cleanupFailed || results.slice(pending.length).some(result => result.status === 'rejected')) throw new ZToolsError(errorCodes.fileError, 'Derived save grant release could not be confirmed')
       grant.state = 'closed'
       grant.parent?.children.delete(grant)
       for (const [id, candidate] of this.#grants) if (candidate === grant) this.#grants.delete(id)
@@ -573,7 +573,7 @@ export class PathGrantService {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([operation, new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new ZToolsError(errorCodes.fileError, '原生授权操作停止未确认')), this.closeTimeoutMs)
+        timer = setTimeout(() => reject(new ZToolsError(errorCodes.fileError, 'Native grant operation shutdown could not be confirmed')), this.closeTimeoutMs)
       })])
     } finally { if (timer) clearTimeout(timer) }
   }

@@ -5,6 +5,9 @@ import type { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import yauzl from 'yauzl'
 import yazl from 'yazl'
+import { errorCodes } from '../../../contracts/errors.js'
+import { t } from '../../i18n/index.js'
+import { hostPluginError } from './shared-utils.js'
 
 export interface SnapshotSourceFailure {
   path: string
@@ -22,12 +25,20 @@ export const SNAPSHOT_MANIFEST_NAME = 'ztools-snapshot-manifest.json'
 /** 先完成整个来源的可读性检查，避免目录扫描到一半失败却把它计为完整备份。 */
 async function collectSource(sourcePath: string, archivePath: string): Promise<SnapshotEntry[]> {
   const stat = await fs.lstat(sourcePath)
-  if (stat.isSymbolicLink()) throw new Error('符号链接不在快照范围内')
+  if (stat.isSymbolicLink()) {
+    throw hostPluginError(errorCodes.permissionDenied, 'hostPlugin.snapshot.symlinkNotAllowed', {
+      hostCode: 'SNAPSHOT_SYMLINK_NOT_ALLOWED'
+    })
+  }
   if (stat.isFile()) {
     await fs.access(sourcePath, fs.constants.R_OK)
     return [{ sourcePath, archivePath, directory: false }]
   }
-  if (!stat.isDirectory()) throw new Error('仅支持普通文件或目录')
+  if (!stat.isDirectory()) {
+    throw hostPluginError(errorCodes.fileError, 'hostPlugin.snapshot.regularFileOrDirOnly', {
+      hostCode: 'SNAPSHOT_REGULAR_ONLY'
+    })
+  }
   const entries: SnapshotEntry[] = [{ sourcePath, archivePath, directory: true }]
   for (const item of await fs.readdir(sourcePath)) {
     entries.push(...await collectSource(path.join(sourcePath, item), `${archivePath}/${item}`))
@@ -59,9 +70,10 @@ export async function createSnapshotArchive(options: {
     }
   }
   if (sources.length === 0) {
+    const firstErr = failedSources[0]?.error
     return {
       ok: false, success: false, backedUpCount: 0, fileCount: 0, failedSources,
-      error: failedSources[0]?.error || '未找到任何有效的待备份源文件或目录'
+      error: firstErr ? firstErr : t('hostPlugin.snapshot.noValidSources')
     }
   }
 
@@ -113,7 +125,9 @@ export async function extractSnapshotArchive(archivePath: string, outputParent: 
     await new Promise<void>((resolve, reject) => {
       yauzl.open(archivePath, { lazyEntries: true }, (openError, zip) => {
         if (openError || !zip) {
-          reject(openError ?? new Error('无法打开 ZIP 快照'))
+          reject(openError ?? hostPluginError(errorCodes.fileError, 'hostPlugin.snapshot.openZipFailed', {
+            hostCode: 'SNAPSHOT_OPEN_ZIP_FAILED'
+          }))
           return
         }
         const fail = (error: unknown) => {
@@ -125,15 +139,22 @@ export async function extractSnapshotArchive(archivePath: string, outputParent: 
         zip.on('entry', (entry: yauzl.Entry) => {
           void (async () => {
             const entryPath = path.resolve(targetDir, entry.fileName)
-            if (!entryPath.startsWith(targetDir + path.sep)) throw new Error('归档包含越界路径')
+            if (!entryPath.startsWith(targetDir + path.sep)) {
+              throw hostPluginError(errorCodes.permissionDenied, 'hostPlugin.snapshot.pathTraversal', {
+                hostCode: 'SNAPSHOT_PATH_TRAVERSAL'
+              })
+            }
             if (entry.fileName.endsWith('/')) {
               await fs.mkdir(entryPath, { recursive: true, mode: 0o700 })
             } else {
               await fs.mkdir(path.dirname(entryPath), { recursive: true, mode: 0o700 })
               const input = await new Promise<Readable>((resolveStream, rejectStream) => {
                 zip.openReadStream(entry, (error, stream) => {
-                  if (error || !stream) rejectStream(error ?? new Error('读取归档条目失败'))
-                  else resolveStream(stream)
+                  if (error || !stream) {
+                    rejectStream(error ?? hostPluginError(errorCodes.fileError, 'hostPlugin.snapshot.readEntryFailed', {
+                      hostCode: 'SNAPSHOT_READ_ENTRY_FAILED'
+                    }))
+                  } else resolveStream(stream)
                 })
               })
               let file: Awaited<ReturnType<typeof fs.open>>
@@ -156,7 +177,10 @@ export async function extractSnapshotArchive(archivePath: string, outputParent: 
   } catch (error) {
     return {
       ok: false, success: false, targetDir, extractedCount: extractedFiles.length,
-      error: `解压失败，已输出内容保留在 ${targetDir}：${error instanceof Error ? error.message : String(error)}`
+      error: t('hostPlugin.snapshot.extractFailed', {
+        targetDir,
+        detail: error instanceof Error ? error.message : String(error)
+      })
     }
   }
 }

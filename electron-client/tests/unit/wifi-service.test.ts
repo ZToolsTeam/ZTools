@@ -173,10 +173,10 @@ test('Windows 列表：当前连接读取失败或无法解析时保持未知；
     assert.deepEqual(await readWifiProfiles('win32', undefined, f.deps), [{ ssid: 'a', profileName: 'a', security: 'WPA2-Personal' }])
   }
   const failures: Array<[Exported, RegExp]> = [
-    [{ exitCode: 1, stdout: 'The Wireless AutoConfig Service (wlansvc) is not running.' }, /退出码 1.*wlansvc/],
-    [{ exitCode: 124 }, /超时/], [{ exitCode: 130 }, /已取消/],
-    [{ files: { 'WLAN-bad.xml': '<WLANProfile>broken' } }, /格式无法识别/],
-    [{ files: { 'WLAN-big.xml': Buffer.alloc(300 * 1024, 0x20) } }, /过大/]
+    [{ exitCode: 1, stdout: 'The Wireless AutoConfig Service (wlansvc) is not running.' }, /exit code 1.*wlansvc/],
+    [{ exitCode: 124 }, /timed out/], [{ exitCode: 130 }, /cancelled/],
+    [{ files: { 'WLAN-bad.xml': '<WLANProfile>broken' } }, /Unrecognized exported WLAN profile XML format/],
+    [{ files: { 'WLAN-big.xml': Buffer.alloc(300 * 1024, 0x20) } }, /exceeds size limit/]
   ]
   for (const [result, pattern] of failures) {
     const f = await windowsFixture(t, () => result)
@@ -235,13 +235,13 @@ test('Windows 密码：仅按名称单独导出并读取 keyMaterial，保留空
 
 test('Windows 密码：配置不存在、密钥受保护、开放/企业网络、导出不符或畸形均明确失败，错误不含密钥', async t => {
   const cases: Array<[Exported, RegExp]> = [
-    [{ exitCode: 1, stdout: 'Profile "net" is not found on the system.' }, /退出码 1/],
-    [{ files: { 'a.xml': profileXml('net', { key: '01000000D08C9DDF', protectedKey: true }) } }, /管理员/],
-    [{ files: { 'a.xml': profileXml('net', { auth: 'open', encryption: 'none' }) } }, /没有预共享密码/],
-    [{ files: { 'a.xml': profileXml('net', { auth: 'WPA2', oneX: true }) } }, /没有预共享密码/],
-    [{ files: { 'a.xml': profileXml('other', { key: 'secret-other' }) } }, /没有导出所选网络/],
-    [{ files: { 'a.xml': '<WLANProfile><name>net</name>' } }, /格式无法识别/],
-    [{ exitCode: 124 }, /超时/]
+    [{ exitCode: 1, stdout: 'Profile "net" is not found on the system.' }, /exit code 1/],
+    [{ files: { 'a.xml': profileXml('net', { key: '01000000D08C9DDF', protectedKey: true }) } }, /administrator privileges/],
+    [{ files: { 'a.xml': profileXml('net', { auth: 'open', encryption: 'none' }) } }, /No shareable pre-shared password/],
+    [{ files: { 'a.xml': profileXml('net', { auth: 'WPA2', oneX: true }) } }, /No shareable pre-shared password/],
+    [{ files: { 'a.xml': profileXml('other', { key: 'secret-other' }) } }, /was not exported/],
+    [{ files: { 'a.xml': '<WLANProfile><name>net</name>' } }, /Unrecognized exported WLAN profile XML format/],
+    [{ exitCode: 124 }, /timed out/]
   ]
   for (const [result, pattern] of cases) {
     const f = await windowsFixture(t, () => result)
@@ -249,7 +249,7 @@ test('Windows 密码：配置不存在、密钥受保护、开放/企业网络�
     assert.deepEqual(await f.leftovers(), [])
   }
   const f = await windowsFixture(t, () => ({}))
-  await assert.rejects(readWifiPassword('', 'win32', undefined, f.deps), /SSID 无效/)
+  await assert.rejects(readWifiPassword('', 'win32', undefined, f.deps), /Invalid Wi-Fi SSID/)
   assert.equal(f.calls.length, 0)
 })
 
@@ -257,6 +257,6 @@ test('Windows 密码：配置不存在、密钥受保护、开放/企业网络�
 test('Windows 配置缺少真实 SSID 时明确失败，不用配置名伪造网络名', async t => {
   const xml = profileXml('Display Profile').replace(/<SSIDConfig>[\s\S]*?<\/SSIDConfig>/, '')
   const f = await windowsFixture(t, () => ({ files: { 'profile.xml': xml } }))
-  await assert.rejects(readWifiProfiles('win32', undefined, f.deps), /缺少可识别的 SSID/)
+  await assert.rejects(readWifiProfiles('win32', undefined, f.deps), /missing a recognizable SSID/)
   assert.deepEqual(await f.leftovers(), [])
 })

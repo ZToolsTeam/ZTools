@@ -100,10 +100,6 @@ function syncRuntimeLocale(resolved) {
 const initialLocale = detectInitialLocale()
 syncRuntimeLocale(initialLocale)
 
-if (typeof document !== 'undefined' && document.documentElement) {
-  document.documentElement.lang = initialLocale
-}
-
 export const i18n = createI18n({
   legacy: false,
   locale: initialLocale,
@@ -111,25 +107,38 @@ export const i18n = createI18n({
   messages
 })
 
+function syncDocumentMeta(resolved) {
+  if (typeof document === 'undefined') return
+  if (document.documentElement) {
+    document.documentElement.lang = resolved
+  }
+  document.title = i18n.global.t('app.windowTitle')
+}
+
+syncDocumentMeta(initialLocale)
+
 /** 获取当前生效的规范 Locale（响应式读取） */
 export function getCurrentLocale() {
   return resolveLocale(i18n.global.locale.value)
 }
 
-/** 同步切换全局 i18n 语言、更新 <html lang> 并同步声明式插件运行时语言 */
+/** 同步切换全局 i18n 语言、更新 <html lang>、页面标题并同步声明式插件运行时语言 */
 export function setI18nLocale(nextLocale) {
   const resolved = resolveLocale(nextLocale)
   i18n.global.locale.value = resolved
   syncRuntimeLocale(resolved)
-  if (typeof document !== 'undefined' && document.documentElement) {
-    document.documentElement.lang = resolved
-  }
+  syncDocumentMeta(resolved)
   return resolved
 }
 
-/** 非组件或通用翻译函数（响应式绑定到 i18n.global） */
-export function t(key, params) {
-  return params !== undefined ? i18n.global.t(key, params) : i18n.global.t(key)
+/** 非组件或通用翻译函数（响应式绑定到 i18n.global，完整透传插值与复数计数参数） */
+export function t(key, ...args) {
+  return i18n.global.t(key, ...args)
+}
+
+// 供需兼容纯 Node ESM 环境（无 Vite 别名解析）的声明式底座模块按需复用
+if (typeof globalThis !== 'undefined') {
+  globalThis.__ztoolsTranslate = t
 }
 
 /**

@@ -5,6 +5,7 @@ import { useToast } from '@/composables/useToast'
 import { useThemeStore } from '@/stores/theme'
 import { ACCENT_OPTIONS, THEME_MODES } from '@/constants/themes'
 import { useAppI18n } from '@/i18n'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 
 /** 设置页「外观」卡片：跟随系统 / 浅色 / 深色 + 6 款固定主题色（无自定义取色器） */
 const { t } = useAppI18n()
@@ -54,7 +55,7 @@ const pickTheme = async (value) => {
   try {
     await themeStore.setTheme(value)
   } catch (err) {
-    error(t('settings.appearance.themeSaveFailed', { reason: err?.message || t('common.unknownError') }))
+    error(t('settings.appearance.themeSaveFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }))
   } finally {
     themeSaving.value = false
   }
@@ -66,7 +67,7 @@ const pickAccent = async (value) => {
   try {
     await themeStore.setAccent(value)
   } catch (err) {
-    error(t('settings.appearance.accentSaveFailed', { reason: err?.message || t('common.unknownError') }))
+    error(t('settings.appearance.accentSaveFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }))
   } finally {
     accentSaving.value = false
   }

@@ -10,7 +10,7 @@ export class NativePluginMaintenance {
 
   assertAllowed(pluginId: string, method: string): void {
     if (this.#locks.has(pluginId.toLowerCase()) && !DRAIN_METHODS.has(method)) {
-      throw new ZToolsError(errorCodes.pluginBusy, '插件原生模块正在更新')
+      throw new ZToolsError(errorCodes.pluginBusy, 'Plugin native module is currently updating')
     }
   }
 
@@ -25,10 +25,10 @@ export class NativePluginMaintenance {
   async acquire(pluginId: string, timeoutMs = 8_000): Promise<() => void> {
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(pluginId) ||
         !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) {
-      throw new ZToolsError(errorCodes.invalidRequest, '原生维护参数无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid native maintenance parameters')
     }
     const key = pluginId.toLowerCase()
-    if (this.#locks.has(key)) throw new ZToolsError(errorCodes.pluginBusy, '插件原生模块已在更新')
+    if (this.#locks.has(key)) throw new ZToolsError(errorCodes.pluginBusy, 'Plugin native module update is already in progress')
     const token = Symbol(key)
     this.#locks.set(key, token)
     let released = false
@@ -40,7 +40,7 @@ export class NativePluginMaintenance {
     const deadline = Date.now() + timeoutMs
     try {
       while ([...this.#sent.values()].includes(key)) {
-        if (Date.now() >= deadline) throw new ZToolsError(errorCodes.pluginBusy, '插件仍有未确认的原生调用')
+        if (Date.now() >= deadline) throw new ZToolsError(errorCodes.pluginBusy, 'Plugin still has unconfirmed native calls')
         await new Promise<void>(resolve => setTimeout(resolve, Math.min(20, Math.max(1, deadline - Date.now()))))
       }
       return release

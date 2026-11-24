@@ -7,6 +7,7 @@
  *   会原子迁移旧值；竞争失败重读宿主最新值，迁移或读取失败抛错，旧值保留不删；removeItem 会同时删除旧键。
  */
 import { callHostMethod } from '../declarative/hostMethods.js'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 import { t } from '@/i18n'
 
 const KEY_PREFIX = 'ls:'
@@ -61,7 +62,7 @@ export async function readPlaintextEntry(namespace, key, call = callHostMethod) 
     }
   } catch (err) {
     if (err?.code !== 'DATABASE_KEY_NOT_FOUND') {
-      throw storageError(t('pluginStorage.readFailed', { reason: err?.message || err }), err?.code || 'STORAGE_READ_FAILED', err)
+      throw storageError(t('pluginStorage.readFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }), err?.code || 'STORAGE_READ_FAILED', err)
     }
   }
   return readLegacy(key)
@@ -74,7 +75,7 @@ export async function removePlaintextEntry(namespace, key, call = callHostMethod
     await call('db_delete', { plugin_id: namespace, key: KEY_PREFIX + key })
   } catch (err) {
     if (err?.code !== 'DATABASE_KEY_NOT_FOUND') {
-      throw storageError(t('pluginStorage.deleteFailed', { reason: err?.message || err }), err?.code || 'STORAGE_WRITE_FAILED', err)
+      throw storageError(t('pluginStorage.deleteFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }), err?.code || 'STORAGE_WRITE_FAILED', err)
     }
   }
   removeLegacy(key)
@@ -93,7 +94,7 @@ function readLegacy(key) {
       return { found: true, value: raw }
     }
   } catch (err) {
-    throw storageError(t('pluginStorage.legacyReadFailed', { reason: err?.message || err }), err?.code || 'STORAGE_READ_FAILED', err)
+    throw storageError(t('pluginStorage.legacyReadFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }), err?.code || 'STORAGE_READ_FAILED', err)
   }
 }
 
@@ -152,7 +153,7 @@ export function createScopedLocalStorage(pluginId, call = callHostMethod) {
           raw = res?.data
         } catch (err) {
           if (err?.code !== 'DATABASE_KEY_NOT_FOUND') {
-            throw storageError(t('pluginStorage.readFailed', { reason: err?.message || err }), err?.code || 'STORAGE_READ_FAILED', err)
+            throw storageError(t('pluginStorage.readFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }), err?.code || 'STORAGE_READ_FAILED', err)
           }
           const legacy = readLegacy(key)
           if (!legacy.found) return undefined
@@ -177,7 +178,7 @@ export function createScopedLocalStorage(pluginId, call = callHostMethod) {
         await put(key, value)
       } catch (err) {
         if (err?.code === 'STORAGE_VALUE_TOO_LARGE') throw err
-        throw storageError(t('pluginStorage.saveFailed', { reason: err?.message || err }), err?.code || 'STORAGE_WRITE_FAILED', err)
+        throw storageError(t('pluginStorage.saveFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }), err?.code || 'STORAGE_WRITE_FAILED', err)
       }
     },
 
@@ -187,7 +188,7 @@ export function createScopedLocalStorage(pluginId, call = callHostMethod) {
         await call('db_delete', { plugin_id: namespace, key: KEY_PREFIX + key })
       } catch (err) {
         if (err?.code !== 'DATABASE_KEY_NOT_FOUND') {
-          throw storageError(t('pluginStorage.deleteFailed', { reason: err?.message || err }), err?.code || 'STORAGE_WRITE_FAILED', err)
+          throw storageError(t('pluginStorage.deleteFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }), err?.code || 'STORAGE_WRITE_FAILED', err)
         }
       }
       // 同时删除浏览器旧键：否则下次 getItem 在宿主库读不到时会把旧值「迁移」回来，删除过的数据复活

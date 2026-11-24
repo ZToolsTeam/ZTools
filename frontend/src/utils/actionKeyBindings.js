@@ -145,11 +145,11 @@ export function resolveActionKeyBindings(actions, options = {}) {
     if (!combo) continue
 
     if (reserved.has(combo)) {
-      warnDuplicateOrReserved(`动作「${action?.props?.title || ''}」声明的快捷键 ${combo} 与宿主保留键冲突，已忽略展示`)
+      warnDuplicateOrReserved(`Action "${action?.props?.title || ''}" shortcut ${combo} conflicts with host reserved key; ignored`)
       continue
     }
     if (claimedByExplicit.has(combo)) {
-      warnDuplicateOrReserved(`动作「${action?.props?.title || ''}」重复声明了快捷键 ${combo}，已按首次声明优先`)
+      warnDuplicateOrReserved(`Action "${action?.props?.title || ''}" duplicated shortcut ${combo}; keeping first declaration`)
       continue
     }
     claimedByExplicit.add(combo)

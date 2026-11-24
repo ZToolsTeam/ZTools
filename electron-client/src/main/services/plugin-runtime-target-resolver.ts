@@ -77,16 +77,16 @@ function isSafeNativeFilePath(value: unknown): value is string {
 }
 
 function validatePayload(value: unknown, label: string): PluginNativePayloadFile {
-  if (!isRecord(value)) invalid(`${label} 必须是对象`)
+  if (!isRecord(value)) invalid(`${label} must be an object`)
   validateKeys(value, PAYLOAD_KEYS, label)
   if (!isSafeNativeFilePath(value.entry) || typeof value.sha256 !== 'string' || !SHA256_PATTERN.test(value.sha256)) {
-    invalid(`${label} 的 entry 或 sha256 无效`)
+    invalid(`${label} has an invalid entry or sha256`)
   }
   if (value.format === 'pe') {
-    if (!/\.(?:dll|exe)$/i.test(value.entry) || !['ia32', 'x64'].includes(value.arch as string)) invalid(`${label} PE 文件必须声明 .dll/.exe 和 ia32/x64`)
+    if (!/\.(?:dll|exe)$/i.test(value.entry) || !['ia32', 'x64'].includes(value.arch as string)) invalid(`${label} PE file must declare .dll/.exe and ia32/x64`)
   } else if (value.format === 'data') {
-    if (Object.hasOwn(value, 'arch') || /\.(?:dll|exe)$/i.test(value.entry)) invalid(`${label} data 不能声明 arch 或 PE 扩展名`)
-  } else invalid(`${label}.format 必须是 pe 或 data`)
+    if (Object.hasOwn(value, 'arch') || /\.(?:dll|exe)$/i.test(value.entry)) invalid(`${label} data entry cannot declare arch or a PE extension`)
+  } else invalid(`${label}.format must be pe or data`)
   return value as unknown as PluginNativePayloadFile
 }
 const TARGET_PLATFORMS = new Set(['windows', 'macos'])
@@ -112,30 +112,30 @@ function unsupported(message: string): never {
 function resolveSdkContractVersion(options?: PluginRuntimeTargetResolverOptions): number {
   if (options === undefined) {
     if (!Number.isSafeInteger(SDK_HOST_MAXIMUM_CONTRACT_VERSION) || SDK_HOST_MAXIMUM_CONTRACT_VERSION < 1) {
-      return unsupported('当前宿主 SDK 契约版本无效')
+      return unsupported('Invalid host SDK contract version')
     }
     return SDK_HOST_MAXIMUM_CONTRACT_VERSION
   }
-  if (!isRecord(options)) return unsupported('当前宿主 SDK 契约版本配置无效')
+  if (!isRecord(options)) return unsupported('Invalid host SDK contract version options')
   if (Object.keys(options).some((key) => key !== 'sdkContractVersion' && key !== 'macNativeCatalogLookup')) {
-    return unsupported('当前宿主 SDK 契约版本配置包含未知字段')
+    return unsupported('Host SDK contract version options contain unknown fields')
   }
   if (options.macNativeCatalogLookup !== undefined && typeof options.macNativeCatalogLookup !== 'function') {
-    return unsupported('当前宿主 Mac 原生目录配置无效')
+    return unsupported('Invalid host Mac native catalog lookup option')
   }
   if (!Object.hasOwn(options, 'sdkContractVersion')) {
-    return unsupported('当前宿主 SDK 契约版本缺失')
+    return unsupported('Missing host SDK contract version')
   }
   const value = options.sdkContractVersion
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
-    return unsupported('当前宿主 SDK 契约版本无效')
+    return unsupported('Invalid host SDK contract version')
   }
   return value
 }
 
 function validateKeys(value: Record<string, unknown>, allowed: Set<string>, label: string): void {
   const unknown = Object.keys(value).filter((key) => !allowed.has(key))
-  if (unknown.length > 0) invalid(`${label} 包含未知字段`)
+  if (unknown.length > 0) invalid(`${label} contains unknown fields`)
 }
 
 function isSafeRelativePath(value: unknown): value is string {
@@ -147,7 +147,7 @@ function isSafeRelativePath(value: unknown): value is string {
 
 function validateTarget(value: unknown, index: number): PluginPlatformTarget {
   const label = `targets[${index}]`
-  if (!isRecord(value)) invalid(`${label} 必须是对象`)
+  if (!isRecord(value)) invalid(`${label} must be an object`)
   validateKeys(value, TARGET_KEYS, label)
   if (
     typeof value.id !== 'string' || !TARGET_ID_PATTERN.test(value.id) ||
@@ -155,31 +155,31 @@ function validateTarget(value: unknown, index: number): PluginPlatformTarget {
     typeof value.runtime !== 'string' || !TARGET_RUNTIMES.has(value.runtime) ||
     typeof value.arch !== 'string' || !TARGET_ARCHES.has(value.arch)
   ) {
-    invalid(`${label} 的 id、platform、runtime 或 arch 无效`)
+    invalid(`${label} has invalid id, platform, runtime, or arch`)
   }
   if (value.runtime === 'legacy-delphi' && value.platform !== 'windows') {
-    invalid(`${label} 的 legacy-delphi runtime 只允许用于 Windows`)
+    invalid(`${label} legacy-delphi runtime is only allowed on Windows`)
   }
   if (value.platform === 'macos' && value.arch === 'ia32') {
-    invalid(`${label} 的 macOS Electron 目标不支持 ia32 架构`)
+    invalid(`${label} macOS Electron target does not support ia32 architecture`)
   }
   if (value.abi !== undefined && (typeof value.abi !== 'string' || !ABI_PATTERN.test(value.abi))) {
-    invalid(`${label}.abi 格式无效`)
+    invalid(`${label}.abi has invalid format`)
   }
   if (
     value.minSdkContractVersion !== undefined &&
     (!Number.isSafeInteger(value.minSdkContractVersion) || (value.minSdkContractVersion as number) < 1)
   ) {
-    invalid(`${label}.minSdkContractVersion 必须是正整数`)
+    invalid(`${label}.minSdkContractVersion must be a positive integer`)
   }
   return value as unknown as PluginPlatformTarget
 }
 
 function validateComponent(value: unknown, index: number): PluginNativeComponent {
   const label = `nativeComponents[${index}]`
-  if (!isRecord(value)) invalid(`${label} 必须是对象`)
+  if (!isRecord(value)) invalid(`${label} must be an object`)
   validateKeys(value, COMPONENT_KEYS, label)
-  if (value.arch === 'any') invalid(`${label}.arch 不能是 any；原生组件必须声明实际架构`)
+  if (value.arch === 'any') invalid(`${label}.arch cannot be "any"; native components must declare a concrete architecture`)
   if (
     typeof value.id !== 'string' || !TARGET_ID_PATTERN.test(value.id) ||
     typeof value.targetId !== 'string' || !TARGET_ID_PATTERN.test(value.targetId) ||
@@ -188,23 +188,23 @@ function validateComponent(value: unknown, index: number): PluginNativeComponent
     typeof value.abi !== 'string' || !ABI_PATTERN.test(value.abi) ||
     !isSafeRelativePath(value.entry)
   ) {
-    invalid(`${label} 的 id、kind、targetId、arch、abi 或 entry 无效`)
+    invalid(`${label} has invalid id, kind, targetId, arch, abi, or entry`)
   }
   if (value.protocolVersion !== undefined && (!Number.isInteger(value.protocolVersion) || (value.protocolVersion as number) < 1)) {
-    invalid(`${label}.protocolVersion 必须是正整数`)
+    invalid(`${label}.protocolVersion must be a positive integer`)
   }
   if (value.hostComponentId !== undefined &&
       (typeof value.hostComponentId !== 'string' || !TARGET_ID_PATTERN.test(value.hostComponentId))) {
-    invalid(`${label}.hostComponentId 格式无效`)
+    invalid(`${label}.hostComponentId has invalid format`)
   }
   if (value.kind === 'dll' && !value.entry.toLowerCase().endsWith('.dll')) {
-    invalid(`${label}.entry 的 DLL 路径必须以 .dll 结尾`)
+    invalid(`${label}.entry DLL path must end with .dll`)
   }
   if (Object.hasOwn(value, 'sha256') && (typeof value.sha256 !== 'string' || !SHA256_PATTERN.test(value.sha256))) {
-    invalid(`${label}.sha256 必须是 64 位小写十六进制`)
+    invalid(`${label}.sha256 must be a 64-character lowercase hex string`)
   }
   if (Object.hasOwn(value, 'payloadFiles')) {
-    if (!Array.isArray(value.payloadFiles)) invalid(`${label}.payloadFiles 必须是数组`)
+    if (!Array.isArray(value.payloadFiles)) invalid(`${label}.payloadFiles must be an array`)
     value.payloadFiles.forEach((item, index) => validatePayload(item, `${label}.payloadFiles[${index}]`))
   }
   return value as unknown as PluginNativeComponent
@@ -246,7 +246,7 @@ function isNativeHost32X64DependencyBinding(
 function expectedPlatform(platform: string): 'windows' | 'macos' {
   if (platform === 'win32') return 'windows'
   if (platform === 'darwin') return 'macos'
-  unsupported(`当前系统平台 ${platform} 尚不支持插件运行`)
+  unsupported(`Platform ${platform} is not yet supported for running plugins`)
 }
 
 function archMatches(target: PluginPlatformTarget, runtime: PluginRuntimeIdentity): boolean {
@@ -263,55 +263,55 @@ export function resolvePluginRuntimeTarget(
   options?: PluginRuntimeTargetResolverOptions
 ): ResolvedPluginRuntimeTarget {
   const sdkContractVersion = resolveSdkContractVersion(options)
-  if (!isRecord(manifestValue)) invalid('plugin.json 必须是对象')
+  if (!isRecord(manifestValue)) invalid('plugin.json must be an object')
   const platform = expectedPlatform(runtime.platform)
-  if (runtime.runtime !== 'electron') unsupported(`当前插件宿主 runtime=${runtime.runtime} 尚不支持`)
+  if (runtime.runtime !== 'electron') unsupported(`Plugin host runtime=${runtime.runtime} is not supported`)
   if (platform === 'macos' && runtime.arch === 'ia32') {
-    unsupported('macOS Electron 不支持 ia32 进程架构；Universal 包应以 arm64 或 x64 进程运行')
+    unsupported('macOS Electron does not support ia32 process architecture; universal packages must run under arm64 or x64')
   }
   if (!new Set(['ia32', 'x64', 'arm64']).has(runtime.arch)) {
-    unsupported(`当前 Electron 架构 ${runtime.arch} 尚不支持插件运行`)
+    unsupported(`Electron architecture ${runtime.arch} is not supported for running plugins`)
   }
 
   const dllloader = manifestValue.dllloader
   const requireAdmin = manifestValue.requireAdmin
-  if (dllloader !== undefined && typeof dllloader !== 'string') invalid('dllloader 必须是字符串')
-  if (requireAdmin !== undefined && typeof requireAdmin !== 'boolean') invalid('requireAdmin 必须是布尔值')
+  if (dllloader !== undefined && typeof dllloader !== 'string') invalid('dllloader must be a string')
+  if (requireAdmin !== undefined && typeof requireAdmin !== 'boolean') invalid('requireAdmin must be a boolean')
   const declaresLegacyDll = typeof dllloader === 'string' && dllloader !== ''
   const declaresAdminDll = requireAdmin === true
   if (platform === 'macos' && (declaresLegacyDll || declaresAdminDll)) {
-    unsupported('macOS 不支持旧版 dllloader/requireAdmin 字段；请使用目标绑定的组件声明')
+    unsupported('macOS does not support legacy dllloader/requireAdmin fields; use target-bound component declarations')
   }
   const commonLibs = manifestValue.commonLibs
   if (commonLibs !== undefined && (!Array.isArray(commonLibs) || commonLibs.some((item) => typeof item !== 'string'))) {
-    invalid('commonLibs 必须是字符串数组')
+    invalid('commonLibs must be an array of strings')
   }
   if (platform === 'macos' && Array.isArray(commonLibs) && commonLibs.length > 0) {
-    unsupported('macOS 当前不支持未绑定运行目标的 commonLibs；请先完成目标专属依赖解析')
+    unsupported('macOS does not support target-unbound commonLibs; declare target-specific dependencies instead')
   }
 
   const hasTargets = Object.hasOwn(manifestValue, 'targets')
   const hasComponents = Object.hasOwn(manifestValue, 'nativeComponents')
   if (!hasTargets) {
-    if (hasComponents) invalid('nativeComponents 必须通过 targets 声明目标绑定')
+    if (hasComponents) invalid('nativeComponents must declare target bindings via targets')
     if (platform === 'macos') {
-      unsupported('插件未声明 targets，无法确认它兼容当前 macOS Electron 环境')
+      unsupported('Plugin does not declare targets; compatibility with this macOS Electron environment cannot be verified')
     }
     if (runtime.arch !== 'ia32') {
-      unsupported(`未声明 targets 的旧版插件仅兼容 Windows Electron ia32，当前架构为 ${runtime.arch}`)
+      unsupported(`Legacy plugins without targets are only compatible with Windows Electron ia32 (current architecture: ${runtime.arch})`)
     }
     return { nativeComponents: [], legacyWindows: true }
   }
-  if (!Array.isArray(manifestValue.targets)) invalid('targets 必须是目标对象数组')
-  if (manifestValue.targets.length === 0) invalid('targets 至少要声明一个目标')
+  if (!Array.isArray(manifestValue.targets)) invalid('targets must be an array of target objects')
+  if (manifestValue.targets.length === 0) invalid('targets must declare at least one target')
   if (!hasComponents || !Array.isArray(manifestValue.nativeComponents)) {
-    invalid('声明 targets 时 nativeComponents 必须是数组；纯 JS 插件使用 []')
+    invalid('nativeComponents must be an array when targets is declared; use [] for pure JS plugins')
   }
 
   const targets = manifestValue.targets.map((item, index) => validateTarget(item, index))
   const targetsById = new Map<string, PluginPlatformTarget>()
   for (const target of targets) {
-    if (targetsById.has(target.id)) invalid(`targets.id 重复：${target.id}`)
+    if (targetsById.has(target.id)) invalid(`Duplicate targets.id: ${target.id}`)
     targetsById.set(target.id, target)
   }
 
@@ -319,13 +319,13 @@ export function resolvePluginRuntimeTarget(
   const components = manifestValue.nativeComponents.map((item, index) => validateComponent(item, index))
   const componentsById = new Map<string, PluginNativeComponent>()
   for (const component of components) {
-    if (componentIds.has(component.id)) invalid(`nativeComponents.id 重复：${component.id}`)
+    if (componentIds.has(component.id)) invalid(`Duplicate nativeComponents.id: ${component.id}`)
     componentIds.add(component.id)
     componentsById.set(component.id, component)
   }
   for (const component of components) {
     const target = targetsById.get(component.targetId)
-    if (!target) invalid(`nativeComponents.${component.id} 引用了未知 targetId：${component.targetId}`)
+    if (!target) invalid(`nativeComponents.${component.id} references unknown targetId: ${component.targetId}`)
     const hostComponent = component.hostComponentId === undefined
       ? undefined
       : componentsById.get(component.hostComponentId)
@@ -334,53 +334,53 @@ export function resolvePluginRuntimeTarget(
       if (target.platform !== 'windows' || target.runtime !== 'electron' || component.kind !== 'dll' ||
           component.arch !== 'ia32' || component.abi !== NATIVE_HOST32_DLL_ABI || component.protocolVersion !== 1 ||
           !component.sha256 || !isSafeNativeFilePath(component.entry)) {
-        invalid(`nativeComponents.${component.id}.payloadFiles 仅允许带 sha256 的 Windows Electron ia32 NativeHost DLL`)
+        invalid(`nativeComponents.${component.id}.payloadFiles is only allowed on Windows Electron ia32 NativeHost DLLs with sha256`)
       }
     }
     if (hostComponent && Object.hasOwn(hostComponent, 'payloadFiles') &&
         (!component.sha256 || !isSafeNativeFilePath(component.entry))) {
-      invalid(`nativeComponents.${component.id} 绑定 payload Host 时必须声明安全 lib 路径和 sha256`)
+      invalid(`nativeComponents.${component.id} bound to a payload host must declare a safe lib path and sha256`)
     }
 
     if (component.hostComponentId !== undefined) {
       if (component.kind !== 'shared-library' || component.abi !== WINDOWS_PE_DEPENDENCY_ABI) {
-        invalid(`nativeComponents.${component.id}.hostComponentId 仅适用于 windows-pe/v1 shared-library`)
+        invalid(`nativeComponents.${component.id}.hostComponentId is only applicable to windows-pe/v1 shared-library components`)
       }
       if (!hostComponent) {
-        invalid(`nativeComponents.${component.id}.hostComponentId 引用了未知组件：${component.hostComponentId}`)
+        invalid(`nativeComponents.${component.id}.hostComponentId references unknown component: ${component.hostComponentId}`)
       }
       if (hostComponent.targetId !== component.targetId) {
-        invalid(`nativeComponents.${component.id}.hostComponentId 必须引用同一 target 的 DLL`)
+        invalid(`nativeComponents.${component.id}.hostComponentId must reference a DLL in the same target`)
       }
       if (
         hostComponent.kind !== 'dll' || hostComponent.arch !== 'ia32' ||
         hostComponent.abi !== NATIVE_HOST32_DLL_ABI || hostComponent.protocolVersion !== 1
       ) {
-        invalid(`nativeComponents.${component.id}.hostComponentId 必须引用 ia32 ${NATIVE_HOST32_DLL_ABI} DLL，protocolVersion=1`)
+        invalid(`nativeComponents.${component.id}.hostComponentId must reference an ia32 ${NATIVE_HOST32_DLL_ABI} DLL with protocolVersion=1`)
       }
     }
 
     if (component.abi === NATIVE_HOST32_DLL_ABI) {
       if (component.kind !== 'dll' || target.platform !== 'windows' || target.runtime !== 'electron') {
-        invalid(`nativeComponents.${component.id} 的 ${NATIVE_HOST32_DLL_ABI} ABI 仅支持 Windows Electron DLL`)
+        invalid(`nativeComponents.${component.id} ${NATIVE_HOST32_DLL_ABI} ABI only supports Windows Electron DLLs`)
       }
       if (component.arch !== 'ia32') {
-        invalid(`nativeComponents.${component.id}.arch 使用 ${NATIVE_HOST32_DLL_ABI} 时必须是 ia32`)
+        invalid(`nativeComponents.${component.id}.arch must be ia32 when using ${NATIVE_HOST32_DLL_ABI}`)
       }
       if (component.protocolVersion !== 1) {
-        invalid(`nativeComponents.${component.id}.protocolVersion 使用 ${NATIVE_HOST32_DLL_ABI} 时必须显式为 1`)
+        invalid(`nativeComponents.${component.id}.protocolVersion must explicitly be 1 when using ${NATIVE_HOST32_DLL_ABI}`)
       }
     }
 
     if (component.abi === WINDOWS_PE_DEPENDENCY_ABI) {
       if (component.kind !== 'shared-library' || target.platform !== 'windows' || target.runtime !== 'electron') {
-        invalid(`nativeComponents.${component.id} 的 ${WINDOWS_PE_DEPENDENCY_ABI} ABI 仅支持 Windows Electron shared-library`)
+        invalid(`nativeComponents.${component.id} ${WINDOWS_PE_DEPENDENCY_ABI} ABI only supports Windows Electron shared-library components`)
       }
       if (component.arch !== 'ia32') {
-        invalid(`nativeComponents.${component.id}.arch 使用 ${WINDOWS_PE_DEPENDENCY_ABI} 时必须是 ia32`)
+        invalid(`nativeComponents.${component.id}.arch must be ia32 when using ${WINDOWS_PE_DEPENDENCY_ABI}`)
       }
       if (!component.entry.toLowerCase().endsWith('.dll')) {
-        invalid(`nativeComponents.${component.id}.entry 使用 ${WINDOWS_PE_DEPENDENCY_ABI} 时必须是 .dll`)
+        invalid(`nativeComponents.${component.id}.entry must end with .dll when using ${WINDOWS_PE_DEPENDENCY_ABI}`)
       }
     }
 
@@ -390,7 +390,7 @@ export function resolvePluginRuntimeTarget(
       component.hostComponentId !== undefined ||
       !/^lib\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.dylib$/.test(component.entry)
     )) {
-      invalid(`nativeComponents.${component.id} 的 ${MAC_NATIVE_ABI} ABI 必须绑定 macOS Electron dylib，protocolVersion=1`)
+      invalid(`nativeComponents.${component.id} ${MAC_NATIVE_ABI} ABI must bind a macOS Electron dylib with protocolVersion=1`)
     }
 
     if (
@@ -399,12 +399,12 @@ export function resolvePluginRuntimeTarget(
       !isNativeHost32X64DependencyBinding(target, component, hostComponent)
     ) {
       invalid(
-        `nativeComponents.${component.id}.arch 必须与 target ${target.id} 的 arch 精确相等；` +
-        `Windows Electron x64 target 的 ia32 例外要求 ${NATIVE_HOST32_DLL_ABI} DLL 或绑定该 DLL 的 ${WINDOWS_PE_DEPENDENCY_ABI} shared-library`
+        `nativeComponents.${component.id}.arch must exactly match target ${target.id} arch; ` +
+        `Windows Electron x64 target ia32 exception requires ${NATIVE_HOST32_DLL_ABI} DLL or a ${WINDOWS_PE_DEPENDENCY_ABI} shared-library bound to it`
       )
     }
     if (component.kind === 'dll' && target.platform !== 'windows') {
-      invalid(`nativeComponents.${component.id} 的 DLL 组件只能绑定 Windows target`)
+      invalid(`nativeComponents.${component.id} DLL component can only bind to a Windows target`)
     }
   }
 
@@ -417,13 +417,13 @@ export function resolvePluginRuntimeTarget(
     for (const file of files) {
       const entry = file.entry.replaceAll('\\', '/').split('/').filter(segment => segment !== '' && segment !== '.').join('/').toLowerCase()
       const key = `${component.targetId}:${entry}`
-      if (targetEntries.has(key)) invalid(`target ${component.targetId} 原生文件路径重复：${file.entry}`)
+      if (targetEntries.has(key)) invalid(`Duplicate native file path in target ${component.targetId}: ${file.entry}`)
       targetEntries.add(key)
       const format = file.format === 'component' && /\.(dll|exe)$/i.test(file.entry) ? 'pe' : file.format
       const identity = JSON.stringify([format, file.arch, file.sha256])
       const previous = sharedEntries.get(entry)
       if (hasPayloadContract && previous !== undefined && previous !== identity) {
-        invalid(`跨 target 原生文件声明不一致：${file.entry}`)
+        invalid(`Inconsistent native file declaration across targets: ${file.entry}`)
       }
       sharedEntries.set(entry, identity)
     }
@@ -431,58 +431,58 @@ export function resolvePluginRuntimeTarget(
 
   for (const target of targets) {
     if (target.arch === 'any' && components.some((component) => component.targetId === target.id)) {
-      invalid(`target ${target.id} 使用 arch=any 时只能是纯 JS 目标`)
+      invalid(`target ${target.id} with arch=any must be a pure JS target`)
     }
   }
 
   if (declaresLegacyDll && !components.some((component) =>
     component.kind === 'dll' && component.entry === dllloader && targetsById.get(component.targetId)?.platform === 'windows'
   )) {
-    invalid('声明 dllloader 时必须有 entry 完全一致的 Windows DLL nativeComponent')
+    invalid('Declaring dllloader requires a Windows DLL nativeComponent with an exact matching entry')
   }
   if (declaresAdminDll && !components.some((component) =>
     component.kind === 'dll' && targetsById.get(component.targetId)?.platform === 'windows'
   )) {
-    invalid('requireAdmin=true 时必须声明绑定到 Windows target 的 DLL nativeComponent')
+    invalid('requireAdmin=true requires a DLL nativeComponent bound to a Windows target')
   }
 
   const matchingTargets = targets.filter((target) =>
     target.platform === platform && target.runtime === 'electron' && archMatches(target, runtime)
   )
   if (matchingTargets.length === 0) {
-    unsupported(`插件未声明适用于 ${platform} Electron ${runtime.arch} 的运行目标`)
+    unsupported(`Plugin does not declare a runtime target for ${platform} Electron ${runtime.arch}`)
   }
   if (matchingTargets.length > 1) {
-    invalid(`插件声明了多个适用于 ${platform} Electron ${runtime.arch} 的目标，无法安全选择`)
+    invalid(`Plugin declares multiple targets for ${platform} Electron ${runtime.arch}; cannot choose safely`)
   }
 
   const target = matchingTargets[0]
-  if (!target) invalid('无法解析当前插件运行目标')
+  if (!target) invalid('Unable to resolve current plugin runtime target')
   const minimumSdkContractVersion = target.minSdkContractVersion
   if (minimumSdkContractVersion !== undefined && minimumSdkContractVersion > sdkContractVersion) {
     unsupported(
-      `插件目标 ${target.id} 要求 SDK 契约版本 ${minimumSdkContractVersion}，当前宿主版本为 ${sdkContractVersion}`
+      `Plugin target ${target.id} requires SDK contract version ${minimumSdkContractVersion}, but current host version is ${sdkContractVersion}`
     )
   }
   const nativeComponents = components.filter((component) => component.targetId === target.id)
   if (platform === 'macos' && nativeComponents.length > 0) {
     if (!options?.macNativeCatalogLookup) {
-      unsupported(`macOS 目标 ${target.id} 当前只能安装纯 JavaScript 插件；原生组件需等待可信 Mac Host 支持`)
+      unsupported(`macOS target ${target.id} currently supports pure JavaScript plugins only; native components require a trusted Mac Host`)
     }
     if (typeof manifestValue.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(manifestValue.id)) {
-      invalid('Mac 原生组件需要有效的插件 id')
+      invalid('Mac native components require a valid plugin id')
     }
     for (const component of nativeComponents) {
       if (component.kind !== 'shared-library' || component.abi !== MAC_NATIVE_ABI ||
           component.protocolVersion !== 1 || component.hostComponentId !== undefined ||
           !/^lib\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.dylib$/.test(component.entry)) {
-        unsupported('当前 Mac Host 仅支持目标绑定的原生 ABI v1 dylib 组件')
+        unsupported('Current Mac Host only supports target-bound native ABI v1 dylib components')
       }
       let approved: ReturnType<MacNativeCatalogLookup>
       try { approved = options.macNativeCatalogLookup(manifestValue.id, component.id) }
-      catch { unsupported('可信 Mac 原生目录查询失败') }
+      catch { unsupported('Trusted Mac native catalog lookup failed') }
       if (!approved || approved.relativePath !== component.entry || !/^[a-f0-9]{64}$/.test(approved.sha256)) {
-        unsupported('Mac 原生组件未匹配当前 App 的可信目录')
+        unsupported('Mac native component does not match the current app trusted catalog')
       }
     }
   }

@@ -21,10 +21,10 @@
   <body>
     <main data-testid="runtime-capability-prompt" aria-labelledby="prompt-title">
       <h1 id="prompt-title">是否允许该插件获取屏幕画面？</h1>
-      <p class="identity"><span class="label">申请插件：</span><strong data-testid="runtime-capability-plugin-name"></strong><br />
-        <span class="label">插件标识：</span><code data-testid="runtime-capability-plugin-id"></code></p>
+      <p class="identity"><span id="prompt-plugin-name-label" class="label">申请插件：</span><strong data-testid="runtime-capability-plugin-name"></strong><br />
+        <span id="prompt-plugin-id-label" class="label">插件标识：</span><code data-testid="runtime-capability-plugin-id"></code></p>
       <p data-testid="runtime-capability-purpose"></p>
-      <p>本次授权仅在当前插件打开期间有效。关闭插件窗口或在高级设置中撤销后，将自动失效。</p>
+      <p id="prompt-scope-note">本次授权仅在当前插件打开期间有效。关闭插件窗口或在高级设置中撤销后，将自动失效。</p>
       <div class="actions">
         <button id="runtime-capability-deny" data-testid="runtime-capability-deny" type="button">拒绝</button>
         <button id="runtime-capability-allow" data-testid="runtime-capability-allow" type="button">允许访问</button>

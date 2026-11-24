@@ -90,12 +90,12 @@ export class OcrWorkerEngine<Result> {
   /** 宿主退出时结束子进程 */
   stop(): void {
     this.#clearIdle()
-    this.#terminate(new ZToolsError(errorCodes.appStopping, '应用正在退出'))
+    this.#terminate(new ZToolsError(errorCodes.appStopping, 'Application is shutting down'))
   }
 
   #run(image: BgraImage, signal?: AbortSignal): Promise<Result> {
-    if (signal?.aborted) return Promise.reject(new ZToolsError(errorCodes.cancelled, 'OCR 识别已取消'))
-    if (this.suspended) return Promise.reject(new ZToolsError(errorCodes.serviceUnavailable, `本机${this.#label}连续失败，已暂停使用`))
+    if (signal?.aborted) return Promise.reject(new ZToolsError(errorCodes.cancelled, 'OCR recognition cancelled'))
+    if (this.suspended) return Promise.reject(new ZToolsError(errorCodes.serviceUnavailable, `Local ${this.#label} suspended after consecutive failures`))
     this.#clearIdle()
     return new Promise<Result>((resolve, reject) => {
       let worker: OcrWorkerProcess
@@ -103,7 +103,7 @@ export class OcrWorkerEngine<Result> {
         worker = this.#ensureWorker()
       } catch (error) {
         this.#failures.push(this.#now())
-        reject(new ZToolsError(errorCodes.processError, `无法启动${this.#label}进程：${error instanceof Error ? error.message : String(error)}`))
+        reject(new ZToolsError(errorCodes.processError, `Failed to start ${this.#label} worker: ${error instanceof Error ? error.message : String(error)}`))
         return
       }
       const id = ++this.#nextId
@@ -115,9 +115,9 @@ export class OcrWorkerEngine<Result> {
       }
       const timer = setTimeout(() => {
         this.#failures.push(this.#now())
-        this.#terminate(new ZToolsError(errorCodes.requestTimeout, `本机${this.#label}超时`))
+        this.#terminate(new ZToolsError(errorCodes.requestTimeout, `Local ${this.#label} timed out`))
       }, this.#timeoutMs)
-      const onAbort = () => this.#terminate(new ZToolsError(errorCodes.cancelled, 'OCR 识别已取消'))
+      const onAbort = () => this.#terminate(new ZToolsError(errorCodes.cancelled, 'OCR recognition cancelled'))
       this.#inFlight = {
         id,
         resolve: result => { finish(); resolve(result) },
@@ -128,7 +128,7 @@ export class OcrWorkerEngine<Result> {
         worker.postMessage({ type: 'recognize', id, width: image.width, height: image.height, data: image.data })
       } catch (error) {
         this.#failures.push(this.#now())
-        this.#terminate(new ZToolsError(errorCodes.processError, `无法发送识别请求：${error instanceof Error ? error.message : String(error)}`))
+        this.#terminate(new ZToolsError(errorCodes.processError, `Failed to send recognition request: ${error instanceof Error ? error.message : String(error)}`))
       }
     })
   }
@@ -148,7 +148,7 @@ export class OcrWorkerEngine<Result> {
       } else if (response.ok === false && typeof response.error === 'string') {
         inFlight.reject(new ZToolsError(errorCodes.processError, response.error))
       } else {
-        inFlight.reject(new ZToolsError(errorCodes.processError, `${this.#label}进程返回了无效结果`))
+        inFlight.reject(new ZToolsError(errorCodes.processError, `${this.#label} worker returned an invalid result`))
       }
     })
     worker.onExit(code => {
@@ -156,7 +156,7 @@ export class OcrWorkerEngine<Result> {
       this.#worker = undefined
       if (this.#inFlight) {
         this.#failures.push(this.#now())
-        this.#inFlight.reject(new ZToolsError(errorCodes.processError, `${this.#label}进程意外退出（退出码 ${code ?? '未知'}）`))
+        this.#inFlight.reject(new ZToolsError(errorCodes.processError, `${this.#label} worker exited unexpectedly (exit code ${code ?? 'unknown'})`))
       }
     })
     return worker
@@ -168,7 +168,7 @@ export class OcrWorkerEngine<Result> {
     this.#worker = undefined
     const inFlight = this.#inFlight
     this.#inFlight = undefined
-    try { worker?.kill() } catch (killError) { console.warn(`[OcrWorker] 结束${this.#label}进程失败:`, killError) }
+    try { worker?.kill() } catch (killError) { console.warn(`[OcrWorker] Failed to terminate ${this.#label} worker:`, killError) }
     inFlight?.reject(error)
   }
 
@@ -177,7 +177,7 @@ export class OcrWorkerEngine<Result> {
     if (!this.#worker) return
     this.#idleTimer = setTimeout(() => {
       this.#idleTimer = undefined
-      if (!this.#inFlight) this.#terminate(new ZToolsError(errorCodes.cancelled, `${this.#label}进程已空闲退出`))
+      if (!this.#inFlight) this.#terminate(new ZToolsError(errorCodes.cancelled, `${this.#label} worker exited after idle timeout`))
     }, this.#idleMs)
     this.#idleTimer.unref?.()
   }

@@ -89,19 +89,21 @@ static NSDictionary *FontPreview(CTFontRef font, NSString *text) {
     @"png": [bytes base64EncodedStringWithOptions:0], @"fallbacks": sortedFallbacks,
     @"license": FontName(font, kCTFontLicenseNameKey), @"licenseUrl": FontName(font, kCTFontLicenseURLNameKey),
     @"copyright": FontName(font, kCTFontCopyrightNameKey), @"manufacturer": FontName(font, kCTFontManufacturerNameKey) } mutableCopy];
-  // 本机没有任何字体含某个字形时，CoreText 用 LastResort 画占位方框：它不是可用的回退字体，返回缺字提示。
+  // 本机没有任何字体含某个字形时，CoreText 用 LastResort 画占位方框：它不是可用的回退字体，返回缺字提示与结构化字段。
   // coverageWarning 会替代插件里的回退字体说明，所以把其余回退字体也写进去（最多列 8 个，宿主限制 1024 字符）
   if ([fallbacks containsObject:@"LastResort"]) {
     NSMutableArray *others = [NSMutableArray array];
     for (NSString *name in sortedFallbacks) if (![name isEqual:@"LastResort"]) [others addObject:name];
-    NSString *warning = @"部分字符本机没有任何字体包含，显示为占位方框。";
+    NSString *warning = @"Some characters are not covered by any installed font and are shown as placeholder boxes.";
     if (others.count) {
       NSArray *shown = [others subarrayWithRange:NSMakeRange(0, MIN((NSUInteger)8, others.count))];
-      NSString *names = [shown componentsJoinedByString:@"、"];
-      if (names.length > 600) names = [[names substringToIndex:600] stringByAppendingString:@"…"];
-      warning = [warning stringByAppendingFormat:@"其余字形使用系统回退字体：%@%@", names,
-        others.count > shown.count ? [NSString stringWithFormat:@" 等 %lu 个", (unsigned long)others.count] : @""];
+      NSString *names = [shown componentsJoinedByString:@", "];
+      if (names.length > 600) names = [[names substringToIndex:600] stringByAppendingString:@"..."];
+      warning = [warning stringByAppendingFormat:@" Other glyphs use system fallback fonts: %@%@.", names,
+        others.count > shown.count ? [NSString stringWithFormat:@" (%lu total)", (unsigned long)others.count] : @""];
     }
+    reply[@"coverageWarningCode"] = @"MISSING_GLYPHS_LAST_RESORT";
+    reply[@"coverageFallbackFonts"] = others;
     reply[@"coverageWarning"] = warning;
   }
   return reply;

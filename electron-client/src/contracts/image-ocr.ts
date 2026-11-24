@@ -27,6 +27,6 @@ export function validateImageOcrRequest(value: unknown): asserts value is ImageO
       (action === 'recognizeImage' && !validImagePath(input.path)) ||
       (input.restoreWindow !== undefined && typeof input.restoreWindow !== 'boolean') ||
       (input.lang !== undefined && !(IMAGE_OCR_LANGUAGES as readonly unknown[]).includes(input.lang))) {
-    throw new ZToolsError(errorCodes.invalidRequest, '文字识别请求无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid image OCR request')
   }
 }

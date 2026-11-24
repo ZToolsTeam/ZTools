@@ -93,7 +93,7 @@ test('TrayController rejects empty or invalid tray icons and guarantees start() 
     requestExit: () => undefined,
     deps
   })
-  await assert.rejects(() => emptyController.start(), /无法加载 ZTools 托盘图标/)
+  await assert.rejects(() => emptyController.start(), /Failed to load ZTools tray icon/)
 
   const nullIconController = new TrayController({
     icon: null as unknown as Electron.NativeImage,
@@ -101,7 +101,7 @@ test('TrayController rejects empty or invalid tray icons and guarantees start() 
     requestExit: () => undefined,
     deps
   })
-  await assert.rejects(() => nullIconController.start(), /无法加载 ZTools 托盘图标/)
+  await assert.rejects(() => nullIconController.start(), /Failed to load ZTools tray icon/)
   assert.equal(trays.length, 0)
 
   const validController = new TrayController({

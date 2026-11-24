@@ -56,7 +56,7 @@ vi.mock('@/api/apiserver', async (importOriginal) => {
   }
 })
 
-describe('内置插件假卸载与双向还原全链路集成及异常覆盖测试', () => {
+describe('内置插件显示开关与双向恢复全链路集成及异常覆盖测试', () => {
   let configStore
   let closeWindowMock
   let store
@@ -122,8 +122,8 @@ describe('内置插件假卸载与双向还原全链路集成及异常覆盖测�
     })
   })
 
-  describe('端到端真实状态流转闭环（设置页假卸载 ↔ 已安装过滤 ↔ 计算器算式保留 ↔ 市场卡片与详情页还原）', () => {
-    it('设置页卸载后从已安装列表移除并持久化，计算器卸载后主搜索框基础算式能力照常保留，还原后恢复可见', async () => {
+  describe('端到端真实状态流转闭环（设置页可见性 ↔ 已安装过滤 ↔ 计算器算式保留 ↔ 市场卡片与详情页还原）', () => {
+    it('设置页隐藏后从已安装列表移除并持久化，计算器隐藏后主搜索框基础算式能力照常保留，还原后恢复可见', async () => {
       await store.fetchInstalledPlugins()
       expect(store.installedSet.has('calculator')).toBe(true)
       expect(store.installedPlugins.some((p) => p.pluginId === 'calculator')).toBe(true)
@@ -131,34 +131,24 @@ describe('内置插件假卸载与双向还原全链路集成及异常覆盖测�
       const wrapper = mount(BundledPluginsSettings)
       await flushPromises()
 
-      // 1. 定位到“计算器”行，初始按钮为“卸载”
-      const calcRow = wrapper.find('[data-plugin-id="calculator"]')
-      expect(calcRow.exists()).toBe(true)
-      expect(calcRow.classes()).not.toContain('is-hidden-plugin')
-
-      const uninstallBtn = wrapper.find('[data-testid="bundled-uninstall-calculator"]')
-      expect(uninstallBtn.exists()).toBe(true)
-      expect(uninstallBtn.text()).toContain('卸载')
-
-      // 2. 点击设置中的“卸载”执行假卸载
-      await uninstallBtn.trigger('click')
+      const calcRow = wrapper.get('[data-plugin-id="calculator"]')
+      const visibilitySwitch = calcRow.get('button[role="switch"]')
+      const stopped = vi.spyOn(store, 'onPluginRuntimeStopped')
+      expect(visibilitySwitch.attributes('aria-label')).toBe('在主页和搜索中显示「计算器」')
+      expect(visibilitySwitch.attributes('aria-checked')).toBe('true')
+      await visibilitySwitch.trigger('click')
       await flushPromises()
 
       expect(store.isBundledHidden('calculator')).toBe(true)
       expect(store.installedSet.has('calculator')).toBe(false)
       expect(store.installedPlugins.some((p) => p.pluginId === 'calculator')).toBe(false)
       expect(JSON.parse(configStore[HIDDEN_BUNDLED_CONFIG_KEY])).toEqual(['calculator'])
-      expect(closeWindowMock).toHaveBeenCalledWith('calculator')
-      expect(toastSpies.toastSuccess).toHaveBeenCalledWith('已卸载「计算器」，可随时在此还原')
-
-      // 设置行状态切换为“已卸载”且按钮变为“还原”
+      expect(closeWindowMock).not.toHaveBeenCalled()
+      expect(stopped).not.toHaveBeenCalled()
+      expect(toastSpies.toastSuccess).toHaveBeenCalledWith('已隐藏「计算器」')
       expect(calcRow.classes()).toContain('is-hidden-plugin')
-      expect(calcRow.text()).toContain('已卸载')
-      const restoreBtn = wrapper.find('[data-testid="bundled-restore-calculator"]')
-      expect(restoreBtn.exists()).toBe(true)
-      expect(restoreBtn.text()).toContain('还原')
+      expect(visibilitySwitch.attributes('aria-checked')).toBe('false')
 
-      // 3. 验证计算器被假卸载期间，主搜索框即时基础算式能力完全保留
       const inlineMath = evaluateInlineCommandItem('128 + 256')
       expect(inlineMath).not.toBeNull()
       expect(inlineMath.answer).toBe('384')
@@ -170,7 +160,7 @@ describe('内置插件假卸载与双向还原全链路集成及异常覆盖测�
         success: false,
         action: 'navigate_to_detail',
         pluginId: 'memo',
-        error: '该内置插件已卸载，还原后即可使用'
+        error: '该内置插件已隐藏，可在设置中恢复显示'
       })
 
       // 5. 验证插件市场卡片（PluginCard3D）与详情页动作区（PluginActions）对已卸载内置插件展示“还原”而非“安装”
@@ -202,13 +192,14 @@ describe('内置插件假卸载与双向还原全链路集成及异常覆盖测�
       expect(actionsWrapper.text()).not.toContain('安装')
 
       // 6. 在设置页点击“还原”按钮，恢复可见性且重新刷新本地列表后依然保持可见
-      await restoreBtn.trigger('click')
+      await visibilitySwitch.trigger('click')
       await flushPromises()
       expect(store.isBundledHidden('calculator')).toBe(false)
       expect(store.installedSet.has('calculator')).toBe(true)
       expect(store.installedPlugins.some((p) => p.pluginId === 'calculator')).toBe(true)
       expect(JSON.parse(configStore[HIDDEN_BUNDLED_CONFIG_KEY])).toEqual(['memo'])
-      expect(toastSpies.toastSuccess).toHaveBeenCalledWith('已还原「计算器」')
+      expect(visibilitySwitch.attributes('aria-checked')).toBe('true')
+      expect(toastSpies.toastSuccess).toHaveBeenCalledWith('已显示「计算器」')
 
       cardWrapper.unmount()
       actionsWrapper.unmount()
@@ -251,7 +242,7 @@ describe('内置插件假卸载与双向还原全链路集成及异常覆盖测�
       await store.fetchInstalledPlugins()
       window.ztools.config.set.mockResolvedValueOnce(false)
 
-      await expect(store.hideBundledPlugin('qr-code')).rejects.toThrow('保存内置插件卸载状态失败')
+      await expect(store.hideBundledPlugin('qr-code')).rejects.toThrow('无法保存内置插件显示设置')
       expect(store.isBundledHidden('qr-code')).toBe(false)
       expect(store.installedSet.has('qr-code')).toBe(true)
       expect(store.isTogglingBundled('qr-code')).toBe(false)
@@ -269,6 +260,62 @@ describe('内置插件假卸载与双向还原全链路集成及异常覆盖测�
       expect(store.isBundledHidden('qr-code')).toBe(true)
       expect(store.installedSet.has('qr-code')).toBe(false)
       expect(store.isTogglingBundled('qr-code')).toBe(false)
+    })
+
+    it.each([true, false])('多个插件同时切换时按序写同一份名单，前次成功 %s', async (firstSucceeds) => {
+      await store.hideBundledPlugin('memo')
+      let finish
+      window.ztools.config.set.mockImplementationOnce((_key, value) => new Promise((resolve) => {
+        finish = () => {
+          if (firstSucceeds) configStore[HIDDEN_BUNDLED_CONFIG_KEY] = value
+          resolve(firstSucceeds)
+        }
+      }))
+
+      const hiding = store.hideBundledPlugin('calculator')
+      const showing = store.restoreBundledPlugin('memo')
+      const outcomes = Promise.allSettled([hiding, showing])
+      await flushPromises()
+      expect(window.ztools.config.set).toHaveBeenCalledTimes(2)
+      finish()
+      const [hidden, shown] = await outcomes
+      expect(hidden.status).toBe(firstSucceeds ? 'fulfilled' : 'rejected')
+      expect(shown.status).toBe('fulfilled')
+      const expected = firstSucceeds ? ['calculator'] : []
+      expect([...store.hiddenBundledSet]).toEqual(expected)
+      expect(JSON.parse(configStore[HIDDEN_BUNDLED_CONFIG_KEY])).toEqual(expected)
+      expect(store.isTogglingBundled('memo')).toBe(false)
+      expect(store.isTogglingBundled('calculator')).toBe(false)
+    })
+
+    it.each([undefined, null, 1, { success: true }])('保存返回非布尔成功值 %j 时不更改开关且解除锁', async (reply) => {
+      window.ztools.config.set.mockResolvedValueOnce(reply)
+      await expect(store.hideBundledPlugin('calculator')).rejects.toThrow('无法保存内置插件显示设置')
+      expect(store.isBundledHidden('calculator')).toBe(false)
+      expect(store.isTogglingBundled('calculator')).toBe(false)
+    })
+
+    it('读取失败时展示重试，重新加载磁盘选择后才显示开关', async () => {
+      configStore[HIDDEN_BUNDLED_CONFIG_KEY] = '["calculator"]'
+      window.ztools.config.get.mockRejectedValueOnce(new Error('读取失败'))
+      const wrapper = mount(BundledPluginsSettings)
+      await flushPromises()
+      expect(wrapper.find('[role="switch"]').exists()).toBe(false)
+      await wrapper.get('[role="alert"] button').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('[data-plugin-id="calculator"] [role="switch"]').attributes('aria-checked')).toBe('false')
+      expect(window.ztools.config.set).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('读取已有名单失败时保留磁盘选择，可以重试', async () => {
+      configStore[HIDDEN_BUNDLED_CONFIG_KEY] = '["memo"]'
+      window.ztools.config.get.mockRejectedValueOnce(new Error('读取失败'))
+      await expect(store.hideBundledPlugin('calculator')).rejects.toThrow('读取失败')
+      expect(window.ztools.config.set).not.toHaveBeenCalled()
+      expect(store.isTogglingBundled('calculator')).toBe(false)
+      await store.hideBundledPlugin('calculator')
+      expect(JSON.parse(configStore[HIDDEN_BUNDLED_CONFIG_KEY])).toEqual(['memo', 'calculator'])
     })
 
     it('[并发] 同一内置插件连续高频触发时互斥拦截，返回 busy: true 不并发覆盖写配置', async () => {

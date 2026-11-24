@@ -73,7 +73,7 @@ test('源文件变化、目标存在和写入失败不会报告成功', async ()
   assert.ok('summary' in inspected)
   const params = { action: 'slim', path: input, outputPath: output, operationId: 'slim', digest: inspected.summary!.digest }
   f.failWrite(); await assert.rejects(f.service.execute(params, caller, signal()), /已存在/)
-  f.change(buildZipFixture(entries(), false, true)); await assert.rejects(f.service.execute(params, caller, signal()), /源文档已变化/)
+  f.change(buildZipFixture(entries(), false, true)); await assert.rejects(f.service.execute(params, caller, signal()), /Source document changed/)
   assert.equal(f.writes(), 1); assert.equal(f.output(), undefined)
 })
 test('取消与停机不读取、不保存；未知字段、原始路径和畸形 digest 拒绝', async () => {
@@ -110,17 +110,17 @@ test('[回归] 无批注的表格含解压后超过 8 MiB 的大工作表：检�
 test('[破坏性] 不建 DOM 的大部件仍拒绝 DTD 与实体定义', () => {
   const source = entries('xlsx')
   source.push({ name: 'xl/worksheets/sheet1.xml', isDirectory: false, data: Buffer.from('<!DOCTYPE x [<!ENTITY a "b">]><worksheet>&a;</worksheet>') })
-  assert.throws(() => inspectOffice(source), /DTD 或实体/)
+  assert.throws(() => inspectOffice(source), /DTD or entity/)
 })
 test('带数字签名文档拒绝改写', () => {
   const source = entries(); source.push({ name: '_xmlsignatures/sig1.xml', isDirectory: false, data: Buffer.from('<signature/>') })
-  assert.throws(() => inspectOffice(source), /数字签名/)
+  assert.throws(() => inspectOffice(source), /Digitally signed/)
 })
 test('宏文档与模板的 ContentType 不能冒充普通格式', () => {
   for (const contentType of ['application/vnd.ms-word.document.macroEnabled.main+xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml']) {
     const source = entries(), types = source.find(e => e.name === '[Content_Types].xml')!
     types.data = Buffer.from(types.data.toString().replace('application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml', contentType))
-    assert.throws(() => inspectOffice(source), /宏文档或模板/)
+    assert.throws(() => inspectOffice(source), /macro-enabled or template/)
   }
 })
 test('停机中断正在读取的操作，同一窗口并发禁止且结束后释放占用', async () => {
@@ -130,7 +130,7 @@ test('停机中断正在读取的操作，同一窗口并发禁止且结束后�
     writeFile: async () => { writes++; throw new Error('不应写入') }
   })
   const pending = service.execute({ action: 'inspect', path: input, operationId: 'inspect' }, caller, signal())
-  await assert.rejects(service.execute({ action: 'inspect', path: input, operationId: 'inspect' }, caller, signal()), /正在处理中/)
+  await assert.rejects(service.execute({ action: 'inspect', path: input, operationId: 'inspect' }, caller, signal()), /already in progress/)
   service.stop(); finish(buildZipFixture(entries())); await assert.rejects(pending)
   assert.equal(reads, 1); assert.equal(writes, 0)
 })
@@ -164,7 +164,7 @@ test('导出原图 ZIP 只含真实解压后的图片，源文件不变', async 
 test('输出原路径被拒绝，错误后允许重新另存', async () => {
   const f = fixture(), inspected = await f.service.execute({ action: 'inspect', path: input, operationId: 'inspect' }, caller, signal())
   assert.ok('summary' in inspected)
-  await assert.rejects(f.service.execute({ action: 'slim', path: input, outputPath: input, operationId: 'slim', digest: inspected.summary!.digest }, caller, signal()), /不能覆盖原文件/)
+  await assert.rejects(f.service.execute({ action: 'slim', path: input, outputPath: input, operationId: 'slim', digest: inspected.summary!.digest }, caller, signal()), /overwriting the source file is not allowed/)
   assert.equal(f.writes(), 0)
   await f.service.execute({ action: 'slim', path: input, outputPath: output, operationId: 'retry', digest: inspected.summary!.digest }, caller, signal())
   assert.equal(f.writes(), 1)

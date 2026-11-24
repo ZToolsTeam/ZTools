@@ -94,7 +94,7 @@ test('ApplicationsService: 注册表扫描与拼音检索测试', async () => {
   // 4. 异常处理：不存在的软件
   await assert.rejects(
     async () => service.launchUninstall('non-existent-app'),
-    /未找到应用程序/
+    /Application not found/
   )
 
   // 5. 缓存与 forceRefresh 机制

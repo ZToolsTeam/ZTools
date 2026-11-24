@@ -27,7 +27,7 @@ export class StartupManagerService {
     if (request.action === 'scan') {
       this.#scans.delete(key)
       const { result, snapshots } = await this.reader.scan(signal)
-      const backups = await this.backups.list().catch(error => { result.warnings.push(`恢复记录读取失败：${String(error).slice(0, 700)}`); return [] })
+      const backups = await this.backups.list().catch(error => { result.warnings.push(`Failed to read recovery records: ${String(error).slice(0, 700)}`); return [] })
       signal.throwIfAborted()
       if (this.#scans.size >= 8) this.#scans.delete(this.#scans.keys().next().value!)
       this.#scans.set(key, { window: caller.webContentsId, entries: snapshots })
@@ -41,23 +41,23 @@ export class StartupManagerService {
     }
     if (request.action === 'set-enabled' || request.action === 'remove') {
       const item = this.#scans.get(key)?.entries.find(entry => entry.item.id === request.id)
-      if (!item) throw new Error('请先在当前窗口扫描，再选择启动项操作')
+      if (!item) throw new Error('Please scan in the current window before performing startup item actions')
       try { return request.action === 'set-enabled' ? await this.#transactions.toggle(item, request.enabled, signal) : await this.#transactions.remove(item, signal) }
       finally { this.#scans.clear() }
     }
-    throw new Error('启动管理操作无效')
+    throw new Error('Invalid startup manager action')
   }
   async handle(value: unknown, caller: CallerIdentity, signal: AbortSignal): Promise<unknown> {
     try {
       validateStartupRequest(value); signal.throwIfAborted()
-      if (this.#closed || this.platform !== 'darwin') throw new Error('Mac 启动管理服务不可用')
+      if (this.#closed || this.platform !== 'darwin') throw new Error('Mac startup manager service is unavailable')
       const key = owner(caller)
       if (value.action === 'cancel') {
         const job = this.#job, matched = job?.owner === key && job.operationId === value.operationId
         if (job && matched) { job.controller.abort(); await Promise.allSettled([job.done]) }
         return { success: true, cancelled: matched }
       }
-      if (this.#job) throw new Error('另一项启动管理操作尚未结束，请稍后重试')
+      if (this.#job) throw new Error('Another startup management operation is still in progress; please retry later')
       const controller = new AbortController(), abort = AbortSignal.any([signal, controller.signal, AbortSignal.timeout(value.action === 'scan' ? 20000 : 100000)])
       const done = this.#execute(value, caller, abort)
       this.#job = { owner: key, window: caller.webContentsId, operationId: value.operationId, controller, done }

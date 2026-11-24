@@ -9,18 +9,18 @@ export class OwnedPathAccessProvider implements PathAccessProvider {
   readonly #closing = new Map<number, Promise<void>>()
   #stopping?: Promise<void>
   constructor(readonly platform: 'win32' | 'darwin', private readonly create: () => PathAccessAdapter) {
-    if (!['win32', 'darwin'].includes(platform)) throw new ZToolsError(errorCodes.notSupported, '原生文件平台不受支持')
+    if (!['win32', 'darwin'].includes(platform)) throw new ZToolsError(errorCodes.notSupported, 'Unsupported platform for native file access')
   }
   forOwner(owner: number): PathAccessAdapter {
-    if (!Number.isSafeInteger(owner) || owner <= 0 || this.#stopping || this.#closing.has(owner)) throw new ZToolsError(errorCodes.permissionDenied, '文件授权owner已关闭')
+    if (!Number.isSafeInteger(owner) || owner <= 0 || this.#stopping || this.#closing.has(owner)) throw new ZToolsError(errorCodes.permissionDenied, 'File authorization owner is closed')
     const existing = this.#adapters.get(owner)
     if (existing) return existing
-    if (this.#adapters.size >= 32) throw new ZToolsError(errorCodes.fileError, '原生文件owner并发上限')
+    if (this.#adapters.size >= 32) throw new ZToolsError(errorCodes.fileError, 'Native file owner concurrency limit reached')
     const adapter = this.create()
     this.#adapters.set(owner, adapter)
     if (adapter.platform !== this.platform) {
       void this.closeOwner(owner).catch(() => {})
-      throw new ZToolsError(errorCodes.fileError, '原生文件平台不匹配')
+      throw new ZToolsError(errorCodes.fileError, 'Native file platform mismatch')
     }
     return adapter
   }
@@ -36,7 +36,7 @@ export class OwnedPathAccessProvider implements PathAccessProvider {
     if (this.#stopping) return this.#stopping
     this.#stopping = (async () => {
       const results = await Promise.allSettled([...this.#adapters.keys()].map(owner => this.closeOwner(owner)).concat([...this.#closing.values()]))
-      if (results.some(result => result.status === 'rejected')) throw new ZToolsError(errorCodes.fileError, '原生文件owner停止未确认')
+      if (results.some(result => result.status === 'rejected')) throw new ZToolsError(errorCodes.fileError, 'Native file owner shutdown was not confirmed')
     })()
     return this.#stopping
   }

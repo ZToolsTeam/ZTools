@@ -53,21 +53,21 @@ test('共享库空历史覆盖旧历史；坏共享库报告错误，不偷偷�
     db.exec('CREATE TABLE ItemTable(key TEXT,value TEXT)'); db.prepare('INSERT INTO ItemTable VALUES(?,?)').run('history.recentlyOpenedPathsList', '{"entries":[]}')
     assert.equal(scanRecentProjects(f.env).projects.length, 0)
     db.exec("UPDATE ItemTable SET value='invalid'")
-    assert.throws(() => scanRecentProjects(f.env), /无法读取/)
+    assert.throws(() => scanRecentProjects(f.env), /Failed to read project history/)
   } finally { db.close(); f.close() }
 })
 test('SQLite 拒绝生成列、VIEW、巨型值和重复历史 key；错误后仍能重试', () => {
   const f = fixture(), file = path.join(f.home, 'bad.db')
   try {
     for (const schema of ["CREATE TABLE ItemTable(key TEXT,value TEXT GENERATED ALWAYS AS (hex(zeroblob(1000000000))) VIRTUAL)", "CREATE VIEW ItemTable AS SELECT 'history.recentlyOpenedPathsList' AS key, 'bad' AS value"]) {
-      const db = new DatabaseSync(file); db.exec(schema); db.close(); assert.throws(() => readRecentProjectsDatabase(file), /结构/); fs.unlinkSync(file)
+      const db = new DatabaseSync(file); db.exec(schema); db.close(); assert.throws(() => readRecentProjectsDatabase(file), /structure/); fs.unlinkSync(file)
     }
     const db = new DatabaseSync(file)
     try {
       db.exec("CREATE TABLE ItemTable(key TEXT,value BLOB); INSERT INTO ItemTable VALUES('history.recentlyOpenedPathsList',zeroblob(4194305))")
-      assert.throws(() => readRecentProjectsDatabase(file), /类型无效|超过/)
+      assert.throws(() => readRecentProjectsDatabase(file), /invalid type|exceeds/)
       db.exec("UPDATE ItemTable SET value='{}'; INSERT INTO ItemTable SELECT * FROM ItemTable")
-      assert.throws(() => readRecentProjectsDatabase(file), /类型无效/)
+      assert.throws(() => readRecentProjectsDatabase(file), /invalid type/)
     } finally { db.close() }
     assert.equal(scanRecentProjects(f.env).projects.length, 1)
   } finally { f.close() }
@@ -76,8 +76,8 @@ test('真实 XML：实体解码、两种目录变量、真实时间；非法实�
   const xml = '<application><component name="RecentProjectsManager"><option name="additionalInfo"><map><entry key="$USER_HOME$/A &amp; B"><value><RecentProjectMetaInfo><option name="activationTimestamp" value="1700000000000"/></RecentProjectMetaInfo></value></entry></map></option><option name="lastOpenedProject" value="$APPLICATION_CONFIG_DIR$/scratch"/></component></application>'
   const rows = parseJetBrainsHistory(xml, '/tmp/home$&', '/tmp/config', path.posix)
   assert.equal(rows[0]!.path, '/tmp/home$&/A & B'); assert.equal(rows[0]!.timestamp, 1700000000000); assert.equal(rows[1]!.path, '/tmp/config/scratch'); assert.equal(rows[1]!.timestamp, null)
-  assert.throws(() => parseJetBrainsHistory('<!DOCTYPE x []>' + xml, '/tmp'), /声明/)
-  assert.throws(() => parseVscHistory('{"entries":[{"folderUri":"file:///a%00b"}]}', '/tmp', path.posix), /路径/)
+  assert.throws(() => parseJetBrainsHistory('<!DOCTYPE x []>' + xml, '/tmp'), /declarations/)
+  assert.throws(() => parseVscHistory('{"entries":[{"folderUri":"file:///a%00b"}]}', '/tmp', path.posix), /path/i)
   const paths = parseVscHistory('{"entries":[{"folderUri":"file:///tmp/A"},{"folderUri":"file:///tmp/a"}]}', '/tmp', path.posix).projects
   assert.equal(paths.length, 2); assert.notEqual(paths[0]!.path, paths[1]!.path)
 })
@@ -89,7 +89,7 @@ test('Git worktree 与异常文件：工作树 HEAD 正确，FIFO 不阻塞读�
     assert.equal(item.gitBranch, 'aaaaaaa')
     if (process.platform === 'darwin') {
       const fifo = path.join(f.home, 'pipe'); execFileSync('/usr/bin/mkfifo', [fifo])
-      const start = Date.now(); assert.throws(() => readProjectText(fifo), /普通文件/); assert.ok(Date.now() - start < 1000)
+      const start = Date.now(); assert.throws(() => readProjectText(fifo), /regular file/); assert.ok(Date.now() - start < 1000)
     }
   } finally { f.close() }
 })
@@ -98,11 +98,11 @@ test('owner 隔离、取消、关闭、停止；扫描失败清除旧条目，�
   const service = new RecentProjectsService(f.env, readProjectsInWorker, async () => { launched++; throw new Error('编辑器启动失败') }, 'darwin')
   try {
     const r = await service.handle({ action: 'scan', operationId: 'x' }, caller, signal()) as RecentProjectsScan, id = r.projects[0]!.id
-    await assert.rejects(service.handle({ action: 'open', id }, { ...caller, pluginId: 'other' }, signal()), /不属于/); assert.equal(launched, 0)
+    await assert.rejects(service.handle({ action: 'open', id }, { ...caller, pluginId: 'other' }, signal()), /does not belong/); assert.equal(launched, 0)
     await assert.rejects(service.handle({ action: 'open', id }, caller, signal()), /启动失败/); assert.equal(launched, 1)
-    service.closeOwner(caller.webContentsId); await assert.rejects(service.handle({ action: 'open', id }, caller, signal()), /过期/)
+    service.closeOwner(caller.webContentsId); await assert.rejects(service.handle({ action: 'open', id }, caller, signal()), /expired/)
     const controller = new AbortController(); controller.abort(); await assert.rejects(service.handle({ action: 'scan', operationId: 'cancelled' }, caller, controller.signal))
-    await service.stop(); await assert.rejects(service.handle({ action: 'scan', operationId: 'stopped' }, caller, signal()), /不可用/)
+    await service.stop(); await assert.rejects(service.handle({ action: 'scan', operationId: 'stopped' }, caller, signal()), /unavailable/)
   } finally { await service.stop(); f.close() }
 })
 test('服务并发和运行中的取消不留下可打开的记录，之后可重试', async () => {
@@ -110,7 +110,7 @@ test('服务并发和运行中的取消不留下可打开的记录，之后可�
   const service = new RecentProjectsService(f.env, async (_env, abort) => { started = true; return new Promise((_resolve, reject) => abort.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })) }, undefined, 'darwin')
   try {
     const job = service.handle({ action: 'scan', operationId: 'pending' }, caller, signal()); const failure = assert.rejects(job, /cancelled/)
-    assert.equal(started, true); await assert.rejects(service.handle({ action: 'scan', operationId: 'second' }, caller, signal()), /正在进行/)
+    assert.equal(started, true); await assert.rejects(service.handle({ action: 'scan', operationId: 'second' }, caller, signal()), /already in progress/)
     assert.equal((await service.handle({ action: 'cancel', operationId: 'wrong' }, caller, signal()) as { cancelled: boolean }).cancelled, false)
     await service.handle({ action: 'cancel', operationId: 'pending' }, caller, signal()); await failure
   } finally { await service.stop(); f.close() }
@@ -119,10 +119,10 @@ test('启动时再次检查路径；已移除项目不会进入系统打开命�
   const f = fixture()
   try {
     const p = scanRecentProjects(f.env).projects[0]!
-    // 路径已删除：给出中文原因，不透出 Node 原始错误文本
-    fs.rmdirSync(f.project); await assert.rejects(launchRecentProject(p, 'open', signal()), (e: Error) => /^项目路径不存在/.test(e.message) && !/ENOENT|no such file/.test(e.message))
+    // 路径已删除：给出明确原因，不透出 Node 原始错误文本
+    fs.rmdirSync(f.project); await assert.rejects(launchRecentProject(p, 'open', signal()), (e: Error) => /^Project path does not exist/.test(e.message) && !/ENOENT|no such file/.test(e.message))
     // 项目文件夹被替换成同名普通文件：类型已改变
-    fs.writeFileSync(f.project, 'x'); await assert.rejects(launchRecentProject(p, 'terminal', signal()), /类型已改变/)
+    fs.writeFileSync(f.project, 'x'); await assert.rejects(launchRecentProject(p, 'terminal', signal()), /Project path type changed/)
   } finally { f.close() }
 })
 test('辅助进程真实取消、超时和输出溢出都等待退出；路径参数不经过 shell 展开', async () => {
@@ -131,13 +131,13 @@ test('辅助进程真实取消、超时和输出溢出都等待退出；路径�
   try {
     const args = ['-e', script, marker], controller = new AbortController()
     const job = runProjectCommand(process.execPath, args, controller.signal, 5000)
-    const rejected = assert.rejects(job, /取消/)
+    const rejected = assert.rejects(job, /cancelled/)
     for (let n = 0; n < 100 && !fs.existsSync(marker); n++) await new Promise(r => setTimeout(r, 10))
     const pid = Number(fs.readFileSync(marker, 'utf8')); controller.abort(); await rejected
     assert.throws(() => process.kill(pid, 0), /ESRCH/)
-    await assert.rejects(runProjectCommand(process.execPath, args, signal(), 150), /超时/)
+    await assert.rejects(runProjectCommand(process.execPath, args, signal(), 150), /timed out/)
     assert.throws(() => process.kill(Number(fs.readFileSync(marker, 'utf8')), 0), /ESRCH/)
-    await assert.rejects(runProjectCommand(process.execPath, ['-e', "process.stdout.write('a'.repeat(100000));setInterval(()=>{},1000)"], signal(), 5000), /输出超限/)
+    await assert.rejects(runProjectCommand(process.execPath, ['-e', "process.stdout.write('a'.repeat(100000));setInterval(()=>{},1000)"], signal(), 5000), /output exceeded limit/)
     const literal = '空格 $&;$(echo BAD)'
     assert.equal((await runProjectCommand(process.execPath, ['-e', 'process.stdout.write(process.argv[1])', literal], signal(), 1000)), literal)
   } finally { f.close() }
@@ -152,7 +152,7 @@ test('Windows：配置根目录取 APPDATA，结果校验接受盘符与 UNC 路
   const row = (p: string) => ({ id: 'c'.repeat(64), path: p, name: 'x', editor: 'vscode', editorName: 'VS Code', family: 'vsc', kind: 'folder', lastOpenedMs: null, gitBranch: null, pathState: 'available', pathError: null })
   const scan = (p: string) => validateRecentProjectsScan({ success: true, projects: [row(p)], warnings: [], sourcesRead: 1, skippedRemote: 0 })
   for (const ok of ['/Users/a/proj', 'C:\\work\\proj', '\\\\server\\share\\proj']) assert.equal(scan(ok).projects[0]!.path, ok)
-  for (const bad of ['proj', 'C:proj', 'C:/work/proj', 'file:///C:/work']) assert.throws(() => scan(bad), /条目无效/)
+  for (const bad of ['proj', 'C:proj', 'C:/work/proj', 'file:///C:/work']) assert.throws(() => scan(bad), /Invalid project history entry/)
   // 非 Windows 上盘符路径不能当本地路径：按远程记录跳过，不报错也不伪造路径
   if (path.sep === '/') {
     const xml = '<application><component name="RecentProjectsManager"><option name="additionalInfo"><map><entry key="C:/work/proj"><value/></entry></map></option></component></application>'
@@ -163,6 +163,6 @@ test('Windows：配置根目录取 APPDATA，结果校验接受盘符与 UNC 路
     const win = new RecentProjectsService(f.env, readProjectsInWorker, undefined, 'win32')
     try { assert.equal((await win.handle({ action: 'scan', operationId: 'w' }, caller, signal()) as RecentProjectsScan).projects.length, 1) } finally { await win.stop() }
     const linux = new RecentProjectsService(f.env, readProjectsInWorker, undefined, 'linux')
-    try { await assert.rejects(linux.handle({ action: 'scan', operationId: 'l' }, caller, signal()), /不可用/) } finally { await linux.stop() }
+    try { await assert.rejects(linux.handle({ action: 'scan', operationId: 'l' }, caller, signal()), /unavailable/) } finally { await linux.stop() }
   } finally { f.close() }
 })

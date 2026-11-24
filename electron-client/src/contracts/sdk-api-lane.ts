@@ -8,11 +8,11 @@ export type SdkApiUse = 'stable' | 'file-reference' | 'native-reference'
 const knownLanes = new Set<number>(SUPPORTED_SDK_API_LANES)
 
 function unsupported(): never {
-  throw new ZToolsError(errorCodes.notSupported, '当前 SDK API lane 不受支持')
+  throw new ZToolsError(errorCodes.notSupported, 'Unsupported SDK API lane')
 }
 
 function invalidTargetLane(): never {
-  throw new ZToolsError(errorCodes.pluginPackageInvalid, '插件目标 SDK 契约版本无效')
+  throw new ZToolsError(errorCodes.pluginPackageInvalid, 'Invalid plugin target SDK contract version')
 }
 
 export function validateSdkApiHostMaximum(value: unknown): SdkApiLane {

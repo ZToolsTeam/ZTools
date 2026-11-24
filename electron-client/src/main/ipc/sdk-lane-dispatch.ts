@@ -1,5 +1,6 @@
 import type { CallerIdentity } from '../../contracts/capabilities.js'
-import { errorCodes, toPublicError, ZToolsError } from '../../contracts/errors.js'
+import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import { toLocalizedPublicError } from './error-localizer.js'
 import { SDK_HOST_MAXIMUM_CONTRACT_VERSION } from '../../contracts/protocol-versions.js'
 import type { ZToolsResponse } from '../../contracts/ipc.js'
 import { parseSdkLaneHandshake, type SdkLaneHandshake } from '../../contracts/sdk-lane-handshake.js'
@@ -156,15 +157,15 @@ export async function dispatchTrustedSdkLaneCall(options: {
   if (decision.kind === 'legacy') return options.legacy(decision.context)
   if (decision.kind === 'reject') {
     const message = decision.code === errorCodes.permissionDenied
-      ? '调用者身份或页面无效'
-      : 'SDK API lane 或适配器尚未启用'
+      ? 'Invalid caller identity or page'
+      : 'SDK API lane or adapter is not enabled'
     return dispatchFailure(value, decision.code, message)
   }
   if (!isCurrentTrustedSdkLaneContext(decision.context)) {
-    return dispatchFailure(value, errorCodes.permissionDenied, '调用者身份或页面已失效')
+    return dispatchFailure(value, errorCodes.permissionDenied, 'Caller identity or page is no longer valid')
   }
   if (!options.reference) {
-    return dispatchFailure(value, errorCodes.notSupported, '文件引用运行时尚未接线')
+    return dispatchFailure(value, errorCodes.notSupported, 'File reference runtime is not wired')
   }
   return options.reference.call(event, value)
 }
@@ -180,7 +181,7 @@ function dispatchFailure(
   return {
     messageId: typeof messageId === 'string' && /^[A-Za-z0-9:_-]{1,128}$/.test(messageId) ? messageId : 'invalid',
     success: false,
-    error: toPublicError(new ZToolsError(code, message))
+    error: toLocalizedPublicError(new ZToolsError(code, message))
   }
 }
 

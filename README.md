@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.ztools.cn">Website</a> ·
+  <a href="https://www.ztools.cn/en/">Website</a> ·
   <a href="https://github.com/ZToolsTeam/ZTools/releases">Releases</a> ·
   <a href="https://github.com/ZToolsTeam/ZTools-extensions">Extensions</a> ·
   <a href="https://github.com/ZToolsTeam/ZTools/issues">Issues</a>

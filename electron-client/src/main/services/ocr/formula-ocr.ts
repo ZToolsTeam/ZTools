@@ -95,7 +95,7 @@ function prepareRecognition(source: FormulaImage, includePreview: boolean) {
     try {
       previewDataUrl = createFormulaPreview(source)
     } catch (error) {
-      console.warn('[FormulaOcr] 无法生成原图预览:', error)
+      console.warn('[FormulaOcr] Unable to generate image preview:', error)
     }
   }
   return { prepared, previewDataUrl }
@@ -107,7 +107,7 @@ export class FormulaOcrEngine extends OcrWorkerEngine<FormulaResult> {
       // 长公式逐词元解码较慢，超时比文字识别宽
       timeoutMs: 60_000,
       ...options,
-      label: '公式识别',
+      label: 'Formula OCR',
       parseResult: response => typeof response.latex === 'string' && typeof response.score === 'number' && Number.isFinite(response.score)
         ? { latex: response.latex, score: Math.min(1, Math.max(0, response.score)) }
         : undefined
@@ -130,9 +130,9 @@ export function createFormulaOcr(dependencies: {
     downloadModel: () => store.download(),
     cancelDownload: () => store.cancel(),
     async recognizeImage(imagePath, signal, options) {
-      if (!(await store.isReady())) throw new ZToolsError(errorCodes.serviceUnavailable, '公式识别模型还没有下载')
+      if (!(await store.isReady())) throw new ZToolsError(errorCodes.serviceUnavailable, 'Formula OCR model has not been downloaded')
       const { prepared, previewDataUrl } = prepareRecognition(dependencies.createImageFromPath(imagePath), options?.includePreview === true)
-      if (!prepared) throw new ZToolsError(errorCodes.fileError, '无法读取图片，请确认文件未损坏且格式受支持')
+      if (!prepared) throw new ZToolsError(errorCodes.fileError, 'Unable to read image; ensure the file is intact and in a supported format')
       if (prepared === 'blank') return { latex: '', score: 0 }
       try {
         const result = await engine.recognize(prepared, signal)
@@ -141,7 +141,7 @@ export function createFormulaOcr(dependencies: {
         // 子进程读不到模型文件（被手动删除或清理）：重新核对模型，界面会回到下载入口
         if (error instanceof Error && /ENOENT|no such file/i.test(error.message)) {
           store.invalidate()
-          throw new ZToolsError(errorCodes.fileError, '公式识别模型文件缺失，请重新下载模型')
+          throw new ZToolsError(errorCodes.fileError, 'Formula OCR model files are missing; please download the model again')
         }
         throw error
       }

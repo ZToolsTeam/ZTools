@@ -39,7 +39,7 @@ function isUserFacingMacMount(mount: unknown): mount is string {
 
 export function parseMacVolumes(data: unknown): MountedVolume[] {
   const root = data as { AllDisksAndPartitions?: unknown[] }
-  if (!Array.isArray(root?.AllDisksAndPartitions)) throw new Error('挂载卷列表格式无效')
+  if (!Array.isArray(root?.AllDisksAndPartitions)) throw new Error('Invalid mounted volume list format')
   const mounted = new Map<string, MountedVolume>()
   const visit = (value: unknown, group = '', fsType = '') => {
     if (!value || typeof value !== 'object') return
@@ -71,27 +71,27 @@ export async function listSystemVolumes(platform: NodeJS.Platform = process.plat
     const text = await deps.run(executable, ['-NoProfile', '-NonInteractive', '-Command', "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; @(Get-CimInstance Win32_Volume | Where-Object { $_.Name -and $_.Name -notlike '\\\\?\\Volume*' -and $_.Capacity -gt 0 } | Select-Object Name,Label,FileSystem,Capacity,FreeSpace,DeviceID) | ConvertTo-Json -Compress"])
     const body = text.replace(/^\uFEFF/, '').trim()
     // PowerShell 5.1 对空数组 ConvertTo-Json 不输出任何内容
-    if (!body) throw new Error('没有读取到已挂载卷')
+    if (!body) throw new Error('No mounted volumes detected')
     let parsed: unknown
-    try { parsed = JSON.parse(body) } catch { throw new Error('挂载卷列表输出不是有效 JSON') }
+    try { parsed = JSON.parse(body) } catch { throw new Error('Mounted volume list output is not valid JSON') }
     const rows: unknown[] = Array.isArray(parsed) ? parsed : parsed ? [parsed] : []
     const volumes: SystemVolume[] = []
     const errors: string[] = []
     for (const value of rows) {
-      if (!value || typeof value !== 'object') { errors.push('挂载卷数据无效'); continue }
+      if (!value || typeof value !== 'object') { errors.push('Invalid mounted volume entry'); continue }
       const row = value as Record<string, unknown>
       if (typeof row.Name === 'string' && /^\\\\[?.]\\volume\{/i.test(row.Name)) continue
       // null（如 BitLocker 锁定卷读不到剩余空间）不能按 0 处理，否则会显示成“已用 100%”
       const totalBytes = typeof row.Capacity === 'number' ? row.Capacity : Number.NaN, availableBytes = typeof row.FreeSpace === 'number' ? row.FreeSpace : Number.NaN
       const name = typeof row.Name === 'string' ? row.Name : ''
-      if (!name || !path.win32.isAbsolute(name)) { errors.push('挂载卷路径无效'); continue }
-      if (!Number.isFinite(totalBytes) || totalBytes <= 0 || !Number.isFinite(availableBytes) || availableBytes < 0 || availableBytes > totalBytes) { errors.push(`${name}: 卷容量读取失败`); continue }
+      if (!name || !path.win32.isAbsolute(name)) { errors.push('Invalid mounted volume path'); continue }
+      if (!Number.isFinite(totalBytes) || totalBytes <= 0 || !Number.isFinite(availableBytes) || availableBytes < 0 || availableBytes > totalBytes) { errors.push(`${name}: failed to read volume capacity`); continue }
       volumes.push({ path: name, label: String(row.Label || name), fileSystem: String(row.FileSystem || ''), totalBytes, availableBytes, usedBytes: totalBytes - availableBytes, capacityGroup: String(row.DeviceID || name) })
     }
-    if (!volumes.length) throw new Error(errors.join('；') || '没有读取到已挂载卷')
+    if (!volumes.length) throw new Error(errors.join('; ') || 'No mounted volumes detected')
     return { volumes, partial: errors.length > 0, errors }
   }
-  if (platform !== 'darwin') throw new Error('当前平台不支持挂载卷枚举')
+  if (platform !== 'darwin') throw new Error('Mounted volume enumeration is not supported on this platform')
   const plist = await deps.run('/usr/sbin/diskutil', ['list', '-plist'])
   const mounts = parseMacVolumes(JSON.parse(await deps.run('/usr/bin/plutil', ['-convert', 'json', '-o', '-', '-'], plist)))
   const errors: string[] = []
@@ -101,11 +101,11 @@ export async function listSystemVolumes(platform: NodeJS.Platform = process.plat
       const stat = await deps.statfs(mount.path)
       const totalBytes = stat.blocks * stat.bsize, availableBytes = stat.bavail * stat.bsize
       const usedBytes = Math.max(0, totalBytes - stat.bfree * stat.bsize)
-      if (!Number.isFinite(totalBytes) || totalBytes <= 0 || !Number.isFinite(availableBytes) || availableBytes < 0 || availableBytes > totalBytes) throw new Error('卷容量无效')
+      if (!Number.isFinite(totalBytes) || totalBytes <= 0 || !Number.isFinite(availableBytes) || availableBytes < 0 || availableBytes > totalBytes) throw new Error('Invalid volume capacity')
       volumes.push({ ...mount, totalBytes, usedBytes, availableBytes })
     } catch (error) { errors.push(`${mount.path}: ${error instanceof Error ? error.message : String(error)}`) }
   }))
-  if (!volumes.length) throw new Error(errors.join('；') || '没有读取到已挂载卷')
+  if (!volumes.length) throw new Error(errors.join('; ') || 'No mounted volumes detected')
   volumes.sort((a, b) => a.path.localeCompare(b.path))
   return { volumes, partial: errors.length > 0, errors }
 }

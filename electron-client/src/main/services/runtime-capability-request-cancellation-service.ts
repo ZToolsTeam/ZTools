@@ -25,11 +25,11 @@ export class RuntimeCapabilityRequestCancellationService {
 
   begin(owner: CallerIdentity, messageId: string, controller: AbortController): () => void {
     this.#assertRequest(owner, messageId)
-    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
     this.#prune()
     const key = ownerKey(owner)
     const requests = this.#active.get(key) ?? new Map<string, ActiveRequest>()
-    if (requests.has(messageId)) throw new ZToolsError(errorCodes.invalidRequest, '屏幕权限申请标识正在使用')
+    if (requests.has(messageId)) throw new ZToolsError(errorCodes.invalidRequest, 'Screen permission request ID is already in use')
     const cancellations = this.#early.get(key)
     const early = cancellations?.get(messageId)
     if (early) {
@@ -49,7 +49,7 @@ export class RuntimeCapabilityRequestCancellationService {
 
   cancel(owner: CallerIdentity, messageId: string, reason: 'cancel' | 'timeout'): { requested: boolean } {
     this.#assertRequest(owner, messageId)
-    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
     this.#prune()
     const key = ownerKey(owner)
     const active = this.#active.get(key)?.get(messageId)
@@ -60,7 +60,7 @@ export class RuntimeCapabilityRequestCancellationService {
     const requests = this.#early.get(key) ?? new Map<string, EarlyCancellation>()
     if (!requests.has(messageId)) {
       if (requests.size >= 64 || this.#earlyCount >= 256) {
-        throw new ZToolsError(errorCodes.pluginBusy, '屏幕权限取消请求超过上限')
+        throw new ZToolsError(errorCodes.pluginBusy, 'Screen permission cancellation request limit exceeded')
       }
       requests.set(messageId, { reason, expiresAt: this.now() + 10_000 })
       this.#early.set(key, requests)
@@ -116,7 +116,7 @@ export class RuntimeCapabilityRequestCancellationService {
     if (owner.type !== 'plugin' || !owner.pluginId || !owner.pluginInstanceId ||
         !Number.isSafeInteger(owner.webContentsId) || owner.webContentsId <= 0 ||
         typeof messageId !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(messageId)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '屏幕权限申请取消调用者无效')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Invalid caller for screen permission request cancellation')
     }
   }
 }

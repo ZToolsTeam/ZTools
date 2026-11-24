@@ -18,7 +18,7 @@ export async function readStartupBytes(file: string) {
   const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
     const before = await handle.stat()
-    if (!before.isFile() || before.nlink !== 1 || before.size > STARTUP_FILE_LIMIT) throw new Error('启动配置不是普通单链接文件或超过 1 MiB')
+    if (!before.isFile() || before.nlink !== 1 || before.size > STARTUP_FILE_LIMIT) throw new Error('Startup plist must be a single-link regular file not exceeding 1 MiB')
     const buffer = Buffer.alloc(STARTUP_FILE_LIMIT + 1)
     let length = 0
     while (length < buffer.length) {
@@ -27,7 +27,7 @@ export async function readStartupBytes(file: string) {
       length += read.bytesRead
     }
     const bytes = buffer.subarray(0, length), after = await handle.stat(), named = await fs.lstat(file)
-    if (bytes.length > STARTUP_FILE_LIMIT || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || before.size !== after.size || named.dev !== after.dev || named.ino !== after.ino) throw new Error('启动配置读取期间变化，请重新扫描')
+    if (bytes.length > STARTUP_FILE_LIMIT || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || before.size !== after.size || named.dev !== after.dev || named.ino !== after.ino) throw new Error('Startup plist changed while reading; please rescan')
     return { bytes, identity: `${after.dev}:${after.ino}`, revision: startupHash(bytes), uid: after.uid, mode: after.mode }
   } finally { await handle.close() }
 }
@@ -35,11 +35,11 @@ export async function readStartupBytes(file: string) {
 export function parseStartupOverrides(output: string) {
   const result = new Map<string, boolean>()
   const lines = output.trim().split(/\r?\n/)
-  if (lines.shift()?.trim() !== 'disabled services = {' || lines.pop()?.trim() !== '}') throw new Error('无法识别系统自启状态')
+  if (lines.shift()?.trim() !== 'disabled services = {' || lines.pop()?.trim() !== '}') throw new Error('Unrecognized system autostart overrides format')
   for (const line of lines) {
     if (!line.trim()) continue
     const match = /^\s*"([^"\r\n]+)"\s*=>\s*(true|false|enabled|disabled)\s*$/.exec(line)
-    if (!match || result.has(match[1]!)) throw new Error('系统自启状态包含无法识别或重复的条目')
+    if (!match || result.has(match[1]!)) throw new Error('System autostart overrides contain unrecognized or duplicate entries')
     result.set(match[1]!, match[2] === 'true' || match[2] === 'disabled')
   }
   return result
@@ -50,17 +50,17 @@ export async function readStartupLoaded(domain: string, label: string, signal: A
   if (reply.code === 113 && /Could not find service/.test(reply.stderr)) return { loaded: false, running: false, pid: null, loadedPath: null }
   const output = startupCommandOutput(reply)
   const state = /^\s*state = ([^\r\n]+)/m.exec(output)?.[1]?.trim()
-  if (!state) throw new Error('无法确认启动项当前运行状态')
+  if (!state) throw new Error('Unable to determine current running state of startup item')
   const pidText = /^\s*pid = (\d+)\s*$/m.exec(output)?.[1]
   const pid = pidText ? Number(pidText) : null
-  if (pid !== null && (!Number.isSafeInteger(pid) || pid <= 0)) throw new Error('启动项进程编号无效')
+  if (pid !== null && (!Number.isSafeInteger(pid) || pid <= 0)) throw new Error('Invalid process ID for startup item')
   const loadedPath = /^\s*path = ([^\r\n]+)$/m.exec(output)?.[1]?.trim() ?? null
   return { loaded: true, running: state === 'running', pid, loadedPath }
 }
 
 /** 空的 plist（<dict/>）launchd 不会加载，常见于软件用空文件屏蔽自己的更新代理；它不是启动项，也不是读取失败 */
 export class EmptyStartupPlistError extends Error {
-  constructor() { super('空的启动配置，launchd 不会加载') }
+  constructor() { super('Empty startup plist will not be loaded by launchd') }
 }
 
 const warningText = (error: unknown, limit: number) => (error instanceof Error ? error.message : String(error)).slice(0, limit)
@@ -68,12 +68,12 @@ const warningText = (error: unknown, limit: number) => (error instanceof Error ?
 export async function parseStartupPlist(bytes: Buffer, signal: AbortSignal, run: StartupCommand) {
   const value: unknown = JSON.parse(startupCommandOutput(await run(['-convert', 'json', '-o', '-', '--', '-'], signal, bytes)))
   if (startupRecord(value) && Object.keys(value).length === 0) throw new EmptyStartupPlistError()
-  if (!startupRecord(value) || typeof value.Label !== 'string' || !labelPattern.test(value.Label)) throw new Error('启动配置缺少有效 Label')
-  if (value.Disabled !== undefined && typeof value.Disabled !== 'boolean') throw new Error('启动配置 Disabled 不是布尔值')
+  if (!startupRecord(value) || typeof value.Label !== 'string' || !labelPattern.test(value.Label)) throw new Error('Startup plist is missing a valid Label')
+  if (value.Disabled !== undefined && typeof value.Disabled !== 'boolean') throw new Error('Startup plist Disabled field is not a boolean')
   const rawArgs = value.ProgramArguments ?? []
-  if (!Array.isArray(rawArgs) || rawArgs.length > 512 || rawArgs.some(v => typeof v !== 'string' || v.length > 16384 || v.includes('\0'))) throw new Error('启动命令参数无效')
+  if (!Array.isArray(rawArgs) || rawArgs.length > 512 || rawArgs.some(v => typeof v !== 'string' || v.length > 16384 || v.includes('\0'))) throw new Error('Invalid startup program arguments')
   const args = rawArgs as string[], program = value.Program ?? args[0]
-  if (typeof program !== 'string' || !program || program.length > 16384 || program.includes('\0')) throw new Error('启动配置缺少有效程序路径')
+  if (typeof program !== 'string' || !program || program.length > 16384 || program.includes('\0')) throw new Error('Startup plist is missing a valid program path')
   return { label: value.Label, program, args, disabled: value.Disabled === true,
     scheduled: value.StartInterval !== undefined || value.StartCalendarInterval !== undefined,
     background: value.KeepAlive !== undefined || value.MachServices !== undefined }
@@ -94,9 +94,9 @@ export class MacStartupReader {
     const domain = scope === 'daemon' ? 'system' : `gui/${this.env.uid}`, disabledOverride = overrides.get(config.label) ?? null
     const legacyDisabled = file.endsWith('.plist.disabled'), apple = config.label.startsWith('com.apple.')
     const current = await readStartupLoaded(domain, config.label, signal, this.run)
-    const blockedReason = apple ? '系统保护项' : legacyDisabled ? '旧版改名禁用的配置，需要恢复原文件名后重新扫描' :
-      current.loaded && current.loadedPath !== file ? '当前已加载的配置路径与扫描结果不一致' :
-      scope === 'user-agent' && (data.uid !== this.env.uid || (data.mode & 0o022)) ? '配置所有者或写入权限异常' : null
+    const blockedReason = apple ? 'System-protected item' : legacyDisabled ? 'Legacy rename-disabled configuration; restore original filename and rescan' :
+      current.loaded && current.loadedPath !== file ? 'Loaded configuration path does not match scanned file' :
+      scope === 'user-agent' && (data.uid !== this.env.uid || (data.mode & 0o022)) ? 'Unexpected file owner or write permissions' : null
     return { ...data, disabledOverride, plistDisabled: config.disabled, item: {
       id: startupHash(`${domain}\0${file}\0${config.label}`), label: config.label, file, domain, scope,
       program: config.program, args: config.args, scheduled: config.scheduled,
@@ -113,9 +113,9 @@ export class MacStartupReader {
     ]
     for (const domain of [`gui/${this.env.uid}`, 'system']) {
       try { domains.set(domain, parseStartupOverrides(startupCommandOutput(await this.run(['print-disabled', domain], signal)))) }
-      catch (error) { signal.throwIfAborted(); warnings.push(`${domain}：${warningText(error, 700)}`) }
+      catch (error) { signal.throwIfAborted(); warnings.push(`${domain}: ${warningText(error, 700)}`) }
     }
-    if (!domains.size) throw new Error(`无法读取系统启动状态：${warnings.join('；')}`)
+    if (!domains.size) throw new Error(`Failed to read system startup state: ${warnings.join('; ')}`)
     for (const { directory, scope } of sources) {
       signal.throwIfAborted()
       const overrides = domains.get(scope === 'daemon' ? 'system' : `gui/${this.env.uid}`)
@@ -126,10 +126,10 @@ export class MacStartupReader {
         readableDirectories++; candidates += names.length
       }
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') warnings.push(`${directory}：读取失败 ${warningText(error, 500)}`)
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') warnings.push(`${directory}: read failed ${warningText(error, 500)}`)
         continue
       }
-      if (names.length > 512) throw new Error('启动项超过单目录 512 项，请先在系统设置中检查')
+      if (names.length > 512) throw new Error('Startup items exceed 512 per directory; check System Settings first')
       for (const name of names) {
         try {
           const snapshot = await this.read(path.join(directory, name), scope, overrides, signal)
@@ -139,16 +139,16 @@ export class MacStartupReader {
         catch (error) {
           signal.throwIfAborted()
           if (error instanceof EmptyStartupPlistError) { candidates--; continue }
-          warnings.push(`${name}：${warningText(error, 700)}`)
+          warnings.push(`${name}: ${warningText(error, 700)}`)
         }
-        if (totalBytes > 16 * 1024 * 1024) throw new Error('启动配置合计超过 16 MiB，已停止扫描')
+        if (totalBytes > 16 * 1024 * 1024) throw new Error('Total startup configuration size exceeds 16 MiB; scan aborted')
       }
     }
-    if (!snapshots.length && warnings.length && (!readableDirectories || candidates)) throw new Error(`无法读取启动配置：${warnings.slice(0, 4).join('；')}`)
+    if (!snapshots.length && warnings.length && (!readableDirectories || candidates)) throw new Error(`Failed to read startup configurations: ${warnings.slice(0, 4).join('; ')}`)
     const seen = new Map<string, StartupSnapshot>()
     for (const s of snapshots) {
       const key = `${s.item.domain}/${s.item.label}`, previous = seen.get(key)
-      if (previous) { s.item.blockedReason = previous.item.blockedReason = '多个配置使用同一 Label，不能确定对应关系' }
+      if (previous) { s.item.blockedReason = previous.item.blockedReason = 'Multiple configurations share the same Label; mapping is ambiguous' }
       seen.set(key, s)
     }
     signal.throwIfAborted()

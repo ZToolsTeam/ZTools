@@ -184,7 +184,7 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
 
     const sysCat = wrapper.findAll('.sidebar-item').find((i) => i.text().includes('系统工具'))
     await sysCat.trigger('click')
-    expect(mockPush).toHaveBeenCalledWith({ ...ROUTES.LIST, params: { category: '系统工具' } })
+    expect(mockPush).toHaveBeenCalledWith({ ...ROUTES.LIST, params: { category: 'system' } })
     expect(sysCat.classes()).toContain('active')
   })
 

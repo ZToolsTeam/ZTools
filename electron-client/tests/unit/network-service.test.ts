@@ -214,7 +214,7 @@ test('network request only follows redirects for GET and HEAD, never resends uns
       })
       await assert.rejects(
         service.request({ method, url: 'https://example.com/start', body: 'private request body', timeout: 1000 } as Parameters<NetworkService['request']>[0], caller, new AbortController().signal),
-        (error) => error instanceof ZToolsError && error.code === errorCodes.networkError && error.message === '拒绝自动重定向非 GET/HEAD 请求'
+        (error) => error instanceof ZToolsError && error.code === errorCodes.networkError && error.message === 'Automatic redirect rejected for non-GET/HEAD request'
       )
       assert.equal(requestFactoryCalls, 1, `${method} ${statusCode} must not create a follow-up request`)
       assert.equal(request?.body, method === 'POST' || method === 'PUT' ? 'private request body' : undefined,
@@ -280,7 +280,7 @@ test('network request failures keep stable codes without exposing native error d
     service.request({ method: 'GET', url: 'https://example.com', timeout: 1000 }, caller, new AbortController().signal),
     (error) => error instanceof ZToolsError &&
       error.code === errorCodes.networkError &&
-      error.message === '网络请求失败' &&
+      error.message === 'Network request failed' &&
       !error.message.includes('secret@example.com')
   )
 })

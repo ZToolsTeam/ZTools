@@ -53,7 +53,7 @@ test('事件发送失败只记日志，不影响登录、退出本身', () => {
     'user.logout',
     (message) => { warnings.push(message) }
   ))
-  assert.deepEqual(warnings, ['发布 user.logout 事件失败:'])
+  assert.deepEqual(warnings, ['Failed to publish user.logout event:'])
 })
 
 test('插件与页面都不能伪造登录、退出事件（发布与请求通道都拦截），宿主仍可发出', () => {

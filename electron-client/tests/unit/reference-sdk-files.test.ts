@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import fs from 'node:fs'
-import path from 'node:path'
 import vm from 'node:vm'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 
 interface SDK {
   listWriteRecovery(options?: unknown): Promise<unknown>
@@ -27,15 +26,13 @@ const save = { grantId: 'b'.repeat(43), displayName: 'output.txt', kind: 'save',
 const directory = { grantId: 'c'.repeat(43), displayName: 'folder', kind: 'directory', operations: ['read', 'list', 'write'] }
 const artifact = { grantId: 'd'.repeat(43), displayName: 'output.txt', kind: 'file', operations: ['read'], fileUrl: 'ztools://file/' + 'd'.repeat(43) + '/output.txt' }
 function fixture(contractVersion = 2) {
-  const directory = path.resolve('../frontend/public/js/cef-ipc/src/api')
-  const source = fs.readFileSync(path.join(directory, 'fs-reference.js'), 'utf8').replace(/^export default .+$/m, '')
-  const legacy = fs.readFileSync(path.join(directory, 'fs.js'), 'utf8').replace(/^export default .+$/m, '')
-  const methods = Object.fromEntries([...source.matchAll(/'(filesystem_[a-z_]+)'/g)].map(match => [match[1], () => {}]))
+  const combinedSource = loadCefIpcSources(['api/fs', 'api/fs-reference'])
+  const methods = Object.fromEntries([...combinedSource.matchAll(/'(filesystem_[a-z_]+)'/g)].map(match => [match[1], () => {}]))
   const calls: { method: string; params: unknown }[] = []
   let response: unknown = { success: true, content: '文本', size: 6 }
   const transport = { call: async (method: string, params: unknown) => { calls.push({ method, params: JSON.parse(JSON.stringify(params)) }); return response } }
   const window = { __ztoolsElectron: { contractVersion, transport: { methods } }, _readFileArrayBuffer: () => { throw new Error('V8 must not be used') } }
-  const constructor = vm.runInNewContext(legacy + '\n' + source + '\nReferenceFileSystemAPI', {
+  const constructor = vm.runInNewContext(combinedSource + '\nReferenceFileSystemAPI', {
     window, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, atob, btoa
   }) as new (port: typeof transport) => SDK
   return { sdk: new constructor(transport), calls, window, response: (value: unknown) => { response = value } }

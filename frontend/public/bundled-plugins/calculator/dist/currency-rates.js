@@ -7,6 +7,7 @@
  * 拿不到真实数据时一律抛出 ExchangeRateError，绝不生成任何估算或演示假数据。
  */
 import { t, getCurrencyName } from "./i18n.js";
+import { CURRENCY_ZH_META } from "./currency-names.zh-data.js";
 export const LATEST_RATES_URL = "https://open.er-api.com/v6/latest/USD";
 export const RATES_URL = LATEST_RATES_URL;
 export const ASSET_QUOTES_URL = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,tether-gold&vs_currencies=usd";
@@ -22,26 +23,36 @@ export const NETWORK_POLICY = Object.freeze({
 });
 export const RATE_CACHE_KEY = "ztools-calculator-rate-cache-v2";
 export const SETTINGS_KEY = "ztools-calculator-currency-settings-v1";
+const CURRENCY_BASE_SPECS = [
+    { code: "CNY", symbol: "¥", keywords: ["rmb", "yuan"], exprAliases: ["rmb", "yuan"] },
+    { code: "USD", symbol: "$", keywords: ["dollar"], exprAliases: ["dollar", "dollars"] },
+    { code: "EUR", symbol: "€", keywords: ["euro"], exprAliases: ["euro", "euros"] },
+    { code: "JPY", symbol: "¥", keywords: ["yen"], exprAliases: ["yen"] },
+    { code: "GBP", symbol: "£", keywords: ["pound"], exprAliases: ["pound", "pounds"] },
+    { code: "KRW", symbol: "₩", keywords: ["won"], exprAliases: ["won"] },
+    { code: "HKD", symbol: "HK$", keywords: [], exprAliases: [] },
+    { code: "TWD", symbol: "NT$", keywords: [], exprAliases: [] },
+    { code: "SGD", symbol: "S$", keywords: [], exprAliases: [] },
+    { code: "AUD", symbol: "A$", keywords: [], exprAliases: [] },
+    { code: "CAD", symbol: "C$", keywords: [], exprAliases: [] },
+    { code: "CHF", symbol: "Fr", keywords: ["franc"], exprAliases: ["franc"] },
+    { code: "THB", symbol: "฿", keywords: ["baht"], exprAliases: ["baht"] },
+    { code: "RUB", symbol: "₽", keywords: ["ruble"], exprAliases: ["ruble"] },
+    { code: "INR", symbol: "₹", keywords: ["rupee"], exprAliases: ["rupee"] },
+    { code: "XAU", symbol: "oz", keywords: ["gold"], exprAliases: ["gold"] },
+    { code: "BTC", symbol: "₿", keywords: ["bitcoin"], exprAliases: ["bitcoin"] }
+];
 /** 支持的货币与资产列表（15 种主流法币 + 黄金 + 比特币，顺序即默认展示顺序） */
-export const CURRENCIES = Object.freeze([
-    { code: "CNY", name: "人民币", symbol: "¥", keywords: ["rmb", "yuan", "元", "中国"], exprAliases: ["rmb", "yuan", "人民币"] },
-    { code: "USD", name: "美元", symbol: "$", keywords: ["美金", "dollar", "美国"], exprAliases: ["dollar", "dollars", "美元", "美金"] },
-    { code: "EUR", name: "欧元", symbol: "€", keywords: ["euro", "欧洲"], exprAliases: ["euro", "euros", "欧元"] },
-    { code: "JPY", name: "日元", symbol: "¥", keywords: ["yen", "日本", "日币"], exprAliases: ["yen", "日元", "日币"] },
-    { code: "GBP", name: "英镑", symbol: "£", keywords: ["pound", "英国"], exprAliases: ["pound", "pounds", "英镑"] },
-    { code: "KRW", name: "韩元", symbol: "₩", keywords: ["won", "韩国", "韩币"], exprAliases: ["won", "韩元", "韩币"] },
-    { code: "HKD", name: "港币", symbol: "HK$", keywords: ["港元", "香港"], exprAliases: ["港币", "港元"] },
-    { code: "TWD", name: "新台币", symbol: "NT$", keywords: ["台币", "台湾"], exprAliases: ["新台币", "台币"] },
-    { code: "SGD", name: "新加坡元", symbol: "S$", keywords: ["新币", "新加坡"], exprAliases: ["新加坡元", "新币"] },
-    { code: "AUD", name: "澳元", symbol: "A$", keywords: ["澳币", "澳大利亚"], exprAliases: ["澳元", "澳币"] },
-    { code: "CAD", name: "加元", symbol: "C$", keywords: ["加币", "加拿大"], exprAliases: ["加元", "加币"] },
-    { code: "CHF", name: "瑞士法郎", symbol: "Fr", keywords: ["franc", "瑞士"], exprAliases: ["franc", "瑞郎", "瑞士法郎"] },
-    { code: "THB", name: "泰铢", symbol: "฿", keywords: ["baht", "泰国"], exprAliases: ["baht", "泰铢"] },
-    { code: "RUB", name: "卢布", symbol: "₽", keywords: ["ruble", "俄罗斯"], exprAliases: ["ruble", "卢布"] },
-    { code: "INR", name: "印度卢比", symbol: "₹", keywords: ["rupee", "印度"], exprAliases: ["rupee", "卢比", "印度卢比"] },
-    { code: "XAU", name: "黄金（盎司）", symbol: "oz", keywords: ["gold", "黄金", "金价"], exprAliases: ["gold", "黄金"] },
-    { code: "BTC", name: "比特币", symbol: "₿", keywords: ["bitcoin", "比特币"], exprAliases: ["bitcoin", "比特币"] }
-]);
+export const CURRENCIES = Object.freeze(CURRENCY_BASE_SPECS.map((base) => {
+    const zh = CURRENCY_ZH_META[base.code];
+    return {
+        code: base.code,
+        name: zh?.name ?? base.code,
+        symbol: base.symbol,
+        keywords: [...base.keywords, ...(zh?.keywords ?? [])],
+        exprAliases: [...base.exprAliases, ...(zh?.exprAliases ?? [])]
+    };
+}));
 const SUPPORTED_CODES = new Set(CURRENCIES.map((c) => c.code));
 /** 算式内可识别的币种代码与精确别名映射表（全部转小写匹配） */
 const ALIAS_TO_CODE = (() => {

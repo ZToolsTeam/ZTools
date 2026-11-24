@@ -9,8 +9,13 @@ import type {
 import type { FileSystemService } from './file-system-service.js'
 import type { ReferenceCacheService } from './reference-cache-service.js'
 import type { RuntimeCapabilityAuthorizationService, RuntimeCapabilityLease } from './runtime-capability-authorization-service.js'
+import { getResolvedLocale } from '../i18n/index.js'
 
 const MAX_CAPTURE_PIXELS = 32 * 1024 * 1024
+
+function _screenText(zh: string, en: string): string {
+  return getResolvedLocale() === 'zh-CN' ? zh : en
+}
 
 export interface ScreenRectangle {
   x: number
@@ -92,7 +97,7 @@ function reportedPositive(value: unknown, round = false): number | null {
 
 function screenFailure(error: unknown): ZToolsError {
   if (error instanceof ZToolsError) return error
-  return new ZToolsError(errorCodes.screenError, '屏幕操作失败')
+  return new ZToolsError(errorCodes.screenError, 'Screen operation failed')
 }
 
 type ExplicitScreenPermissionDenial = 'not-determined' | 'denied' | 'restricted'
@@ -111,22 +116,34 @@ function screenPermissionFailure(
     case 'restricted':
       return new ZToolsError(
         errorCodes.permissionDenied,
-        `macOS 屏幕录制权限未获准（TCC 状态：${status}）。请在系统设置的“隐私与安全性 > 屏幕录制”中授权后重试；如状态仍未更新，请重启 ZTools。`
+        _screenText(
+          `macOS 屏幕录制权限未获准（TCC 状态：${status}）。请在系统设置的“隐私与安全性 > 屏幕录制”中授权后重试；如状态仍未更新，请重启 ZTools。`,
+          `macOS Screen Recording permission is not granted (TCC status: ${status}). Grant permission in System Settings > Privacy & Security > Screen Recording and retry; restart ZTools if the status does not update.`
+        )
       )
     case 'not-determined':
       return new ZToolsError(
         errorCodes.permissionDenied,
-        'macOS 屏幕录制尚未授权（TCC 状态：not-determined）。请在系统提示中允许屏幕录制；如未出现提示，请在系统设置的“隐私与安全性 > 屏幕录制”中检查 ZTools 后重试。'
+        _screenText(
+          'macOS 屏幕录制尚未授权（TCC 状态：not-determined）。请在系统提示中允许屏幕录制；如未出现提示，请在系统设置的“隐私与安全性 > 屏幕录制”中检查 ZTools 后重试。',
+          'macOS Screen Recording permission has not been granted yet (TCC status: not-determined). Allow screen recording in the system prompt, or check ZTools in System Settings > Privacy & Security > Screen Recording and retry.'
+        )
       )
     case 'unknown':
       return new ZToolsError(
         errorCodes.screenError,
-        '无法确认 macOS 屏幕录制权限（TCC 状态：unknown）；为避免越过权限检查，已停止采集。请在系统设置确认状态后重试。'
+        _screenText(
+          '无法确认 macOS 屏幕录制权限（TCC 状态：unknown）；为避免越过权限检查，已停止采集。请在系统设置确认状态后重试。',
+          'Unable to verify macOS Screen Recording permission (TCC status: unknown); capture aborted to avoid bypassing permission checks. Check System Settings and retry.'
+        )
       )
     case 'unavailable':
       return new ZToolsError(
         errorCodes.notSupported,
-        '当前 Electron 运行时无法读取 macOS 屏幕录制权限状态（TCC 状态：unavailable）；为避免越过权限检查，已停止采集。'
+        _screenText(
+          '当前 Electron 运行时无法读取 macOS 屏幕录制权限状态（TCC 状态：unavailable）；为避免越过权限检查，已停止采集。',
+          'Current Electron runtime cannot read macOS Screen Recording permission status (TCC status: unavailable); capture aborted to avoid bypassing permission checks.'
+        )
       )
   }
 }
@@ -142,16 +159,16 @@ function readScreenPermissionStatus(adapter: ScreenAdapter): ScreenCapturePermis
 function requireNotAborted(signal: AbortSignal): void {
   if (!signal.aborted) return
   if (signal.reason === errorCodes.appStopping) {
-    throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
   }
   if (signal.reason === errorCodes.permissionDenied) {
-    throw new ZToolsError(errorCodes.permissionDenied, '屏幕采集授权已撤销')
+    throw new ZToolsError(errorCodes.permissionDenied, 'Screen capture authorization was revoked')
   }
-  throw new ZToolsError(errorCodes.callerDestroyed, '屏幕操作已取消')
+  throw new ZToolsError(errorCodes.callerDestroyed, 'Screen operation cancelled')
 }
 
 function unionBounds(displays: ScreenDisplay[]): ScreenRectangle {
-  if (displays.length === 0) throw new ZToolsError(errorCodes.screenError, '系统未返回可用显示器')
+  if (displays.length === 0) throw new ZToolsError(errorCodes.screenError, 'No available displays returned by system')
   const left = Math.min(...displays.map((display) => display.bounds.x))
   const top = Math.min(...displays.map((display) => display.bounds.y))
   const right = Math.max(...displays.map((display) => display.bounds.x + display.bounds.width))
@@ -179,11 +196,11 @@ export class ScreenService {
 
   beginCaptureAuthorization(caller: CallerIdentity): RuntimeCapabilityLease | undefined {
     if (!this.capabilityAuthorization && caller.type === 'plugin') {
-      throw new ZToolsError(errorCodes.notSupported, '屏幕采集授权服务未接线，已停止截图')
+      throw new ZToolsError(errorCodes.notSupported, 'Screen capture authorization service is not wired; capture aborted')
     }
     const lease = this.capabilityAuthorization?.beginOperation('screen.capture', caller)
     if (caller.type === 'plugin' && !lease) {
-      throw new ZToolsError(errorCodes.permissionDenied, '当前插件实例未获得屏幕采集授权')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Current plugin instance is not authorized for screen capture')
     }
     return lease
   }
@@ -239,7 +256,7 @@ export class ScreenService {
     const ownsLease = existingLease === undefined
     if (!this.referenceCache) {
       if (ownsLease) lease?.release()
-      throw new ZToolsError(errorCodes.nativeHostUnavailable, '截图引用存储不可用')
+      throw new ZToolsError(errorCodes.nativeHostUnavailable, 'Screenshot reference storage is unavailable')
     }
     const operationSignal = lease ? AbortSignal.any([signal, lease.signal]) : signal
     let generated: Awaited<ReturnType<ReferenceCacheService['writeGeneratedCacheFile']>> | undefined
@@ -255,8 +272,8 @@ export class ScreenService {
     } catch (error) {
       if (generated && (operationSignal.aborted || lease?.signal.aborted)) {
         try { await this.referenceCache.revokeReference(generated.reference, caller) }
-        catch { throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '截图缓存已写入，引用未交付且清理未确认') }
-        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '截图缓存已写入，引用未交付；已请求撤销引用，缓存副作用未回滚')
+        catch { throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Screenshot cache written, reference not delivered, and cleanup unconfirmed') }
+        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Screenshot cache written and reference revocation requested, but cache side effect was not rolled back')
       }
       throw screenFailure(error)
     } finally { if (ownsLease) lease?.release() }
@@ -280,7 +297,7 @@ export class ScreenService {
       const target = params.rect ?? unionBounds(displays)
       const pixels = target.width * target.height
       if (!Number.isSafeInteger(pixels) || pixels > MAX_CAPTURE_PIXELS) {
-        throw new ZToolsError(errorCodes.fileTooLarge, '截图区域超过 32 Mi 像素上限')
+        throw new ZToolsError(errorCodes.fileTooLarge, 'Capture region exceeds 32 Mi-pixel limit')
       }
 
       const thumbnailSize = {
@@ -306,7 +323,7 @@ export class ScreenService {
         }
       }
       requireNotAborted(signal)
-      if (layout(this.adapter.getAllDisplays()) !== layoutBefore) throw new ZToolsError(errorCodes.screenError, '截图过程中显示器布局已改变，请重试')
+      if (layout(this.adapter.getAllDisplays()) !== layoutBefore) throw new ZToolsError(errorCodes.screenError, 'Display layout changed during capture; please retry')
       const sourceByDisplay = new Map<string, ScreenCaptureSource>()
       const ambiguousDisplayIds = new Set<string>()
       for (const source of sources) {
@@ -336,7 +353,7 @@ export class ScreenService {
         }))
         .filter(({ display }) => intersection(target, display.bounds))
       if (intersectingSources.some(({ source }) => !source || source.image.getSize().width < 1 || source.image.getSize().height < 1)) {
-        if (!this.fallback) throw new ZToolsError(errorCodes.screenError, '屏幕截图源不可用')
+        if (!this.fallback) throw new ZToolsError(errorCodes.screenError, 'Screen capture source is unavailable')
         const png = await this.fallback.capture(target, signal)
         requireNotAborted(signal)
         return { png, width: target.width, height: target.height }
@@ -349,11 +366,11 @@ export class ScreenService {
         if (!overlap) continue
         const source = sourceByDisplay.get(String(display.id))
         if (!source) {
-          throw new ZToolsError(errorCodes.screenError, `显示器 ${display.id} 缺少截图源`)
+          throw new ZToolsError(errorCodes.screenError, `Missing capture source for display ${display.id}`)
         }
         const sourceSize = source.image.getSize()
         if (sourceSize.width < 1 || sourceSize.height < 1) {
-          throw new ZToolsError(errorCodes.screenError, `显示器 ${display.id} 截图源为空`)
+          throw new ZToolsError(errorCodes.screenError, `Empty capture source for display ${display.id}`)
         }
         const normalized = source.image.resize({
           width: display.bounds.width,
@@ -366,7 +383,7 @@ export class ScreenService {
           const bitmapSize = normalized.getSize(1)
           throw new ZToolsError(
             errorCodes.screenError,
-            `显示器 ${display.id} 位图尺寸异常: expected=${expectedBytes}, actual=${bitmap.byteLength}, size=${bitmapSize.width}x${bitmapSize.height}`
+            `Unexpected bitmap size for display ${display.id}: expected=${expectedBytes}, actual=${bitmap.byteLength}, size=${bitmapSize.width}x${bitmapSize.height}`
           )
         }
         const sourceX = overlap.x - display.bounds.x

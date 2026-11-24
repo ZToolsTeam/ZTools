@@ -1,15 +1,12 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 interface API { captureRegion(options?: { signal?: AbortSignal; timeout?: number; pollInterval?: number }): Promise<Record<string, unknown>>; captureScreen(): Promise<Record<string, unknown>> }
 function fixture(sys?: unknown) {
   const calls: string[] = [], canceled: string[] = []
   const dll: { callAsync: () => Promise<string>; queryTask: () => Promise<unknown>; cancelTask: (plugin: string, id: string) => Promise<boolean>; call: () => Promise<unknown> } = { callAsync: async () => { calls.push('create'); return 'owned-task' }, queryTask: async () => { calls.push('query'); return { completed: true, status: 'done', data: { success: true, outputPath: 'cache.png', savedPath: 'selected.png', clipboard: true, pinned: true } } }, cancelTask: async (_plugin: string, id: string) => { canceled.push(id); return true }, call: async () => { calls.push('call'); return { success: true, savedPath: 'screen.png', clipboard: true } } }
-  const capabilitySource = fs.readFileSync('../frontend/public/js/cef-ipc/src/api/runtime-capability.js', 'utf8').replace(/^export /gm, '')
-  const source = capabilitySource + '\n' + fs.readFileSync('../frontend/public/js/cef-ipc/src/api/screenshot.js', 'utf8')
-    .replace(/^import .+$/mg, '')
-    .replace(/^export .+$/mg, '')
+  const source = loadCefIpcSources(['api/runtime-capability', 'api/screenshot'])
   const Constructor = vm.runInNewContext(source + '\nScreenshotAPI', { AbortController, setTimeout, clearTimeout }) as new (dll: unknown, sys?: unknown) => API
   return { dll, calls, canceled, api: new Constructor(dll, sys) }
 }
@@ -51,7 +48,7 @@ test('native cancelled status is explicit and error text never determines cancel
 })
 test('invalid timeout or poll interval cannot create a task', async () => {
   const f = fixture()
-  for (const options of [{ timeout: 0 }, { timeout: 600001 }, { pollInterval: 0 }, { pollInterval: NaN }]) await assert.rejects(f.api.captureRegion(options), /参数无效/)
+  for (const options of [{ timeout: 0 }, { timeout: 600001 }, { pollInterval: 0 }, { pollInterval: NaN }]) await assert.rejects(f.api.captureRegion(options), /Invalid screenshot cancellation\/timeout parameters|参数无效/)
   assert.deepEqual(f.calls, [])
 })
 

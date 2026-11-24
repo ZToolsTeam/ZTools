@@ -7,6 +7,8 @@ export type WindowAction =
   | 'focus'
   | 'get_state';
 
+import { tAiMcp } from '../i18n.js';
+
 export type WindowSnapDirection = 'left' | 'right' | 'top' | 'bottom';
 
 export interface WindowState {
@@ -145,6 +147,7 @@ export interface ManageWindowArgs {
     alwaysOnTop?: boolean;
     snapTo?: WindowSnapDirection;
   };
+  locale?: string;
 }
 
 export interface ManageWindowResult {
@@ -153,8 +156,9 @@ export interface ManageWindowResult {
   state: WindowState;
 }
 
-export async function manageWindow(args: ManageWindowArgs): Promise<ManageWindowResult> {
+export async function manageWindow(args: ManageWindowArgs, locale?: string): Promise<ManageWindowResult> {
   const { action, options } = args;
+  const effectiveLocale = locale ?? args.locale;
 
   let state: WindowState;
   switch (action) {
@@ -184,7 +188,7 @@ export async function manageWindow(args: ManageWindowArgs): Promise<ManageWindow
       state = await activeWindowAdapter.focus();
       break;
     default:
-      throw new Error(`Unsupported window action: "${action}"`);
+      throw new Error(tAiMcp('tools.window.unsupportedAction', { action: String(action) }, effectiveLocale));
   }
 
   return {

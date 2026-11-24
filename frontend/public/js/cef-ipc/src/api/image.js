@@ -1,3 +1,4 @@
+import { resolveSdkErrorText } from '../core/environment.js'
 /**
  * Image API - 图片处理
  * 通过 ImagePlugin DLL 插件实现（基于 Image32 库）
@@ -22,7 +23,7 @@ class ImageAPI {
       const api = this._referenceAPI ??= new ReferenceImageAPI(this.transport)
       switch (funcName) {
         case 'ImageToBase64':
-          if (params.format !== undefined) throw Object.assign(new Error('引用编码保留原始PNG/JPEG格式'), { code: 'INVALID_REQUEST' })
+          if (params.format !== undefined) throw Object.assign(new Error(resolveSdkErrorText('refEncodePreservesFormat')), { code: 'INVALID_REQUEST' })
           return { result: await api.imageToBase64(params.input) }
         case 'Base64ToImage': await api.base64ToImage(params.input, params.output, params.format); break
         case 'GetInfo': return { result: await api.getInfo(params.path) }
@@ -35,7 +36,7 @@ class ImageAPI {
         case 'Flip': await api.flip(params.input, params.output, params.direction); break
         case 'Compress': await api.compress(params.input, params.output, params.quality); break
         default: {
-          const error = new Error('此图片方法的跨平台provider尚未实现')
+          const error = new Error(resolveSdkErrorText('imageCrossPlatformProviderNotImplemented'))
           error.code = 'METHOD_NOT_FOUND'
           throw error
         }
@@ -62,13 +63,13 @@ class ImageAPI {
 
   /** Contract 2 effect preview writes to private cache and returns a read-only FileRef. */
   async preview(input, operation, params = {}, options = {}) {
-    if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error('当前宿主尚未开放引用预览'), { code: 'NOT_SUPPORTED' })
+    if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error(resolveSdkErrorText('hostRefPreviewUnavailable')), { code: 'NOT_SUPPORTED' })
     return (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).preview(input, operation, params, options)
   }
 
-  _unwrapResult(response, operation = '图片处理') {
+  _unwrapResult(response, operation = resolveSdkErrorText('imageOpProcess')) {
     if (response == null) {
-      throw new Error(`${operation}返回空结果`)
+      throw new Error(resolveSdkErrorText('imageEmptyResult', { operation }))
     }
     if (response.error) {
       throw new Error(response.error)
@@ -76,7 +77,7 @@ class ImageAPI {
     return response.result !== undefined ? response.result : response
   }
 
-  _isTrueResult(response, operation = '图片处理') {
+  _isTrueResult(response, operation = resolveSdkErrorText('imageOpProcess')) {
     const value = this._unwrapResult(response, operation)
     return value === true || value === 'true'
   }
@@ -94,14 +95,14 @@ class ImageAPI {
       await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).convert(input, output, format, quality ?? 85, options)
       return true
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
     const result = await this._callAsync('Convert', {
       input,
       output,
       format,
       quality
     })
-    return this._isTrueResult(result, '图片格式转换')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpConvert'))
   }
 
   /**
@@ -127,7 +128,7 @@ class ImageAPI {
       await api.resize(input, output, width, height, options)
       return true
     }
-    if (Object.keys(options).some(key => !['keepAspectRatio', 'quality'].includes(key))) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).some(key => !['keepAspectRatio', 'quality'].includes(key))) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
     const params = {
       input,
       output,
@@ -140,7 +141,7 @@ class ImageAPI {
       params.quality = options.quality
     }
     const result = await this._callAsync('Resize', params)
-    return this._isTrueResult(result, '图片缩放')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpResize'))
   }
 
   /**
@@ -156,14 +157,14 @@ class ImageAPI {
       await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).scale(input, output, scaleX, scaleY, options)
       return true
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
     const result = await this._callAsync('Scale', {
       input,
       output,
       scaleX: scaleX * 100, // 转换为百分比
       scaleY: scaleY * 100
     })
-    return this._isTrueResult(result, '图片按比例缩放')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpScale'))
   }
 
   /**
@@ -178,7 +179,7 @@ class ImageAPI {
       await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).crop(input, output, rect, options)
       return true
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
     const result = await this._callAsync('Crop', {
       input,
       output,
@@ -187,7 +188,7 @@ class ImageAPI {
       width: rect.width,
       height: rect.height
     })
-    return this._isTrueResult(result, '图片裁剪')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpCrop'))
   }
 
   /**
@@ -202,13 +203,13 @@ class ImageAPI {
       await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).rotate(input, output, angle, options)
       return true
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
     const result = await this._callAsync('Rotate', {
       input,
       output,
       angle
     })
-    return this._isTrueResult(result, '图片旋转')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpRotate'))
   }
 
   /**
@@ -223,13 +224,13 @@ class ImageAPI {
       await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).flip(input, output, direction, options)
       return true
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
     const result = await this._callAsync('Flip', {
       input,
       output,
       direction
     })
-    return this._isTrueResult(result, '图片翻转')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpFlip'))
   }
 
   /**
@@ -244,14 +245,14 @@ class ImageAPI {
       await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).compress(input, output, quality, options)
       return true
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
     const result = await this._callAsync('Compress', {
         input,
         output,
         quality
       }
     )
-    return this._isTrueResult(result, '图片压缩')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpCompress'))
   }
 
   /**
@@ -270,7 +271,7 @@ class ImageAPI {
         preserveAlpha
       }
     )
-    return this._isTrueResult(result, 'PNG 压缩')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpCompressPng'))
   }
 
   /**
@@ -287,7 +288,7 @@ class ImageAPI {
         quality
       }
     )
-    return this._isTrueResult(result, 'PNG 有损压缩')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpCompressPngLossy'))
   }
 
   /**
@@ -309,7 +310,7 @@ class ImageAPI {
         opacity: Math.round((options.opacity ?? 1.0) * 255) // 转换为0-255范围
       }
     )
-    return this._isTrueResult(result, '图片水印')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpWatermark'))
   }
 
   /**
@@ -344,7 +345,7 @@ class ImageAPI {
         color: bgrColor
       }
     )
-    return this._isTrueResult(result, '图片文字标注')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpAnnotateText'))
   }
 
   /**
@@ -360,7 +361,7 @@ class ImageAPI {
       output,
       direction
     })
-    return this._isTrueResult(result, '图片拼接')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpStitch'))
   }
 
   /**
@@ -386,7 +387,7 @@ class ImageAPI {
         opacity: Math.round((options.opacity ?? 1.0) * 255)
       }
     )
-    return this._isTrueResult(result, '图片边框')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpBorder'))
   }
 
   /**
@@ -414,7 +415,7 @@ class ImageAPI {
         backgroundColor: this._colorToInt(options.backgroundColor ?? '#ffffff')
       }
     )
-    return this._isTrueResult(result, '图片圆角')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpRoundCorners'))
   }
 
   /**
@@ -424,24 +425,24 @@ class ImageAPI {
    * @returns {Promise<boolean>}
    */
   async previewGIF(images, options = {}) {
-    if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error('GIF预览需要引用图片处理器'), { code: 'NOT_SUPPORTED' })
+    if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error(resolveSdkErrorText('gifPreviewRequiresRefImageHandler')), { code: 'NOT_SUPPORTED' })
     return (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).previewGIF(images, options)
   }
   async imagesToGIF(images, output, options = {}) {
-    if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error('真实GIF编码需要引用图片处理器'), { code: 'NOT_SUPPORTED' })
+    if (window.__ztoolsElectron?.contractVersion !== 2) throw Object.assign(new Error(resolveSdkErrorText('gifEncodeRequiresRefImageHandler')), { code: 'NOT_SUPPORTED' })
     await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).imagesToGIF(images, output, options)
     return true
   }
 
   async imagesToPDF(images, output, options = {}) {
     if (window.__ztoolsElectron?.contractVersion === 2) { await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).imagesToPDF(images, output, options); return true }
-    if (Object.keys(options).length) { const error = new Error('当前图片桥不支持新增PDF请求选项'); error.code = 'NOT_SUPPORTED'; throw error }
+    if (Object.keys(options).length) { const error = new Error(resolveSdkErrorText('pdfRequestOptionsUnsupported')); error.code = 'NOT_SUPPORTED'; throw error }
     const result = await this._callAsync('ImagesToPDF', {
         images: images.join(','),
         output
       }
     )
-    return this._isTrueResult(result, '图片转 PDF')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpToPdf'))
   }
 
   /**
@@ -459,7 +460,7 @@ class ImageAPI {
         size: options.size || 256
       }
     )
-    return this._isTrueResult(result, '二维码生成')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpGenerateQr'))
   }
 
   /**
@@ -472,7 +473,7 @@ class ImageAPI {
         input
       }
     )
-    return this._unwrapResult(result, '二维码解码')
+    return this._unwrapResult(result, resolveSdkErrorText('imageOpDecodeQr'))
   }
 
   /**
@@ -493,7 +494,7 @@ class ImageAPI {
         keepAspectRatio
       }
     )
-    return this._isTrueResult(result, 'SVG 转 PNG')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpSvgToPng'))
   }
 
   /**
@@ -503,12 +504,12 @@ class ImageAPI {
    */
   async getInfo(path, options = {}) {
     if (window.__ztoolsElectron?.contractVersion === 2) return (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).getInfo(path, options)
-    if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
     const result = await this._callAsync('GetInfo', {
         path
       }
     )
-    return this._unwrapResult(result, '获取图片信息')
+    return this._unwrapResult(result, resolveSdkErrorText('imageOpGetInfo'))
   }
 
   /**
@@ -674,16 +675,16 @@ class ImageAPI {
    */
   async imageToBase64(input, format, options = {}) {
     if (window.__ztoolsElectron?.contractVersion === 2) {
-      if (format !== undefined) throw Object.assign(new Error('引用编码保留原始PNG/JPEG格式'), { code: 'INVALID_REQUEST' })
+      if (format !== undefined) throw Object.assign(new Error(resolveSdkErrorText('refEncodePreservesFormat')), { code: 'INVALID_REQUEST' })
       return (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).imageToBase64(input, options)
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
     const result = await this._callAsync('ImageToBase64', {
         input,
         format
       }
     )
-    const payload = this._unwrapResult(result, '图片转 Base64')
+    const payload = this._unwrapResult(result, resolveSdkErrorText('imageOpToBase64'))
 
     // 新方案：返回 {filePath, mimeType}
     const data = typeof payload === 'string' ? JSON.parse(payload) : payload
@@ -728,14 +729,14 @@ class ImageAPI {
       await (this._referenceAPI ??= new ReferenceImageAPI(this.transport)).base64ToImage(input, output, format, options)
       return true
     }
-    if (Object.keys(options).length) throw Object.assign(new Error('旧图片处理器不支持请求选项'), { code: 'NOT_SUPPORTED' })
+    if (Object.keys(options).length) throw Object.assign(new Error(resolveSdkErrorText('legacyImageOptionsUnsupported')), { code: 'NOT_SUPPORTED' })
     const result = await this._callAsync('Base64ToImage', {
         input, // 新方案：传入文件路径
         output,
         format
       }
     )
-    return this._isTrueResult(result, 'Base64 转图片')
+    return this._isTrueResult(result, resolveSdkErrorText('imageOpFromBase64'))
   }
 
   /**

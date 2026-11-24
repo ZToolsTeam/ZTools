@@ -11,18 +11,18 @@ export async function readProjectsInWorker(env: ProjectsEnvironment, signal: Abo
   const worker = new Worker(new URL('../workers/recent-projects-worker.js', pathToFileURL(__filename)), { workerData: env, execArgv: [], resourceLimits: { maxOldGenerationSizeMb: 96, stackSizeMb: 4 } })
   return new Promise((resolve, reject) => {
     let response: unknown, count = 0, error: Error | undefined
-    const terminate = () => { void worker.terminate().catch(e => { error = new Error(`项目读取进程停止失败：${String(e)}`) }) }
-    const abort = () => { error = new Error('项目读取已取消'); terminate() }
-    const timeout = setTimeout(() => { error = new Error('项目读取超时，请稍后重试'); terminate() }, 15000)
-    worker.on('message', message => { response = message; count++; if (count > 1) { error = new Error('项目扫描响应重复'); terminate() } })
+    const terminate = () => { void worker.terminate().catch(e => { error = new Error(`Failed to stop project reader worker: ${String(e)}`) }) }
+    const abort = () => { error = new Error('Project read cancelled'); terminate() }
+    const timeout = setTimeout(() => { error = new Error('Project read timed out; please retry later'); terminate() }, 15000)
+    worker.on('message', message => { response = message; count++; if (count > 1) { error = new Error('Duplicate project scan response'); terminate() } })
     worker.on('error', e => { error = e; terminate() })
     signal.addEventListener('abort', abort, { once: true })
     worker.once('exit', code => {
       clearTimeout(timeout); signal.removeEventListener('abort', abort)
       try {
         if (error) throw error
-        if (code || count !== 1) throw new Error('项目读取进程未完整返回')
-        if ((response as { success?: unknown })?.success === false) throw new Error(String((response as { error?: unknown }).error || '项目读取失败'))
+        if (code || count !== 1) throw new Error('Project reader worker exited without returning a complete result')
+        if ((response as { success?: unknown })?.success === false) throw new Error(String((response as { error?: unknown }).error || 'Failed to read recent projects'))
         resolve(validateRecentProjectsScan(response))
       } catch (e) { reject(e) }
     })
@@ -43,14 +43,14 @@ export class RecentProjectsService {
   async handle(input: unknown, caller: CallerIdentity, signal: AbortSignal) {
     try {
       validateRecentProjectsRequest(input); signal.throwIfAborted()
-      if (this.#stopped || (this.platform !== 'darwin' && this.platform !== 'win32')) throw new Error('最近项目服务不可用')
+      if (this.#stopped || (this.platform !== 'darwin' && this.platform !== 'win32')) throw new Error('Recent projects service is unavailable')
       const key = ownerKey(caller), running = this.#jobs.get(key)
       if (input.action === 'cancel') {
         const matching = running?.id === input.operationId
         if (matching) { running.controller.abort(); await Promise.allSettled([running.done]) }
         return { success: true, cancelled: matching }
       }
-      if (running || this.#jobs.size >= 2) throw new Error('项目操作正在进行，请稍后重试')
+      if (running || this.#jobs.size >= 2) throw new Error('A project operation is already in progress; please retry later')
       const controller = new AbortController(), combined = AbortSignal.any([signal, controller.signal, AbortSignal.timeout(20000)])
       const operation = (async () => {
         if (input.action === 'scan') {
@@ -62,7 +62,7 @@ export class RecentProjectsService {
           return result
         }
         const cache = this.#records.get(key), project = cache?.projects.find(p => p.id === input.id)
-        if (!cache || !project) throw new Error('项目记录已过期或不属于当前插件，请重新扫描')
+        if (!cache || !project) throw new Error('Project record has expired or does not belong to the current plugin; please rescan')
         return this.launch(project, input.action, combined)
       })()
       this.#jobs.set(key, { id: input.action === 'scan' ? input.operationId : input.id, window: caller.webContentsId, controller, done: operation })

@@ -1,5 +1,11 @@
-import { t } from '@/i18n'
-import { getLocalizedPluginField, getLocalizedPluginName } from '@/utils/pluginI18n'
+import { getCurrentLocale, t } from '@/i18n'
+import { matchSupportedLocale, resolveLocale } from '@/utils/locale'
+import {
+  getLocalizedFeatureCmds,
+  getLocalizedFeatureExplain,
+  getLocalizedPluginField,
+  getLocalizedPluginName
+} from '@/utils/pluginI18n'
 
 export const PLUGIN_FEATURE_HOTKEY_QUERY_KEY = 'openPluginFeatureHotkey'
 
@@ -93,15 +99,43 @@ export function buildPluginFeatureTriggerId(pluginId, featureCode) {
   return raw.slice(0, 128)
 }
 
-function resolveFeatureName(feature, featureCode) {
+function findMatchedLocaleEntry(i18nMap, targetLocale) {
+  if (!i18nMap || typeof i18nMap !== 'object' || Array.isArray(i18nMap)) return null
+  const exact = i18nMap[targetLocale]
+  if (exact && typeof exact === 'object' && !Array.isArray(exact)) return exact
+  for (const [key, entry] of Object.entries(i18nMap)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+    if (matchSupportedLocale(key) === targetLocale) {
+      return entry
+    }
+  }
+  return null
+}
+
+function resolveFeatureName(plugin, feature, featureCode, locale) {
+  const targetLocale = resolveLocale(locale)
+  const localizedEntry =
+    findMatchedLocaleEntry(plugin?.i18n, targetLocale)?.features?.[featureCode] ||
+    findMatchedLocaleEntry(plugin?.manifest?.i18n, targetLocale)?.features?.[featureCode] ||
+    null
+  const localizedCmds = getLocalizedFeatureCmds(plugin, feature, targetLocale)
+  const firstCmd =
+    localizedCmds.find((cmd) => typeof cmd === 'string' && cmd.trim()) ||
+    localizedCmds.find((cmd) => cmd && typeof cmd.label === 'string' && cmd.label.trim())?.label ||
+    ''
+  const localizedExplain = getLocalizedFeatureExplain(plugin, feature, targetLocale)
+  const validExplain = localizedExplain && localizedExplain !== featureCode ? localizedExplain : ''
+
   const candidates = [
-    getLocalizedPluginField(feature, 'name'),
-    getLocalizedPluginField(feature, 'title'),
-    getLocalizedPluginField(feature, 'featureName'),
-    Array.isArray(feature?.cmds)
-      ? feature.cmds.find((cmd) => typeof cmd === 'string' && cmd.trim()) ||
-        feature.cmds.find((cmd) => cmd && typeof cmd.label === 'string' && cmd.label.trim())?.label
-      : ''
+    localizedEntry?.name,
+    localizedEntry?.title,
+    localizedEntry?.featureName,
+    getLocalizedPluginField(feature, 'name', targetLocale),
+    getLocalizedPluginField(feature, 'title', targetLocale),
+    getLocalizedPluginField(feature, 'featureName', targetLocale),
+    firstCmd,
+    localizedEntry?.explain,
+    validExplain
   ]
   for (const val of candidates) {
     if (typeof val === 'string' && val.trim()) return val.trim()
@@ -120,11 +154,13 @@ export function buildPluginFeatureHotkeyItems(installedPlugins = []) {
 
   if (!Array.isArray(installedPlugins)) return items
 
+  const locale = getCurrentLocale()
+
   for (const plugin of installedPlugins) {
     if (!plugin || typeof plugin !== 'object') continue
     const pluginId = String(plugin.pluginId || plugin.id || '').trim()
     if (!pluginId || !Array.isArray(plugin.features) || plugin.features.length === 0) continue
-    const pluginName = getLocalizedPluginName(plugin) || String(plugin.name || plugin.title || pluginId).trim() || pluginId
+    const pluginName = getLocalizedPluginName(plugin, locale) || String(plugin.name || plugin.title || pluginId).trim() || pluginId
 
     for (const feature of plugin.features) {
       if (!feature || typeof feature !== 'object') continue
@@ -140,10 +176,12 @@ export function buildPluginFeatureHotkeyItems(installedPlugins = []) {
       seenKeys.add(dedupeKey)
       seenTriggerIds.add(triggerId)
 
-      const featureName = resolveFeatureName(feature, featureCode)
+      const featureName = resolveFeatureName(plugin, feature, featureCode, locale)
+      const localizedExplain = getLocalizedFeatureExplain(plugin, feature, locale)
+      const resolvedExplain = localizedExplain && localizedExplain !== featureCode ? localizedExplain : ''
       const description =
-        getLocalizedPluginField(feature, 'explain') ||
-        getLocalizedPluginField(feature, 'description') ||
+        resolvedExplain ||
+        getLocalizedPluginField(feature, 'description', locale) ||
         t('hotkey.features.dynamicDesc', { pluginName, featureName })
 
       items.push({

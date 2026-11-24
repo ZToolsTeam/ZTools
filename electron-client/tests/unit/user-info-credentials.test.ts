@@ -136,7 +136,7 @@ test('router path: expired / revoked / reloaded / foreign-window sessions fall b
     assertNoCredentials(await h.call(h.main, flipped))
 
     // 失效令牌仍按未归属处理（只记限频 warn），宿主自己的不带令牌调用不受影响
-    assert.ok(h.warnings.some(message => message.includes('令牌已失效')))
+    assert.ok(h.warnings.some(message => message.includes('invalid or expired')))
     assert.equal((await h.call(h.main)).token, ACCESS_TOKEN)
   } finally {
     h.dispose()

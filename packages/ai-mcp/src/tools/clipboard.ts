@@ -1,3 +1,5 @@
+import { tAiMcp } from '../i18n.js';
+
 export interface ClipboardAdapter {
   read(format?: 'text' | 'html'): Promise<string>;
   write(text: string, format?: 'text' | 'html'): Promise<void>;
@@ -53,6 +55,7 @@ export async function readClipboard(args: ReadClipboardArgs = {}): Promise<ReadC
 export interface WriteClipboardArgs {
   text: string;
   format?: 'text' | 'html';
+  locale?: string;
 }
 
 export interface WriteClipboardResult {
@@ -61,9 +64,9 @@ export interface WriteClipboardResult {
   format: 'text' | 'html';
 }
 
-export async function writeClipboard(args: WriteClipboardArgs): Promise<WriteClipboardResult> {
+export async function writeClipboard(args: WriteClipboardArgs, locale?: string): Promise<WriteClipboardResult> {
   if (typeof args.text !== 'string') {
-    throw new Error('Clipboard text content must be a string');
+    throw new Error(tAiMcp('tools.clipboard.invalidText', undefined, locale ?? args.locale));
   }
 
   const format = args.format || 'text';

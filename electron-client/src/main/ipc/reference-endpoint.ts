@@ -1,5 +1,6 @@
 import type { CallerIdentity } from '../../contracts/capabilities.js'
-import { errorCodes, toPublicError, ZToolsError } from '../../contracts/errors.js'
+import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import { toLocalizedPublicError } from './error-localizer.js'
 import type { ZToolsResponse } from '../../contracts/ipc.js'
 import type { SdkApiLane } from '../../contracts/sdk-api-lane.js'
 import { parseReferenceRequest, parseReferenceCancellation, REFERENCE_METHODS, REFERENCE_MUTATING_METHODS, type ReferenceMethod } from '../../contracts/reference-transport.js'
@@ -19,9 +20,9 @@ export interface ReferenceHandler {
   disposeUndelivered?(result: unknown, caller: CallerIdentity): Promise<void>
 }
 const methods = new Set<string>(REFERENCE_METHODS), mutating = new Set<string>(REFERENCE_MUTATING_METHODS)
-const denied = () => new ZToolsError(errorCodes.permissionDenied, '文件调用者身份或页面无效')
-const stopping = () => new ZToolsError(errorCodes.appStopping, '文件能力正在关闭')
-const incomplete = () => new ZToolsError(errorCodes.fileError, '文件能力停止未确认')
+const denied = () => new ZToolsError(errorCodes.permissionDenied, 'Invalid file caller identity or page')
+const stopping = () => new ZToolsError(errorCodes.appStopping, 'File capability is shutting down')
+const incomplete = () => new ZToolsError(errorCodes.fileError, 'File capability shutdown was not confirmed')
 
 function invokeCleanup(action: () => void | Promise<void>): Promise<void> {
   try { return Promise.resolve(action()) }
@@ -78,9 +79,9 @@ export class ReferenceIpcEndpoint {
       this.#assertOpen()
       const method = 'filesystem_read_file', caller = this.#caller(event, method)
       if (caller.type !== 'plugin') throw denied()
-      if (!this.drops) throw new ZToolsError(errorCodes.notSupported, '原生文件拖放尚未接线')
+      if (!this.drops) throw new ZToolsError(errorCodes.notSupported, 'Native file drop handler is not wired')
       return await this.drops.accept(caller.webContentsId, value, undefined, () => { this.#caller(event, method, caller) })
-    } catch (error) { return { success: false as const, error: toPublicError(error) } }
+    } catch (error) { return { success: false as const, error: toLocalizedPublicError(error) } }
   }
 
   async call(event: InvokeEvent, value: unknown): Promise<ZToolsResponse> {
@@ -91,13 +92,13 @@ export class ReferenceIpcEndpoint {
     try {
       this.#assertOpen()
       request = parseReferenceRequest(value); messageId = request.messageId
-      if (!methods.has(request.method)) throw new ZToolsError(errorCodes.methodNotFound, '文件方法未开放')
+      if (!methods.has(request.method)) throw new ZToolsError(errorCodes.methodNotFound, 'File method is not exposed')
       const method = request.method as ReferenceMethod
       caller = this.registry.get(event.sender.id)
       failureStage = 'authorization'
       caller = this.#caller(event, method, caller)
       const handler = this.handlers[method]
-      if (!handler) throw new ZToolsError(errorCodes.notSupported, '文件消费者尚未接线')
+      if (!handler) throw new ZToolsError(errorCodes.notSupported, 'File consumer handler is not wired')
       const resolvedCaller = caller
       const resolvedRequest = request
       if (!resolvedCaller || !resolvedRequest) throw denied()
@@ -112,13 +113,13 @@ export class ReferenceIpcEndpoint {
       catch {
         if (dispose) {
           try { await dispose(data) }
-          catch { throw new ZToolsError(mutating.has(method) ? errorCodes.fileWriteOutcomeUnknown : errorCodes.fileError, '未交付引用清理未确认') }
+          catch { throw new ZToolsError(mutating.has(method) ? errorCodes.fileWriteOutcomeUnknown : errorCodes.fileError, 'Undelivered reference cleanup was not confirmed') }
         }
-        throw new ZToolsError(mutating.has(method) ? errorCodes.fileWriteOutcomeUnknown : errorCodes.callerDestroyed, '调用页面已失效，结果未交付')
+        throw new ZToolsError(mutating.has(method) ? errorCodes.fileWriteOutcomeUnknown : errorCodes.callerDestroyed, 'Caller page is no longer valid; result was not delivered')
       }
       return { messageId, success: true, data }
     } catch (error) {
-      const publicError = toPublicError(error)
+      const publicError = toLocalizedPublicError(error)
       if (caller && request) {
         this.diagnostics?.record(caller, {
           requestId: request.messageId,
@@ -137,10 +138,10 @@ export class ReferenceIpcEndpoint {
       this.#assertOpen()
       const request = parseReferenceCancellation(value); messageId = request.messageId
       const caller = this.#caller(event, request.method)
-      if (!this.handlers[request.method]) throw new ZToolsError(errorCodes.notSupported, '文件消费者尚未接线')
+      if (!this.handlers[request.method]) throw new ZToolsError(errorCodes.notSupported, 'File consumer handler is not wired')
       this.tracker.cancel(caller.webContentsId, request.method, messageId, request.reason)
       return { messageId, success: true, data: { success: true, requested: true } }
-    } catch (error) { return { messageId, success: false, error: toPublicError(error) } }
+    } catch (error) { return { messageId, success: false, error: toLocalizedPublicError(error) } }
   }
 
   #caller(event: InvokeEvent, method: ReferenceMethod, expected?: CallerIdentity): CallerIdentity {

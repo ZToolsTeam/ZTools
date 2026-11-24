@@ -31,7 +31,7 @@ test('lists preserved plugin trees and restores only explicitly selected assets'
     assert.deepEqual(repeated, result)
     await assert.rejects(
       service.restore('plugin.test', 'snapshot-1', ['../plugin.json']),
-      (error: unknown) => error instanceof Error && error.message.includes('越界')
+      (error: unknown) => error instanceof Error && /escapes allowed root/i.test(error.message)
     )
   } finally {
     await fs.rm(root, { recursive: true, force: true })

@@ -2,7 +2,8 @@
  * 插件版本兼容性检查
  * 根据插件的 minAppVersion / minWebVersion 判断当前环境是否满足要求
  */
-import { ref } from 'vue'
+import { computed, ref, unref } from 'vue'
+import { i18n, t } from '@/i18n'
 import { formatVersionForDisplay } from '@/utils/versionDisplay'
 import { compareAppVersions, isNumericVersionGte } from '@/utils/version'
 
@@ -69,8 +70,21 @@ async function fetchVersions() {
   return result
 }
 
+function createCompatResult(compatible, reasonResolver) {
+  const result = { compatible }
+  Object.defineProperty(result, 'reason', {
+    enumerable: true,
+    configurable: true,
+    get() {
+      return typeof reasonResolver === 'function' ? reasonResolver() : ''
+    }
+  })
+  return result
+}
+
 /**
  * 检查插件是否与当前环境兼容
+ * 返回对象的 `reason` 为可枚举动态 getter，热切换语言后自动按当前 locale 重新求值。
  * @param {Object} info - 包含 minAppVersion / minWebVersion 的对象
  * @returns {{ compatible: boolean, reason: string }}
  */
@@ -84,16 +98,20 @@ function checkCompat(info, appVersion, webVersion) {
   const minWeb = info?.minWebVersion || '1.0.0'
 
   if (!isVersionGte(appVersion, minApp)) {
-    return {
-      compatible: false,
-      reason: `该插件需要 App >= ${minApp}，当前 ${formatVersionForDisplay(appVersion, appVersion || '')}，请先升级客户端`
-    }
+    return createCompatResult(false, () =>
+      t('versionCompat.appTooLow', {
+        min: minApp,
+        current: formatVersionForDisplay(appVersion, appVersion || '')
+      })
+    )
   }
   if (!isNumericVersionGte(webVersion, minWeb)) {
-    return {
-      compatible: false,
-      reason: `该插件需要 Web >= ${minWeb}，当前 ${formatVersionForDisplay(webVersion, webVersion || '')}，请检查更新`
-    }
+    return createCompatResult(false, () =>
+      t('versionCompat.webTooLow', {
+        min: minWeb,
+        current: formatVersionForDisplay(webVersion, webVersion || '')
+      })
+    )
   }
   return { compatible: true, reason: '' }
 }
@@ -129,7 +147,20 @@ export function useVersionCompat() {
    * 同步检查（需要先调用过 initVersions）
    */
   function checkPluginCompatSync(info) {
+    void i18n.global.locale.value
     return checkCompat(info, appVersion.value, webVersion.value)
+  }
+
+  /**
+   * 创建响应当前 locale 与版本变化的兼容性计算属性（热切换语言自动更新 reason）
+   * @param {Object | import('vue').Ref<Object> | (() => Object)} infoSource
+   */
+  function createPluginCompatComputed(infoSource) {
+    return computed(() => {
+      void i18n.global.locale.value
+      const info = typeof infoSource === 'function' ? infoSource() : unref(infoSource)
+      return checkCompat(info, appVersion.value, webVersion.value)
+    })
   }
 
   return {
@@ -138,6 +169,7 @@ export function useVersionCompat() {
     initVersions,
     checkPluginCompat,
     checkPluginCompatSync,
+    createPluginCompatComputed,
     isVersionGte
   }
 }

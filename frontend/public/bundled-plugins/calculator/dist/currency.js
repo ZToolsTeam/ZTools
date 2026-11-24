@@ -1,6 +1,7 @@
 import { List, ActionPanel, Action, Icon, LocalStorage, showToast, Toast, getHostTransport, useState, useEffect, useRef, useLocale } from "@ztools/declarative-ui";
 import { t, getCurrencyName } from "./i18n.js";
 import { CURRENCIES, DEFAULT_SETTINGS, NETWORK_POLICY, RATE_CACHE_KEY, SETTINGS_KEY, ExchangeRateError, buildRows, calcRate, fetchRateSnapshot, formatRate, formatTime, getCurrency, groupDigits, isSupportedCurrency, parseCachedSnapshot, parseQuery, parseSettings, toInputAmount, toggleFavorite } from "./currency-rates.js";
+import { resolveErrorMessage } from './error-i18n.js';
 let preloadReqSeq = 0;
 /**
  * 宿主网络请求通道：
@@ -27,7 +28,7 @@ export function createHostRequester() {
             if (envelope.error?.code === "NOT_SUPPORTED") {
                 throw new ExchangeRateError("HOST_UNSUPPORTED");
             }
-            const err = new Error(envelope.error?.message || t("currencyNetworkFailed"));
+            const err = new Error(resolveErrorMessage(envelope.error, t("currencyNetworkFailed")));
             if (envelope.error?.code)
                 err.code = envelope.error.code;
             throw err;

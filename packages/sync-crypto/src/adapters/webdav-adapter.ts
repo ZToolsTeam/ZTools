@@ -1,3 +1,5 @@
+import { tSync } from '../i18n.js'
+
 export type WebDavPreset = 'jianguoyun' | 'nextcloud' | 'synology' | 'generic'
 
 export interface WebDavConfig {
@@ -8,6 +10,7 @@ export interface WebDavConfig {
   preset?: WebDavPreset
   customHeaders?: Record<string, string>
   fetchFn?: typeof fetch
+  locale?: string
 }
 
 export interface WebDavResource {
@@ -44,6 +47,7 @@ export class WebDavSyncAdapter {
   readonly #preset: WebDavPreset
   readonly #customHeaders: Record<string, string>
   readonly #fetch: typeof fetch
+  #locale?: string
 
   constructor(config: WebDavConfig) {
     let ep = config.endpoint.trim()
@@ -61,6 +65,15 @@ export class WebDavSyncAdapter {
     this.#preset = config.preset ?? 'generic'
     this.#customHeaders = config.customHeaders ?? {}
     this.#fetch = config.fetchFn ?? globalThis.fetch
+    this.#locale = config.locale
+  }
+
+  get locale(): string | undefined {
+    return this.#locale
+  }
+
+  setLocale(locale?: string): void {
+    this.#locale = locale
   }
 
   get endpoint(): string {
@@ -80,7 +93,8 @@ export class WebDavSyncAdapter {
    * @param remotePath 相对路径（例如 "config.enc" 或 "backups/"）
    * @param depth 检索深度 (0: 仅当前资源, 1: 包含直属子项)
    */
-  async propfind(remotePath = '', depth: 0 | 1 = 1): Promise<WebDavResource[]> {
+  async propfind(remotePath = '', depth: 0 | 1 = 1, options?: { locale?: string }): Promise<WebDavResource[]> {
+    const locale = options?.locale ?? this.#locale
     const url = this.#resolveUrl(remotePath)
     const headers = this.#buildHeaders({
       Depth: String(depth),
@@ -106,7 +120,15 @@ export class WebDavSyncAdapter {
     if (!response.ok && response.status !== 207) {
       const text = await response.text().catch(() => '')
       throw new WebDavError(
-        `PROPFIND 失败 [${response.status} ${response.statusText}]: ${remotePath}`,
+        tSync(
+          'webdav.propfindFailed',
+          {
+            status: response.status,
+            statusText: response.statusText,
+            remotePath
+          },
+          locale
+        ),
         response.status,
         response.statusText,
         text
@@ -121,7 +143,8 @@ export class WebDavSyncAdapter {
    * MKCOL: 创建集合目录
    * 遵循 WebDAV RFC 4918 规范，自动兼容 405 (已存在) 等状态
    */
-  async mkcol(remotePath: string): Promise<void> {
+  async mkcol(remotePath: string, options?: { locale?: string }): Promise<void> {
+    const locale = options?.locale ?? this.#locale
     const url = this.#resolveUrl(remotePath)
     const headers = this.#buildHeaders()
 
@@ -137,7 +160,15 @@ export class WebDavSyncAdapter {
 
     const text = await response.text().catch(() => '')
     throw new WebDavError(
-      `MKCOL 创建目录失败 [${response.status} ${response.statusText}]: ${remotePath}`,
+      tSync(
+        'webdav.mkcolFailed',
+        {
+          status: response.status,
+          statusText: response.statusText,
+          remotePath
+        },
+        locale
+      ),
       response.status,
       response.statusText,
       text
@@ -147,19 +178,20 @@ export class WebDavSyncAdapter {
   /**
    * 确保多层目录层级存在（递归 MKCOL）
    */
-  async ensureDirectory(dirPath: string): Promise<void> {
+  async ensureDirectory(dirPath: string, options?: { locale?: string }): Promise<void> {
     const segments = dirPath.split('/').filter(Boolean)
     let current = ''
     for (const segment of segments) {
       current += segment + '/'
-      await this.mkcol(current)
+      await this.mkcol(current, options)
     }
   }
 
   /**
    * GET: 下载文件数据与元数据
    */
-  async get(remotePath: string): Promise<{ data: Buffer; etag?: string; lastModified?: string }> {
+  async get(remotePath: string, options?: { locale?: string }): Promise<{ data: Buffer; etag?: string; lastModified?: string }> {
+    const locale = options?.locale ?? this.#locale
     const url = this.#resolveUrl(remotePath)
     const headers = this.#buildHeaders()
 
@@ -171,7 +203,15 @@ export class WebDavSyncAdapter {
     if (!response.ok) {
       const text = await response.text().catch(() => '')
       throw new WebDavError(
-        `GET 下载文件失败 [${response.status} ${response.statusText}]: ${remotePath}`,
+        tSync(
+          'webdav.getFailed',
+          {
+            status: response.status,
+            statusText: response.statusText,
+            remotePath
+          },
+          locale
+        ),
         response.status,
         response.statusText,
         text
@@ -193,8 +233,9 @@ export class WebDavSyncAdapter {
   async put(
     remotePath: string,
     content: Buffer | string,
-    options: { ifMatch?: string; contentType?: string } = {}
+    options: { ifMatch?: string; contentType?: string; locale?: string } = {}
   ): Promise<{ etag?: string }> {
+    const locale = options.locale ?? this.#locale
     const url = this.#resolveUrl(remotePath)
     const headers = this.#buildHeaders({
       'Content-Type': options.contentType ?? 'application/octet-stream'
@@ -214,7 +255,7 @@ export class WebDavSyncAdapter {
 
     if (response.status === 412) {
       throw new WebDavError(
-        `PUT 发生并发冲突（412 Precondition Failed）：远程版本与 If-Match 不符`,
+        tSync('webdav.putConflict', undefined, locale),
         412,
         'Precondition Failed'
       )
@@ -223,7 +264,15 @@ export class WebDavSyncAdapter {
     if (!response.ok && response.status !== 201 && response.status !== 204) {
       const text = await response.text().catch(() => '')
       throw new WebDavError(
-        `PUT 上传文件失败 [${response.status} ${response.statusText}]: ${remotePath}`,
+        tSync(
+          'webdav.putFailed',
+          {
+            status: response.status,
+            statusText: response.statusText,
+            remotePath
+          },
+          locale
+        ),
         response.status,
         response.statusText,
         text
@@ -237,7 +286,8 @@ export class WebDavSyncAdapter {
   /**
    * DELETE: 删除文件或目录
    */
-  async delete(remotePath: string): Promise<void> {
+  async delete(remotePath: string, options?: { locale?: string }): Promise<void> {
+    const locale = options?.locale ?? this.#locale
     const url = this.#resolveUrl(remotePath)
     const headers = this.#buildHeaders()
 
@@ -249,7 +299,15 @@ export class WebDavSyncAdapter {
     if (!response.ok && response.status !== 404 && response.status !== 204) {
       const text = await response.text().catch(() => '')
       throw new WebDavError(
-        `DELETE 删除失败 [${response.status} ${response.statusText}]: ${remotePath}`,
+        tSync(
+          'webdav.deleteFailed',
+          {
+            status: response.status,
+            statusText: response.statusText,
+            remotePath
+          },
+          locale
+        ),
         response.status,
         response.statusText,
         text
@@ -260,10 +318,11 @@ export class WebDavSyncAdapter {
   /**
    * 连通性测试
    */
-  async testConnection(): Promise<{ ok: boolean; status: number; message: string }> {
+  async testConnection(options?: { locale?: string }): Promise<{ ok: boolean; status: number; message: string }> {
+    const locale = options?.locale ?? this.#locale
     try {
-      const res = await this.propfind('', 0)
-      return { ok: true, status: 200, message: `连接成功 (检测到 ${res.length} 个资源)` }
+      const res = await this.propfind('', 0, { locale })
+      return { ok: true, status: 200, message: tSync('webdav.connectionSuccess', { count: res.length }, locale) }
     } catch (error) {
       if (error instanceof WebDavError && error.status) {
         return { ok: false, status: error.status, message: error.message }

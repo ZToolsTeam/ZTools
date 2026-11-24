@@ -20,6 +20,7 @@ import { PathReferenceDialogs } from './path-reference-dialogs.js'
 import { createElectronReferenceDialogProvider } from '../platform/electron-reference-dialog.js'
 import type { WindowRegistry } from '../windows/window-registry.js'
 import { clampBoundsToWorkArea } from '../windows/display-bounds.js'
+import { getResolvedLocale, t, type SupportedLocale } from '../i18n/index.js'
 import {
   type AccentTheme,
   getTitleBarOverlayOptions,
@@ -97,7 +98,7 @@ function callerWindow(caller: CallerIdentity): BrowserWindow {
   const contents = webContents.fromId(caller.webContentsId)
   const window = contents ? BrowserWindow.fromWebContents(contents) : null
   if (!window || window.isDestroyed()) {
-    throw new ZToolsError(errorCodes.callerDestroyed, '调用者窗口已销毁')
+    throw new ZToolsError(errorCodes.callerDestroyed, 'Caller window has been destroyed')
   }
   return window
 }
@@ -107,10 +108,10 @@ export function requireLocalUrl(value: string): string {
   try {
     url = new URL(value, `${localWebOrigin}/`)
   } catch {
-    throw new ZToolsError(errorCodes.invalidRequest, 'url 无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid URL')
   }
   if (url.protocol !== 'ztools:' || url.hostname !== 'web' || url.username || url.password) {
-    throw new ZToolsError(errorCodes.permissionDenied, '只允许访问 ztools://web 本地页面')
+    throw new ZToolsError(errorCodes.permissionDenied, 'Only local ztools://web pages are allowed')
   }
   return url.toString()
 }
@@ -131,18 +132,18 @@ export function parseDialogFilters(value?: string): Electron.FileFilter[] | unde
   if (!value) return undefined
   const parts = value.split('|').map((item) => item.trim())
   if (parts.length % 2 !== 0) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'filters 必须为名称和扩展名成对结构')
+    throw new ZToolsError(errorCodes.invalidRequest, 'filters must be name/extension pairs')
   }
   const filters: Electron.FileFilter[] = []
   for (let index = 0; index < parts.length; index += 2) {
     const name = parts[index]
     const patterns = parts[index + 1]
-    if (!name || !patterns) throw new ZToolsError(errorCodes.invalidRequest, 'filters 包含空项')
+    if (!name || !patterns) throw new ZToolsError(errorCodes.invalidRequest, 'filters contain an empty item')
     const extensions = patterns.split(';').map((pattern) => {
       const normalized = pattern.trim()
       if (normalized === '*' || normalized === '*.*') return '*'
       const match = /^(?:\*\.)?([A-Za-z0-9][A-Za-z0-9+_-]{0,31})$/.exec(normalized)
-      if (!match?.[1]) throw new ZToolsError(errorCodes.invalidRequest, '文件筛选扩展名无效')
+      if (!match?.[1]) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid file filter extension')
       return match[1]
     })
     filters.push({ name, extensions: [...new Set(extensions)] })
@@ -165,12 +166,16 @@ function saveDefaultPath(options: WindowDialogParams): string | undefined {
   return options.defaultPath ?? options.defaultName
 }
 
-function tooltipHtml(text: string): string {
-  const escaped = text.replaceAll('&', '&amp;')
+function escapeHtml(text: string): string {
+  return text.replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
+}
+
+function tooltipHtml(text: string): string {
+  const escaped = escapeHtml(text)
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     html,body{margin:0;background:transparent;overflow:hidden}
     body{display:flex;box-sizing:border-box;padding:7px 10px;color:#f7f9fc;
@@ -179,13 +184,20 @@ function tooltipHtml(text: string): string {
   </style></head><body>${escaped}</body></html>`
 }
 
-function recordBarHtml(initialDuration = 0): string {
+export function recordBarHtml(initialDuration = 0, locale?: SupportedLocale): string {
   const safeSeconds = Math.max(0, Math.floor(initialDuration))
+  const resolvedLocale = locale ?? getResolvedLocale()
+  const titleText = escapeHtml(t('recordBar.title', undefined, resolvedLocale))
+  const dragHandleTitle = escapeHtml(t('recordBar.dragHandle', undefined, resolvedLocale))
+  const stopTooltip = escapeHtml(t('recordBar.stopTooltip', undefined, resolvedLocale))
+  const stopButtonText = escapeHtml(t('recordBar.stopButton', undefined, resolvedLocale))
+  const restoreTooltip = escapeHtml(t('recordBar.restoreTooltip', undefined, resolvedLocale))
+  const cancelTooltip = escapeHtml(t('recordBar.cancelTooltip', undefined, resolvedLocale))
   return `<!doctype html>
-<html>
+<html lang="${resolvedLocale}">
 <head>
 <meta charset="utf-8">
-<title>录屏控制条</title>
+<title>${titleText}</title>
 <style>
   * { box-sizing: border-box; user-select: none; margin: 0; padding: 0; }
   html, body {
@@ -269,21 +281,21 @@ function recordBarHtml(initialDuration = 0): string {
 </head>
 <body>
 <div class="capsule-bar">
-  <div class="drag-handle" title="按住拖拽">⋮⋮</div>
+  <div class="drag-handle" title="${dragHandleTitle}">⋮⋮</div>
   <div class="indicator-group">
     <div class="rec-dot" id="dot"></div>
     <div class="timer" id="timer">00:00:00</div>
   </div>
   <div class="divider"></div>
   <div class="actions">
-    <button class="btn btn-stop" id="btn-stop" title="结束录制并保存">
+    <button class="btn btn-stop" id="btn-stop" title="${stopTooltip}">
       <span class="stop-icon"></span>
-      <span>结束</span>
+      <span>${stopButtonText}</span>
     </button>
-    <button class="btn btn-icon" id="btn-restore" title="还原主窗口">
+    <button class="btn btn-icon" id="btn-restore" title="${restoreTooltip}">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
     </button>
-    <button class="btn btn-icon" id="btn-cancel" title="放弃本次录制">
+    <button class="btn btn-icon" id="btn-cancel" title="${cancelTooltip}">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
     </button>
   </div>
@@ -359,12 +371,12 @@ export class WindowService {
 
   readonly #referenceDialogs: PathReferenceDialogs | undefined
   showReferenceDialog(mode: 'open' | 'save' | 'folder', params: unknown, caller: CallerIdentity, signal?: AbortSignal) {
-    if (!this.#referenceDialogs) throw new ZToolsError(errorCodes.notSupported, '文件引用对话框尚未初始化')
+    if (!this.#referenceDialogs) throw new ZToolsError(errorCodes.notSupported, 'File reference dialog is not initialized')
     return this.#referenceDialogs.show(mode, params, caller, signal)
   }
 
   unsupported(feature: string): never {
-    throw new ZToolsError(errorCodes.notSupported, `${feature} 在当前 Electron 架构中不受支持`)
+    throw new ZToolsError(errorCodes.notSupported, `${feature} is not supported in the current Electron architecture`)
   }
 
   async open(
@@ -372,7 +384,7 @@ export class WindowService {
     caller: CallerIdentity
   ): Promise<{ success: true; windowInstanceStatus: 'created' | 'reused'; popoutKey: string }> {
     if (caller.type !== 'main') {
-      throw new ZToolsError(errorCodes.permissionDenied, '仅主宿主界面允许弹出独立窗口')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Only the main host UI is allowed to open popout windows')
     }
     const targetUrl = requireLocalUrl(params.url)
     const popoutKey = extractPopoutKey(targetUrl)
@@ -396,17 +408,17 @@ export class WindowService {
       try {
         // 复用窗口时 URL 只有 hash 不同（同文档导航，页面不重载）：页面按 URL 里新的 handoff 编号重新取状态
         await existing.loadURL(targetUrl)
-        if (existing.isDestroyed()) throw new ZToolsError(errorCodes.cancelled, '插件窗口已关闭')
+        if (existing.isDestroyed()) throw new ZToolsError(errorCodes.cancelled, 'Plugin window closed')
       } catch (error) {
         staged?.rollback()
-        if (superseded()) throw new ZToolsError(errorCodes.cancelled, '已被更新的弹出请求取代')
+        if (superseded()) throw new ZToolsError(errorCodes.cancelled, 'Superseded by a newer popout request')
         throw error
       }
       return { success: true, windowInstanceStatus: 'reused', popoutKey }
     }
 
     if (this.#popoutWindows.size >= MAX_POPOUT_WINDOWS) {
-      throw new ZToolsError(errorCodes.pluginBusy, `独立窗口数量已达上限 (${MAX_POPOUT_WINDOWS})`)
+      throw new ZToolsError(errorCodes.pluginBusy, `Maximum popout window count reached (${MAX_POPOUT_WINDOWS})`)
     }
     const primaryDisplay = typeof screen?.getPrimaryDisplay === 'function' ? screen.getPrimaryDisplay() : undefined
     const workArea = primaryDisplay?.workArea ?? { x: 0, y: 0, width: 1920, height: 1080 }
@@ -489,7 +501,7 @@ export class WindowService {
       // 先登记交接状态与授权、再加载：页面一加载就可能来取
       staged = handoff ? await this.#stageHandoff(popout.webContents.id, handoff, caller) : undefined
       await popout.loadURL(targetUrl)
-      if (popout.isDestroyed()) throw new ZToolsError(errorCodes.cancelled, '插件窗口已关闭')
+      if (popout.isDestroyed()) throw new ZToolsError(errorCodes.cancelled, 'Plugin window closed')
       if (!popout.isDestroyed()) {
         popout.show()
         popout.focus()
@@ -499,11 +511,11 @@ export class WindowService {
       const cancelled = superseded() || popout.isDestroyed()
       // 加载被同一插件更新的弹出请求打断（复用了这个窗口）：窗口留给新请求，本次按取消处理
       if (superseded() && !popout.isDestroyed() && this.#popoutWindows.get(popoutKey) === popout) {
-        throw new ZToolsError(errorCodes.cancelled, '已被更新的弹出请求取代')
+        throw new ZToolsError(errorCodes.cancelled, 'Superseded by a newer popout request')
       }
       if (this.#popoutWindows.get(popoutKey) === popout) this.#popoutWindows.delete(popoutKey)
       if (!popout.isDestroyed()) popout.destroy()
-      if (cancelled) throw new ZToolsError(errorCodes.cancelled, '插件窗口已关闭或弹出请求已被取代')
+      if (cancelled) throw new ZToolsError(errorCodes.cancelled, 'Plugin window closed or popout request superseded')
       throw error
     }
 
@@ -516,7 +528,7 @@ export class WindowService {
    */
   takePopoutHandoff(params: WindowPopoutHandoffTakeParams, caller: CallerIdentity): PopoutHandoffTakeResult {
     if (caller.type !== 'main' || caller.attributedPlugin) {
-      throw new ZToolsError(errorCodes.permissionDenied, '只有宿主界面可以取走独立窗口交接的状态')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Only the host UI can take popout handoff state')
     }
     const entry = this.#popoutHandoffs.get(caller.webContentsId)
     if (!entry || entry.id !== params.handoffId) return { success: true, status: 'none' }
@@ -528,18 +540,18 @@ export class WindowService {
   /** 交接参数与 URL 交叉校验：插件 ID、功能码、交接编号必须与 URL 一致；state 必须是 JSON 对象 */
   #checkHandoff(handoff: PopoutHandoffParams, targetUrl: string, caller: CallerIdentity): PopoutHandoffParams & { featureCode: string } {
     if (caller.attributedPlugin) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件不能代替宿主交接独立窗口状态')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Plugins cannot initiate popout handoff on behalf of the host')
     }
     const route = parsePopoutRoute(targetUrl)
     if (!route || route.pluginId !== handoff.pluginId) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'handoff.pluginId 与独立窗口地址不一致', { path: 'handoff.pluginId' })
+      throw new ZToolsError(errorCodes.invalidRequest, 'handoff.pluginId does not match popout URL', { path: 'handoff.pluginId' })
     }
     if (route.query.get('handoff') !== handoff.id) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'handoff.id 与独立窗口地址不一致', { path: 'handoff.id' })
+      throw new ZToolsError(errorCodes.invalidRequest, 'handoff.id does not match popout URL', { path: 'handoff.id' })
     }
     const featureCode = handoff.featureCode ?? ''
     if ((route.query.get('feature') ?? '') !== featureCode) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'handoff.featureCode 与独立窗口地址不一致', { path: 'handoff.featureCode' })
+      throw new ZToolsError(errorCodes.invalidRequest, 'handoff.featureCode does not match popout URL', { path: 'handoff.featureCode' })
     }
     let parsed: unknown
     try {
@@ -548,7 +560,7 @@ export class WindowService {
       parsed = undefined
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'handoff.state 必须是 JSON 对象', { path: 'handoff.state' })
+      throw new ZToolsError(errorCodes.invalidRequest, 'handoff.state must be a JSON object', { path: 'handoff.state' })
     }
     return { ...handoff, featureCode }
   }
@@ -705,7 +717,7 @@ export class WindowService {
     })
     if (result.canceled) return { canceled: true }
     const folderPath = result.filePaths[0]
-    if (!folderPath) throw new ZToolsError(errorCodes.internalError, '文件夹对话框未返回路径')
+    if (!folderPath) throw new ZToolsError(errorCodes.internalError, 'Folder selection dialog did not return a path')
     await this.files.grantFolder(folderPath, caller)
     return { canceled: false, folderPath }
   }
@@ -928,6 +940,45 @@ export class WindowService {
     }
   }
 
+  /**
+   * 语言热切换时同步刷新已打开的悬浮录屏条（原地更新文案，保留录制计时）与独立弹出窗口的语言标记。
+   */
+  refreshLocale(locale: SupportedLocale): void {
+    const resolvedLocale = locale ?? getResolvedLocale()
+    if (this.#recordBar && !this.#recordBar.isDestroyed()) {
+      const texts = JSON.stringify({
+        locale: resolvedLocale,
+        title: t('recordBar.title', undefined, resolvedLocale),
+        dragHandle: t('recordBar.dragHandle', undefined, resolvedLocale),
+        stopTooltip: t('recordBar.stopTooltip', undefined, resolvedLocale),
+        stopButton: t('recordBar.stopButton', undefined, resolvedLocale),
+        restoreTooltip: t('recordBar.restoreTooltip', undefined, resolvedLocale),
+        cancelTooltip: t('recordBar.cancelTooltip', undefined, resolvedLocale)
+      })
+      const script = `(()=>{const data=${texts};if(document&&document.documentElement){document.documentElement.lang=data.locale;}document.title=data.title;const drag=document.querySelector('.drag-handle');if(drag)drag.title=data.dragHandle;const stopBtn=document.getElementById('btn-stop');if(stopBtn)stopBtn.title=data.stopTooltip;const stopText=document.getElementById('btn-stop-text')||document.querySelector('#btn-stop span:last-child');if(stopText)stopText.textContent=data.stopButton;const restoreBtn=document.getElementById('btn-restore');if(restoreBtn)restoreBtn.title=data.restoreTooltip;const cancelBtn=document.getElementById('btn-cancel');if(cancelBtn)cancelBtn.title=data.cancelTooltip;})()`
+      if (typeof this.#recordBar.webContents?.executeJavaScript === 'function') {
+        void Promise.resolve(this.#recordBar.webContents.executeJavaScript(script)).catch((error: unknown) => {
+          if (!this.#recordBar || this.#recordBar.isDestroyed()) return
+          console.warn('刷新录屏悬浮条语言失败:', error)
+        })
+      }
+    }
+    const serializedLocale = JSON.stringify(resolvedLocale)
+    const popoutScript = `(()=>{window.__ztoolsLocale=${serializedLocale};if(document&&document.documentElement){document.documentElement.lang=${serializedLocale};}})()`
+    for (const [key, popout] of this.#popoutWindows.entries()) {
+      if (popout.isDestroyed()) {
+        this.#popoutWindows.delete(key)
+        continue
+      }
+      if (typeof popout.webContents?.executeJavaScript === 'function') {
+        void Promise.resolve(popout.webContents.executeJavaScript(popoutScript)).catch((error: unknown) => {
+          if (popout.isDestroyed()) return
+          console.warn(`刷新独立弹出窗口语言失败: key=${key}`, error)
+        })
+      }
+    }
+  }
+
   stop(): void {
     this.#removeRegistryListener?.()
     this.#hideTooltip()
@@ -968,7 +1019,7 @@ export class WindowService {
 
   toggleDevTools(caller: CallerIdentity, isPackaged: boolean = app?.isPackaged === true): { success: true } {
     if (isPackaged) {
-      throw new ZToolsError(errorCodes.permissionDenied, '正式版不允许打开开发者工具')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Opening DevTools is not allowed in packaged builds')
     }
     const contents = callerWindow(caller).webContents
     if (contents.isDevToolsOpened()) contents.closeDevTools()

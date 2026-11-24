@@ -68,7 +68,7 @@ test('回归防线：误将 events.publish 当作 events.emit 调用时会被 va
     (error: unknown) =>
       error instanceof ZToolsError &&
       error.code === errorCodes.invalidRequest &&
-      error.message === 'type 无效' &&
+      error.message === 'type is invalid' &&
       (error.details as { path?: string } | undefined)?.path === 'type'
   )
 })

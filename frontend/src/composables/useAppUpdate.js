@@ -1,5 +1,6 @@
 import { useUpdateStore } from '@/stores/update'
 import { compareAppVersions } from '@/utils/version'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 import { t } from '@/i18n'
 
 // 防止 web 静默更新重复触发
@@ -28,7 +29,7 @@ export function useAppUpdate() {
       return result
     } catch (error) {
       // 平台不支持不是错误，不写入更新错误状态
-      if (!isUpdateUnsupported(error)) updateStore.setError(error.message)
+      if (!isUpdateUnsupported(error)) updateStore.setError(resolveErrorMessage(error, 'common.unknownError'))
       throw error
     }
   }
@@ -109,10 +110,10 @@ export function useAppUpdate() {
         fileSize: updateStore.versionInfo.fileSize
       })
 
-      if (result?.success !== true) throw new Error(result?.message || t('modals.update.installerNotStarted'))
+      if (result?.success !== true) throw new Error(resolveErrorMessage(result, 'modals.update.installerNotStarted'))
       return result
     } catch (error) {
-      updateStore.setError(error.message)
+      updateStore.setError(resolveErrorMessage(error, 'modals.update.installerNotStarted'))
       throw error
     }
   }
@@ -123,7 +124,7 @@ export function useAppUpdate() {
    */
   async function cancelUpdate() {
     const result = await window.ztools?.update?.cancel?.()
-    if (result?.success !== true) throw new Error(result?.message || t('modals.update.cancelFailedRetry'))
+    if (result?.success !== true) throw new Error(resolveErrorMessage(result, 'modals.update.cancelFailedRetry'))
     if (!result.installing) updateStore.reset()
     return result
   }

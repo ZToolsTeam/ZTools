@@ -33,7 +33,7 @@ export async function anchoredFileCapabilityResponse(request: Pick<Request, 'url
           if (resource.signal.aborted || bytes.length !== count) throw new Error('RESOURCE_CHANGED')
           controller.enqueue(bytes); position += count
           if (position > selected.end) { resource.close(); controller.close() }
-        } catch { resource.close(); controller.error(new Error('文件资源读取失败')) }
+        } catch { resource.close(); controller.error(new Error('Failed to read file resource')) }
       },
       cancel() { resource.close() }
     }, { highWaterMark: 0 })

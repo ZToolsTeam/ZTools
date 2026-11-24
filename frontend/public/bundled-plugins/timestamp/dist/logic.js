@@ -94,8 +94,9 @@ const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "
 const WEEKDAYS = "(?:mon|tue|wed|thu|fri|sat|sun)";
 const MONTH_NAMES = "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)";
 const ZONE = "(z|utc|gmt|ut|[+-]\\d{2}:?\\d{2})";
+import { ZH_YMD_REGEX_PREFIX } from "./world-clock.zh-data.js";
 // 年-月-日[ 时:分[:秒[.毫秒]]][时区]：- / . 年月日 分隔，日期与时间之间用空格或 T（ISO 8601）
-const YMD_RE = new RegExp("^(\\d{4})[-/.年](\\d{1,2})[-/.月](\\d{1,2})日?(?:[\\sT]+(\\d{1,2}):(\\d{1,2})(?::(\\d{1,2})(?:\\.(\\d{1,9}))?)?)?\\s*" + ZONE + "?$", "i");
+const YMD_RE = new RegExp(ZH_YMD_REGEX_PREFIX + ZONE + "?$", "i");
 // 美式 月/日/年[ 时:分[:秒]]
 const US_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/;
 // RFC 2822 / Date#toUTCString：[Tue, ]14 Nov 2023 22:13[:20] [GMT|+0800]

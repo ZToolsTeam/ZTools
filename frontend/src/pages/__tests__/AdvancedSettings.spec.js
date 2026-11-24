@@ -44,6 +44,8 @@ vi.mock('@/api/apiserver', () => ({
   setAutostart: vi.fn().mockResolvedValue(true),
   getHotkey: vi.fn().mockResolvedValue('Alt+Space'),
   setHotkey: vi.fn().mockResolvedValue(true),
+  getLauncherHotkey: vi.fn().mockResolvedValue('Alt+Shift+Space'),
+  setLauncherHotkey: vi.fn().mockResolvedValue(true),
   getMinimizeToTray: vi.fn().mockResolvedValue(true),
   setMinimizeToTray: vi.fn().mockResolvedValue(true),
   getShowTrayIcon: mocks.getShowTrayIcon,
@@ -129,6 +131,9 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
     mocks.isMac = false
     api.getHotkey.mockResolvedValue('Alt+Space')
     api.setHotkey.mockClear()
+    api.getLauncherHotkey.mockResolvedValue('Alt+Shift+Space')
+    api.setLauncherHotkey.mockClear()
+    api.setLauncherHotkey.mockResolvedValue(true)
     api.getCloseConfirm.mockResolvedValue(true)
     api.setCloseConfirm.mockResolvedValue(true)
     api.getMinimizeToTray.mockResolvedValue(true)
@@ -306,6 +311,23 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
     wrapper.unmount()
   })
 
+  it('两个快捷键入口可用键盘聚焦，关闭对应弹窗后焦点回到触发按钮', async () => {
+    const wrapper = mountPage({ attachTo: document.body })
+    await flushPromises()
+    await switchTab(wrapper, '快捷键')
+    const rows = wrapper.findAll('button[aria-haspopup="dialog"]')
+    expect(rows.map(row => row.get('.setting-label').text())).toEqual(['启动快捷键', '功能快捷键'])
+    for (const [index, modal] of [PluginHotkeyModalStub, PluginFeatureHotkeyModalStub].entries()) {
+      const row = rows[index]
+      expect(row.element.tabIndex).toBe(0)
+      await row.trigger('click')
+      expect([mocks.pluginHotkeyShow, mocks.pluginFeatureHotkeyShow][index]).toHaveBeenCalled()
+      wrapper.findComponent(modal).vm.$emit('closed')
+      expect(document.activeElement).toBe(row.element)
+    }
+    wrapper.unmount()
+  })
+
   it('常用快捷键表与 MainLayout 的全局绑定一致，每项逐键显示键帽', async () => {
     const wrapper = mountPage()
     await flushPromises()
@@ -479,7 +501,8 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
         await flushPromises()
         expect(windowKeydownSpy).not.toHaveBeenCalled()
         expect(api.setHotkey).toHaveBeenCalledWith('Alt+Space')
-        expect(wrapper.findAll('.hotkey-recorder')).toHaveLength(1)
+        // 快捷键 Tab 包含「全局唤醒快捷键」与「显示悬浮条快捷键」两个独立录入框
+        expect(wrapper.findAll('.hotkey-recorder')).toHaveLength(2)
         wrapper.unmount()
       } finally {
         window.removeEventListener('keydown', windowKeydownSpy)
@@ -669,6 +692,83 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
       expect(configSet).toHaveBeenCalledWith('ui.locale', 'en-US', true, 'user_settings.json')
       expect(wrapper.find('.page-title').text()).toBe('Settings')
       expect(wrapper.findAll('[data-testid="settings-tabs"] .seg-btn')[0].text()).toBe('General & Appearance')
+
+      wrapper.unmount()
+    })
+
+    it('独立显示悬浮条快捷键：展示默认 Alt+Shift+Space，支持录制保存、冲突拦截、清空与恢复默认，且不影响全局唤醒快捷键', async () => {
+      const checkConflictMock = vi.fn().mockResolvedValue({ data: { hasConflict: false, conflicts: [] } })
+      const registerMock = vi.fn().mockResolvedValue({ success: true, data: { triggerId: 'global_launcher_hotkey' } })
+      const unregisterMock = vi.fn().mockResolvedValue({ success: true })
+      const listMock = vi.fn().mockResolvedValue([
+        {
+          id: 'global_launcher_hotkey',
+          pluginId: 'system',
+          type: 'hotkey',
+          enabled: true,
+          config: { key: 'Alt+Shift+Space' },
+          action: { mode: 'builtin', target: 'toggle_launcher', params: {} }
+        }
+      ])
+      window.ztools = {
+        sys: {
+          getInfo: vi.fn().mockResolvedValue({ platform: 'windows', supportsDoubleModifierHotkeys: false, supportsMouseTriggers: false }),
+          reloadHotkeys: vi.fn().mockResolvedValue(true)
+        },
+        trigger: {
+          list: listMock,
+          register: registerMock,
+          unregister: unregisterMock,
+          checkConflict: checkConflictMock
+        }
+      }
+
+      const wrapper = mountPage({ attachTo: document.body })
+      await flushPromises()
+      await switchTab(wrapper, '快捷键')
+
+      const row = wrapper.find('[data-testid="launcher-hotkey-setting"]')
+      expect(row.exists()).toBe(true)
+      expect(row.text()).toContain('显示悬浮条快捷键')
+      const restoreBtn = wrapper.find('[data-testid="restore-default-launcher-hotkey"]')
+      expect(restoreBtn.attributes('disabled')).toBeDefined()
+
+      // 1. 录制与全局唤醒冲突的 Alt+Space 时被拦截，不保存也不修改全局唤醒
+      checkConflictMock.mockResolvedValueOnce({
+        data: { hasConflict: true, conflicts: [{ pluginId: 'system', pluginName: '全局唤醒', triggerId: 'global_wake_hotkey', key: 'Alt+Space' }] }
+      })
+      const recorder = row.find('.hotkey-recorder')
+      const hiddenInput = row.find('input.hotkey-hidden-input')
+      await recorder.trigger('click')
+      await flushPromises()
+      await hiddenInput.trigger('keydown', { key: ' ', code: 'Space', altKey: true })
+      await flushPromises()
+      expect(mocks.error).toHaveBeenCalledWith(expect.stringContaining('全局唤醒'))
+      expect(api.setLauncherHotkey).not.toHaveBeenCalled()
+      expect(api.setHotkey).not.toHaveBeenCalled()
+
+      // 2. 录制无冲突快捷键 Ctrl+Alt+L 成功写入 hotkey.launcher 并注册 toggle_launcher
+      await recorder.trigger('click')
+      await flushPromises()
+      await hiddenInput.trigger('keydown', { key: 'l', code: 'KeyL', ctrlKey: true, altKey: true })
+      await flushPromises()
+      expect(api.setLauncherHotkey).toHaveBeenCalledWith('Ctrl+Alt+L')
+      expect(api.setHotkey).not.toHaveBeenCalled()
+      expect(registerMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'global_launcher_hotkey',
+          config: { key: 'Ctrl+Alt+L' },
+          actionMode: 'builtin',
+          actionTarget: 'toggle_launcher'
+        })
+      )
+      expect(restoreBtn.attributes('disabled')).toBeUndefined()
+
+      // 3. 点击恢复默认还原为 Alt+Shift+Space
+      await restoreBtn.trigger('click')
+      await flushPromises()
+      expect(api.setLauncherHotkey).toHaveBeenLastCalledWith('Alt+Shift+Space')
+      expect(restoreBtn.attributes('disabled')).toBeDefined()
 
       wrapper.unmount()
     })

@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
-import { MonitorControlService, monitorTimeoutMs, type MonitorRunner } from '../../src/main/services/monitor-control-service.js'
+import { MonitorControlService, localizeMonitorDisplay, monitorTimeoutMs, type MonitorRunner } from '../../src/main/services/monitor-control-service.js'
+import { getLocaleSetting, setLocale } from '../../src/main/i18n/index.js'
 import { validateMethodParams } from '../../src/contracts/method-params.js'
 import { errorCodes, toPublicError } from '../../src/contracts/errors.js'
 
@@ -50,7 +51,7 @@ test('写入启动后关闭页面与停止服务都等待原生回读完成，�
   const started = deferred<void>(), response = deferred<ReturnType<typeof receipt>>(), controller = new AbortController()
   const s = service(async () => { started.resolve(); return response.promise })
   const pending = s.execute(setRequest, controller.signal); await started.promise
-  await assert.rejects(s.execute({ action: 'list' }, signal()), /正在执行/)
+  await assert.rejects(s.execute({ action: 'list' }, signal()), /already in progress/i)
   controller.abort(); let stopped = false; const stop = s.stop().then(() => { stopped = true })
   await Promise.resolve(); assert.equal(stopped, false)
   response.resolve(receipt(ack)); assert.deepEqual(await pending, { success: true, changed: ack.changed }); await stop
@@ -63,14 +64,14 @@ test('已取消的读取不返回迟到列表，随后可重新请求', async ()
   controller.abort(); response.resolve(receipt(snapshot)); await rejected
   assert.ok('displays' in await s.execute({ action: 'list' }, signal()))
 })
-for (const [code, text] of [['DISPLAY_WRITE_FAILED_RESTORED', '已核验恢复原值'], ['DISPLAY_WRITE_OUTCOME_UNKNOWN', '无法恢复'], ['DISPLAY_STATE_CHANGED', '已变化']]) test(`原生失败 ${code} 经真实 IPC 错误转换仍保留含义`, async () => {
+for (const [code, text] of [['DISPLAY_WRITE_FAILED_RESTORED', 'verified and restored'], ['DISPLAY_WRITE_OUTCOME_UNKNOWN', 'could not be restored'], ['DISPLAY_STATE_CHANGED', 'changed']]) test(`原生失败 ${code} 经真实 IPC 错误转换仍保留含义`, async () => {
   const s = service(async () => receipt({ version: 1, success: false, code }, 1))
   const result = await publicFailure(s.execute(setRequest, signal())); assert.equal(result.code, errorCodes.screenError); assert.ok(result.message.includes(text!)); assert.notEqual(result.message, '宿主内部错误')
 })
 test('进程异常与无效 JSON 不泄露内部信息，也不声称已恢复', async () => {
   for (const runner of [async () => { throw new Error('private executable path and output') }, async () => ({ stdout: 'private non-json', exitCode: 1 })]) {
     const result = await publicFailure(service(runner).execute(setRequest, signal()))
-    assert.equal(result.code, errorCodes.screenError); assert.doesNotMatch(result.message, /private|已核验恢复/); assert.match(result.message, /重新扫描确认/)
+    assert.equal(result.code, errorCodes.screenError); assert.doesNotMatch(result.message, /private|verified and restored/i); assert.match(result.message, /scan again to verify/i)
   }
 })
 test('列表畸形、虚构控制能力、重复身份及失效响应拒绝显示成功', async () => {
@@ -80,7 +81,7 @@ test('列表畸形、虚构控制能力、重复身份及失效响应拒绝显�
 })
 test('不完整、重复、错误目标和错误读回值不能作为成功回执', async () => {
   for (const value of [{ ...ack, changed: [] }, { ...ack, changed: [null] }, { ...ack, changed: [{ ...ack.changed[0], id: 'other' }] }, { ...ack, changed: [{ ...ack.changed[0], value: 75 }] }, { ...ack, changed: [ack.changed[0], ack.changed[0]] }]) {
-    const result = await publicFailure(service(async () => receipt(value)).execute(setRequest, signal())); assert.equal(result.code, errorCodes.screenError); assert.match(result.message, /重新扫描确认/)
+    const result = await publicFailure(service(async () => receipt(value)).execute(setRequest, signal())); assert.equal(result.code, errorCodes.screenError); assert.match(result.message, /scan again to verify/i)
   }
   assert.equal((await publicFailure(service(async () => receipt(ack, 1)).execute(setRequest, signal()))).code, errorCodes.screenError)
 })
@@ -129,16 +130,16 @@ test('Windows：经系统 PowerShell 运行组件，源码走标准输入；WMI/
   await win(() => receipt({ version: 1, success: true, changed: [{ id: winId, control: 'brightness', value: 75, maximum: 100 }] })).execute(setReq, signal())
   // 档位为 10 的背光：75% 量化为 80%，读回 80 视为一致；读回 70 必须失败
   await win(() => receipt({ version: 1, success: true, changed: [{ id: winId, control: 'brightness', value: 80, maximum: 10 }] })).execute(setReq, signal())
-  assert.equal((await publicFailure(win(() => receipt({ version: 1, success: true, changed: [{ id: winId, control: 'brightness', value: 70, maximum: 10 }] })).execute(setReq, signal()))).message, '调节回读与硬件档位不一致，请重新扫描确认')
+  assert.equal((await publicFailure(win(() => receipt({ version: 1, success: true, changed: [{ id: winId, control: 'brightness', value: 70, maximum: 10 }] })).execute(setReq, signal()))).message, 'Adjustment readback does not match hardware step; scan again to verify')
   for (const bad of [{ ...panel, id: 'win:1' }, { ...panel, protocol: 'hdmi' }, { ...panel, brightness: undefined }]) {
     await assert.rejects(win(() => receipt({ version: 1, success: true, topology: winTopology, displays: [bad] })).execute({ action: 'list' }, signal()))
   }
   assert.deepEqual(await win(() => receipt({ version: 1, success: true, requested: true })).execute({ action: 'sleep' }, signal()), { success: true, requested: true })
   assert.deepEqual(seen!.input.request, { version: 1, action: 'sleep' })
-  assert.equal((await publicFailure(win(() => receipt({ version: 1, success: true })).execute({ action: 'sleep' }, signal()))).message, '系统没有接受熄屏请求')
-  assert.equal((await publicFailure(win(() => receipt({ version: 1, success: false, code: 'DISPLAY_SLEEP_REJECTED' }, 1)).execute({ action: 'sleep' }, signal()))).message, '系统没有接受熄屏请求')
-  assert.equal((await publicFailure(win(() => receipt({ version: 1, success: false, code: 'DISPLAY_HELPER_FAILED' }, 1)).execute({ action: 'list' }, signal()))).message, '显示器组件运行失败，请重新扫描；持续失败请反馈')
-  await assert.rejects(new MonitorControlService(process.execPath, 'linux', async () => receipt(snapshot)).execute({ action: 'list' }, signal()), /不支持/)
+  assert.equal((await publicFailure(win(() => receipt({ version: 1, success: true })).execute({ action: 'sleep' }, signal()))).message, 'System rejected the display sleep request')
+  assert.equal((await publicFailure(win(() => receipt({ version: 1, success: false, code: 'DISPLAY_SLEEP_REJECTED' }, 1)).execute({ action: 'sleep' }, signal()))).message, 'System rejected the display sleep request')
+  assert.equal((await publicFailure(win(() => receipt({ version: 1, success: false, code: 'DISPLAY_HELPER_FAILED' }, 1)).execute({ action: 'list' }, signal()))).message, 'Display helper failed; scan again, and report the issue if it persists')
+  await assert.rejects(new MonitorControlService(process.execPath, 'linux', async () => receipt(snapshot)).execute({ action: 'list' }, signal()), /not supported/i)
 })
 
 test('组件超时按请求计算：Windows 列表/熄屏 25 秒，调节 20 秒 + 每项 6 秒（上限 120 秒）；macOS 保持 15 秒', async () => {
@@ -154,7 +155,7 @@ test('组件超时按请求计算：Windows 列表/熄屏 25 秒，调节 20 秒
   await win.execute({ action: 'list' }, signal()); await win.execute({ action: 'sleep' }, signal())
   for (const count of [1, 4, 16]) {
     validateMethodParams('monitor_control', setReq(count))
-    assert.match((await publicFailure(win.execute(setReq(count), signal()))).message, /已核验恢复原值/)
+    assert.match((await publicFailure(win.execute(setReq(count), signal()))).message, /verified and restored/i)
   }
   assert.deepEqual(timeouts, [25000, 25000, 26000, 44000, 116000])
   assert.equal(monitorTimeoutMs(setReq(16), 'win32'), 116000)
@@ -168,5 +169,86 @@ test('组件超时按请求计算：Windows 列表/熄屏 25 秒，调节 20 秒
   // 进程被超时强制结束（runner 抛错）时不声称成功，也不泄露内部信息
   const killed = new MonitorControlService(process.execPath, 'win32', async () => { throw Object.assign(new Error('Command failed: killed SIGKILL'), { killed: true }) })
   const failure = await publicFailure(killed.execute(setReq(4), signal()))
-  assert.equal(failure.code, errorCodes.screenError); assert.match(failure.message, /结果可能已部分生效/); assert.doesNotMatch(failure.message, /SIGKILL/)
+  assert.equal(failure.code, errorCodes.screenError); assert.match(failure.message, /partially taken effect/i); assert.doesNotMatch(failure.message, /SIGKILL/)
+})
+
+test('macOS 显示器侧车回退名与结构化 reasonCode 按当前 locale 本地化', async () => {
+  const previousLocale = getLocaleSetting()
+  const rawDisplays = [
+    {
+      id: 'mac:12345678-1234-1234-1234-123456789001',
+      name: 'Display 1',
+      fallbackDisplayIndex: 1,
+      isPrimary: true,
+      builtIn: false,
+      width: 2560,
+      height: 1440,
+      protocol: 'unsupported' as const,
+      canBrightness: false,
+      canContrast: false,
+      reasonCode: 'BRIGHTNESS_UNREADABLE',
+      reason: 'Unable to read hardware brightness; the display, adapter cable, or current display mode may not support control'
+    },
+    {
+      id: 'mac:12345678-1234-1234-1234-123456789002',
+      name: 'Dell U2723QE',
+      isPrimary: false,
+      builtIn: false,
+      width: 3840,
+      height: 2160,
+      protocol: 'ddcci' as const,
+      canBrightness: false,
+      canContrast: false,
+      reasonCode: 'MIRROR_UNSUPPORTED',
+      reason: 'Cannot confirm an independent control target in mirror mode. Exit mirror mode and scan again'
+    },
+    {
+      id: 'mac:12345678-1234-1234-1234-123456789003',
+      name: 'LG UltraFine',
+      isPrimary: false,
+      builtIn: false,
+      width: 3840,
+      height: 2160,
+      protocol: 'unsupported' as const,
+      canBrightness: false,
+      canContrast: false,
+      reasonCode: 'CONTROL_CHANNEL_AMBIGUOUS',
+      reason: 'Unable to uniquely identify the display hardware control channel; adjustment stopped'
+    }
+  ]
+  const s = service(async () => receipt({ version: 1, success: true, topology, displays: rawDisplays }))
+  try {
+    setLocale('en-US')
+    const enList = await s.execute({ action: 'list' }, signal())
+    assert.ok('displays' in enList)
+    assert.equal(enList.displays[0]?.name, 'Display 1')
+    assert.equal('fallbackDisplayIndex' in (enList.displays[0] ?? {}), false)
+    assert.match(enList.displays[0]?.reason ?? '', /Unable to read hardware brightness/)
+    assert.match(enList.displays[1]?.reason ?? '', /mirror mode/i)
+    assert.match(enList.displays[2]?.reason ?? '', /hardware control channel/i)
+    for (const item of enList.displays) {
+      assert.doesNotMatch(item.name, /[\u4e00-\u9fff]/)
+      assert.doesNotMatch(item.reason ?? '', /[\u4e00-\u9fff]/)
+    }
+
+    setLocale('zh-CN')
+    const zhList = await s.execute({ action: 'list' }, signal())
+    assert.ok('displays' in zhList)
+    assert.equal(zhList.displays[0]?.name, '显示器 1')
+    assert.match(zhList.displays[0]?.reason ?? '', /未能读取硬件亮度/)
+    assert.match(zhList.displays[1]?.reason ?? '', /镜像模式下无法确认独立控制目标/)
+    assert.match(zhList.displays[2]?.reason ?? '', /无法唯一确认显示器硬件控制通道/)
+
+    // 破坏性校验：非法 reasonCode / fallbackDisplayIndex 被 parseMonitorDisplay 拒绝；未知 reasonCode 安全回退原 reason
+    const unknownCode = localizeMonitorDisplay({ ...rawDisplays[1]!, reasonCode: 'FUTURE_CODE', reason: 'Fallback reason' })
+    assert.equal(unknownCode.reason, 'Fallback reason')
+    await assert.rejects(
+      service(async () => receipt({ version: 1, success: true, topology, displays: [{ ...rawDisplays[0], fallbackDisplayIndex: -1 }] })).execute({ action: 'list' }, signal())
+    )
+    await assert.rejects(
+      service(async () => receipt({ version: 1, success: true, topology, displays: [{ ...rawDisplays[0], reasonCode: 42 }] })).execute({ action: 'list' }, signal())
+    )
+  } finally {
+    setLocale(previousLocale, 'zh-CN')
+  }
 })

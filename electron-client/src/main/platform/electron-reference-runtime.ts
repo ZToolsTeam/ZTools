@@ -263,12 +263,12 @@ function unavailable(reason: ElectronReferenceRuntimeUnavailableReason): Electro
 
 function resolveReferenceDialogWindow(registry: WindowRegistry, caller: CallerIdentity): BrowserWindow {
   if (registry.getSdkApiLane(caller) !== 2) {
-    throw new ZToolsError(errorCodes.permissionDenied, '调用者身份或页面无效')
+    throw new ZToolsError(errorCodes.permissionDenied, 'Invalid caller identity or page')
   }
   const contents = registry.getWebContents(caller.webContentsId)
   const window = contents ? BrowserWindow.fromWebContents(contents) : null
   if (!contents || contents.isDestroyed() || !window || window.isDestroyed()) {
-    throw new ZToolsError(errorCodes.callerDestroyed, '调用者窗口已销毁')
+    throw new ZToolsError(errorCodes.callerDestroyed, 'Caller window has been destroyed')
   }
   return window
 }

@@ -5,15 +5,15 @@ import { parseReferenceDirectory, parseReferenceRead, parseReferenceWrite, type 
 import type { PathGrantService } from './path-grant-service.js'
 import { AnchoredFileSystemService } from './anchored-file-system-service.js'
 
-const denied = () => new ZToolsError(errorCodes.permissionDenied, '缓存引用不可用')
-const unknown = () => new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '缓存写入后引用交付或清理未完成，请先核查结果')
+const denied = () => new ZToolsError(errorCodes.permissionDenied, 'Cache reference is unavailable')
+const unknown = () => new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Reference delivery or cleanup after cache write did not complete; verify the result first')
 const syntaxId = 'a'.repeat(43)
 function cacheName(value: unknown): string {
   return parseReferenceDirectory({ directoryGrantId: syntaxId, relativePath: value }).relativePath
 }
 function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype ||
-      Object.keys(value).some(key => !keys.includes(key))) throw new ZToolsError(errorCodes.invalidRequest, '缓存参数无效')
+      Object.keys(value).some(key => !keys.includes(key))) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid cache parameters')
   return value as Record<string, unknown>
 }
 
@@ -44,14 +44,14 @@ export class ReferenceCacheService {
       const budget = write.encoding === 'base64' ? Math.max(0, Math.floor(write.content.length / 4) * 3 -
         (write.content.endsWith('==') ? 2 : write.content.endsWith('=') ? 1 : 0)) : Buffer.byteLength(write.content)
       if (budget > 16 * 1024 * 1024 || this.#writeBytes > 64 * 1024 * 1024 - budget) {
-        throw new ZToolsError(errorCodes.fileTooLarge, '缓存写入超过内存预算')
+        throw new ZToolsError(errorCodes.fileTooLarge, 'Cache write exceeds memory budget')
       }
       this.#writeBytes += budget
       try {
         // Decode only after concurrency admission, before root acquisition or directory side effects.
         const bytes = Buffer.from(write.content, write.encoding === 'base64' ? 'base64' : 'utf8')
         if ((write.encoding === 'base64' && bytes.toString('base64') !== write.content) || bytes.length > 16 * 1024 * 1024) {
-          throw new ZToolsError(errorCodes.invalidRequest, '缓存内容必须为有效且不超过16MiB的数据')
+          throw new ZToolsError(errorCodes.invalidRequest, 'Cache content must be valid data no larger than 16 MiB')
         }
         const root = await this.#root(caller, signal), parts = name.split('/')
         for (let index = 1; index < parts.length; index++) {
@@ -73,7 +73,7 @@ export class ReferenceCacheService {
             ...(read ? [this.grants.revoke(caller.webContentsId, read.grantId)] : [])
           ])
           if (committed) throw unknown()
-          if (cleanup.some(item => item.status === 'rejected')) throw new ZToolsError(errorCodes.fileError, '缓存授权释放未确认')
+          if (cleanup.some(item => item.status === 'rejected')) throw new ZToolsError(errorCodes.fileError, 'Cache grant release could not be confirmed')
           throw error
         }
       } finally { this.#writeBytes -= budget }

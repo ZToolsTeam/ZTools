@@ -382,7 +382,7 @@ export const t = createTranslator({
         rmbErrInvalidFormat: "Enter a valid amount with at most 2 decimal places (no rounding)",
         rmbErrTooLarge: "Maximum supported amount is 999,999,999,999.99"
     }
-}, { defaultLocale: "zh-CN" });
+}, { defaultLocale: "en-US" });
 const CURRENCY_NAME_KEYS = Object.freeze({
     CNY: "currCNY",
     USD: "currUSD",

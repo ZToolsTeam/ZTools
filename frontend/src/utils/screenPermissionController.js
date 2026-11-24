@@ -1,3 +1,5 @@
+import { t } from '@/i18n'
+
 const implementations = new Set(['supported', 'unsupported', 'unavailable'])
 const authorizations = new Set(['not-requested', 'granted', 'denied', 'unknown'])
 const permissions = new Set(['not-required', 'not-determined', 'granted', 'denied', 'restricted', 'unknown'])
@@ -32,7 +34,7 @@ export function createScreenPermissionController(sdk, onChange) {
           publish({ loading: false, snapshot, error: '' })
         } catch {
           snapshot = null
-          publish({ loading: false, snapshot, error: '无法读取当前权限状态，请稍后重试。' })
+          publish({ loading: false, snapshot, error: t('privacy.readStatusFailed') })
         }
       } while (refreshAgain && !stopped)
     })().finally(() => { pending = null })
@@ -51,7 +53,7 @@ export function createScreenPermissionController(sdk, onChange) {
         sdk.events.on(SCREEN_PERMISSION_EVENT, onEvent)
         started = true
       } catch {
-        publish({ loading: false, snapshot: null, error: '无法监听权限变更，请手动重新检查。' })
+        publish({ loading: false, snapshot: null, error: t('privacy.watchStatusFailed') })
       }
       return refresh()
     },

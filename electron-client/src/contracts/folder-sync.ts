@@ -10,7 +10,7 @@ export interface SyncDiff {
   sourceFullPath: string; targetFullPath: string
 }
 export function validateFolderSyncRequest(value: unknown): asserts value is FolderSyncRequest {
-  const invalid = () => new ZToolsError(errorCodes.invalidRequest, '目录同步参数无效')
+  const invalid = () => new ZToolsError(errorCodes.invalidRequest, 'Invalid folder sync parameters')
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalid()
   const p = value as Record<string, unknown>
   if (typeof p.operationId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(p.operationId)) throw invalid()

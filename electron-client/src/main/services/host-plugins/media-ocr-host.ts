@@ -8,6 +8,8 @@ import zlib from 'node:zlib'
 import { PNG } from 'pngjs'
 import { processAudioFiles } from './audio-processing.js'
 import type { CallerIdentity } from '../../../contracts/capabilities.js'
+import { errorCodes } from '../../../contracts/errors.js'
+import { t } from '../../i18n/index.js'
 import type { MacOcrPorts } from '../../platform/macos/mac-ocr.js'
 import type { LocalOcrPort } from '../ocr/paddle-ocr.js'
 import { FORMULA_LOW_CONFIDENCE, type FormulaOcrPort } from '../ocr/formula-ocr.js'
@@ -26,7 +28,8 @@ import {
   type ActiveRecordingSession,
   type HostPluginContext,
   type HostSystemCommands,
-  escapePsSingleQuoted
+  escapePsSingleQuoted,
+  hostPluginError
 } from './shared-utils.js'
 
 /** 媒体与识别处理器的系统依赖：生产用真实实现，测试经构造参数注入替身（插件调用参数无法切换） */
@@ -296,7 +299,7 @@ export class MediaOcrHostPluginHandler {
           return {
             ok: false,
             success: false,
-            error: '屏幕截图采样失败，无法执行 OCR 识别'
+            error: t('hostPlugin.media.ocrCaptureFailed')
           }
         }
         targetPath = tempCapturePath
@@ -310,7 +313,7 @@ export class MediaOcrHostPluginHandler {
         tempCreated = true
       } else if (this.#readClipboardImage) {
         const clipImage = this.#readClipboardImage()
-        if (!clipImage) return { ok: false, success: false, error: '剪贴板里没有图片' }
+        if (!clipImage) return { ok: false, success: false, errorCode: 'CLIPBOARD_NO_IMAGE', error: t('hostPlugin.media.clipboardNoImage') }
         targetPath = path.join(os.tmpdir(), `ztools_ocr_clip_${randomUUID()}.png`)
         await fs.writeFile(targetPath, clipImage)
         tempCreated = true
@@ -332,7 +335,7 @@ export class MediaOcrHostPluginHandler {
       }
 
       if (!targetPath || !fsSync.existsSync(targetPath)) {
-        return { ok: false, success: false, error: '未提供有效的待识别图像文件' }
+        return { ok: false, success: false, errorCode: 'NO_VALID_IMAGE_FILE', error: t('hostPlugin.media.noValidImageFile') }
       }
 
       try {
@@ -359,16 +362,16 @@ export class MediaOcrHostPluginHandler {
     const normalizedWinLang = language?.windows ?? ''
     let windowsOcrIssue = ''
     let localOcrIssue = ''
-    if (!language) return { ok: false, success: false, error: `不支持的 OCR 语言：${rawLang}` }
+    if (!language) return { ok: false, success: false, errorCode: 'UNSUPPORTED_OCR_LANGUAGE', error: t('hostPlugin.media.unsupportedOcrLang', { lang: rawLang }) }
     if (process.platform === 'darwin') return await this.#recognizeOnMac(targetPath, language.vision, signal)
     if (process.platform === 'win32' && language.paddle && this.#localOcr) {
       try {
         const text = (await this.#localOcr.recognizeImage(targetPath, signal)).join('\n').trim()
-        if (signal?.aborted) return { ok: false, success: false, error: 'OCR 识别已取消' }
-        if (!text) return { ok: false, success: false, empty: true, error: '没有识别到文字' }
+        if (signal?.aborted) return { ok: false, success: false, errorCode: 'CANCELLED', error: t('hostPlugin.media.ocrCancelled') }
+        if (!text) return { ok: false, success: false, empty: true, errorCode: 'OCR_NO_TEXT', error: t('hostPlugin.media.ocrNoText') }
         return { ok: true, success: true, text, lines: text.split('\n'), engine: 'PP-OCRv5' }
       } catch (err) {
-        if (signal?.aborted) return { ok: false, success: false, error: 'OCR 识别已取消' }
+        if (signal?.aborted) return { ok: false, success: false, errorCode: 'CANCELLED', error: t('hostPlugin.media.ocrCancelled') }
         // 本机识别失败（图片格式不支持、进程崩溃、超时）记下原因，改用系统识别
         localOcrIssue = errorText(err)
         console.warn('[MediaOcrHost] 本机文字识别失败，改用系统识别:', localOcrIssue)
@@ -398,14 +401,14 @@ export class MediaOcrHostPluginHandler {
         try {
           $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
         } catch {
-          throw '无法读取图片，请确认文件未损坏且格式受支持'
+          throw '${escapePsSingleQuoted(t('hostPlugin.media.winOcrReadImageFailed'))}'
         }
         $langObj = New-Object Windows.Globalization.Language('${escapedLang}')
         if (-not [Windows.Media.Ocr.OcrEngine]::IsLanguageSupported($langObj)) {
-          throw '未安装所选语言的 Windows OCR 语言包：${escapedLang}'
+          throw '${escapePsSingleQuoted(t('hostPlugin.media.winOcrLangPackMissing', { lang: language.windows }))}'
         }
         $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($langObj)
-        if ($null -eq $engine) { throw '无法创建所选语言的 OCR 引擎：${escapedLang}' }
+        if ($null -eq $engine) { throw '${escapePsSingleQuoted(t('hostPlugin.media.winOcrEngineFailed', { lang: language.windows }))}' }
         Function Get-ScaledBitmap([double]$scale) {
           if ($scale -eq 1) { return Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap]) }
           $transform = New-Object Windows.Graphics.Imaging.BitmapTransform
@@ -415,14 +418,14 @@ export class MediaOcrHostPluginHandler {
           else { $transform.InterpolationMode = [Windows.Graphics.Imaging.BitmapInterpolationMode]::Cubic }
           Await ($decoder.GetSoftwareBitmapAsync([Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, [Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied, $transform, [Windows.Graphics.Imaging.ExifOrientationMode]::RespectExifOrientation, [Windows.Graphics.Imaging.ColorManagementMode]::DoNotColorManage)) ([Windows.Graphics.Imaging.SoftwareBitmap])
         }
-        # 超过识别引擎上限（MaxImageDimension）的大图按比例缩小，否则识别直接失败
+        # Scale down images exceeding MaxImageDimension so OCR recognition does not fail
         $maxDimension = [Windows.Media.Ocr.OcrEngine]::MaxImageDimension
         $width = [double]$decoder.OrientedPixelWidth
         $height = [double]$decoder.OrientedPixelHeight
         $fitScale = [Math]::Min($maxDimension / $width, $maxDimension / $height)
         $scale = [Math]::Min(1.0, $fitScale)
         $result = Await ($engine.RecognizeAsync((Get-ScaledBitmap $scale))) ([Windows.Media.Ocr.OcrResult])
-        # 系统识别对小字很不准：字高中位数不足 20 像素时放大到约 32 像素（最多 3 倍）再识别一次
+        # Upscale small text (median word height < 20px) to ~32px (max 3x) for better accuracy
         $heights = @($result.Lines | ForEach-Object { $_.Words } | ForEach-Object { [double]$_.BoundingRect.Height } | Sort-Object)
         if ($scale -eq 1 -and $heights.Count -gt 0) {
           $median = $heights[[int][Math]::Floor($heights.Count / 2)]
@@ -441,7 +444,7 @@ export class MediaOcrHostPluginHandler {
           lines = $lines
         } | ConvertTo-Json -Compress
         } catch {
-          # Windows PowerShell 的 stderr 会混入 CLIXML；通过结构化结果传递真实失败原因。
+          # Windows PowerShell stderr may mix CLIXML; return structured error payload instead.
           [PSCustomObject]@{ ok = $false; error = $_.Exception.GetBaseException().Message } | ConvertTo-Json -Compress
         }
       `
@@ -453,7 +456,7 @@ export class MediaOcrHostPluginHandler {
         windowsOcrIssue = errorText(err)
       }
       if (signal?.aborted) {
-        return { ok: false, success: false, error: 'OCR 识别已取消' }
+        return { ok: false, success: false, errorCode: 'CANCELLED', error: t('hostPlugin.media.ocrCancelled') }
       }
       if (out) {
         try {
@@ -463,7 +466,7 @@ export class MediaOcrHostPluginHandler {
           } else {
             if (!parsed || parsed.ok === false || typeof parsed.text !== 'string' ||
                 !(typeof parsed.lines === 'string' || (Array.isArray(parsed.lines) && parsed.lines.every(line => typeof line === 'string')))) {
-              throw new Error('系统识别结果缺少有效的 text 或 lines 字段')
+              throw hostPluginError(errorCodes.dataCorrupt, 'hostPlugin.media.systemOcrInvalidFields', { hostCode: 'OCR_INVALID_RESULT' })
             }
             // OcrResult.Text 把各行用空格连成一行，按行拼接才能保留分行
             const rawLines = Array.isArray(parsed.lines) ? parsed.lines : [parsed.lines]
@@ -479,14 +482,14 @@ export class MediaOcrHostPluginHandler {
               }
             }
             // 有效空结果不是引擎故障，不应因回退引擎缺失而误报依赖错误。
-            return { ok: false, success: false, empty: true, error: '没有识别到文字' }
+            return { ok: false, success: false, empty: true, errorCode: 'OCR_NO_TEXT', error: t('hostPlugin.media.ocrNoText') }
           }
         } catch (err) {
           console.warn('[MediaOcrHost] Windows.Media.Ocr output JSON parse failed:', err)
-          windowsOcrIssue = `输出格式异常（${errorText(err)}）`
+          windowsOcrIssue = t('hostPlugin.media.outputFormatError', { detail: errorText(err) })
         }
       } else if (!windowsOcrIssue) {
-        windowsOcrIssue = '没有输出'
+        windowsOcrIssue = t('hostPlugin.media.noOutput')
       }
     }
 
@@ -503,8 +506,10 @@ export class MediaOcrHostPluginHandler {
     }
     const tesseractIssue =
       tesseract.exitCode === 0
-        ? '未识别到文字'
-        : `退出码 ${tesseract.exitCode}${tesseract.stderr.trim() ? `：${tesseract.stderr.trim().slice(0, 300)}` : ''}`
+        ? t('hostPlugin.media.tesseractNoText')
+        : (tesseract.stderr.trim()
+          ? t('hostPlugin.media.exitCodeWithDetail', { code: tesseract.exitCode, detail: tesseract.stderr.trim().slice(0, 300) })
+          : t('hostPlugin.media.exitCodeOnly', { code: tesseract.exitCode }))
     const reasons = [
       localOcrIssue ? `PP-OCRv5：${localOcrIssue}` : '',
       windowsOcrIssue ? `Windows.Media.Ocr：${windowsOcrIssue}` : '',
@@ -516,7 +521,7 @@ export class MediaOcrHostPluginHandler {
     return {
       ok: false,
       success: false,
-      error: `未检测到有效文字区域或 OCR 识别失败（${reasons}）`
+      errorCode: 'OCR_FAILED', error: t('hostPlugin.media.ocrFailedWithReasons', { reasons })
     }
   }
 
@@ -528,8 +533,8 @@ export class MediaOcrHostPluginHandler {
   }
 
   #formulaUnavailable(): Record<string, unknown> {
-    if (!this.#formulaOcr) return { ok: false, success: false, error: '当前客户端不支持公式识别' }
-    return { ok: false, success: false, modelMissing: true, error: '公式识别模型还没有下载' }
+    if (!this.#formulaOcr) return { ok: false, success: false, errorCode: 'NOT_SUPPORTED', error: t('hostPlugin.media.formulaUnsupported') }
+    return { ok: false, success: false, modelMissing: true, errorCode: 'MODEL_MISSING', error: t('hostPlugin.media.formulaModelMissing') }
   }
 
   /** 识别图片里的公式，返回 LaTeX；分数偏低时标记 lowConfidence 提示用户核对 */
@@ -538,29 +543,29 @@ export class MediaOcrHostPluginHandler {
     if (!formulaOcr || (await formulaOcr.modelStatus()).state !== 'ready') return this.#formulaUnavailable()
     try {
       const stat = await fs.stat(imagePath)
-      if (stat.size > MAC_OCR_MAX_IMAGE_BYTES) return { ok: false, success: false, error: '图片超过 16 MB，无法识别' }
+      if (stat.size > MAC_OCR_MAX_IMAGE_BYTES) return { ok: false, success: false, errorCode: 'FILE_TOO_LARGE', error: t('hostPlugin.media.imageExceeds16Mb') }
       const { latex, score, previewDataUrl } = await formulaOcr.recognizeImage(imagePath, signal, { includePreview })
-      if (!latex) return { ok: false, success: false, empty: true, error: '没有识别到公式' }
+      if (!latex) return { ok: false, success: false, empty: true, errorCode: 'FORMULA_NO_RESULT', error: t('hostPlugin.media.formulaNoResult') }
       return { ok: true, success: true, latex, score, lowConfidence: score < FORMULA_LOW_CONFIDENCE, engine: 'Pix2Text-MFR 1.5',
         ...(includePreview && previewDataUrl ? { previewDataUrl } : {}) }
     } catch (err) {
-      if (signal?.aborted) return { ok: false, success: false, error: '公式识别已取消' }
+      if (signal?.aborted) return { ok: false, success: false, errorCode: 'CANCELLED', error: t('hostPlugin.media.formulaCancelled') }
       return { ok: false, success: false, error: errorText(err) }
     }
   }
 
   /** macOS：用系统 Vision 在本机识别图片文字 */
   async #recognizeOnMac(imagePath: string, languages: readonly string[], signal?: AbortSignal): Promise<Record<string, unknown>> {
-    if (!this.#macOcr) return { ok: false, success: false, error: '本地文字识别组件不可用，请重新构建或更新客户端' }
+    if (!this.#macOcr) return { ok: false, success: false, errorCode: 'NOT_SUPPORTED', error: t('hostPlugin.media.macOcrUnavailable') }
     try {
       const stat = await fs.stat(imagePath)
-      if (stat.size > MAC_OCR_MAX_IMAGE_BYTES) return { ok: false, success: false, error: '图片超过 16 MB，无法识别' }
+      if (stat.size > MAC_OCR_MAX_IMAGE_BYTES) return { ok: false, success: false, errorCode: 'FILE_TOO_LARGE', error: t('hostPlugin.media.imageExceeds16Mb') }
       const { text } = await this.#macOcr.recognizeLocal(await fs.readFile(imagePath), languages, signal)
       const recognized = text.trim()
-      if (!recognized) return { ok: false, success: false, empty: true, error: '没有识别到文字' }
+      if (!recognized) return { ok: false, success: false, empty: true, errorCode: 'OCR_NO_TEXT', error: t('hostPlugin.media.ocrNoText') }
       return { ok: true, success: true, text: recognized, lines: recognized.split(/\r?\n/), engine: 'Apple Vision' }
     } catch (err) {
-      if (signal?.aborted) return { ok: false, success: false, error: 'OCR 识别已取消' }
+      if (signal?.aborted) return { ok: false, success: false, errorCode: 'CANCELLED', error: t('hostPlugin.media.ocrCancelled') }
       return { ok: false, success: false, error: errorText(err) }
     }
   }
@@ -569,7 +574,7 @@ export class MediaOcrHostPluginHandler {
   async #captureRegionAndRecognize(params: Record<string, unknown>, caller?: CallerIdentity, signal?: AbortSignal): Promise<Record<string, unknown>> {
     const regionSelector = this.#regionSelector
     if ((process.platform !== 'darwin' && process.platform !== 'win32') || !regionSelector) {
-      return { ok: false, success: false, error: '当前系统暂不支持框选识别' }
+      return { ok: false, success: false, errorCode: 'PLATFORM_NOT_SUPPORTED', error: t('hostPlugin.media.regionOcrUnsupported') }
     }
     const formula = params.mode === 'formula'
     if (formula) {
@@ -578,13 +583,13 @@ export class MediaOcrHostPluginHandler {
       if (status?.state !== 'ready') return this.#formulaUnavailable()
     } else {
       const rawLang = String(params.lang ?? params.languageModelId ?? params.language ?? '').trim()
-      if (!OCR_LANGUAGES[(rawLang || 'zh-Hans-CN').toLowerCase()]) return { ok: false, success: false, error: `不支持的 OCR 语言：${rawLang}` }
+      if (!OCR_LANGUAGES[(rawLang || 'zh-Hans-CN').toLowerCase()]) return { ok: false, success: false, errorCode: 'UNSUPPORTED_OCR_LANGUAGE', error: t('hostPlugin.media.unsupportedOcrLang', { lang: rawLang }) }
     }
     const permission = this.#screenCapturePermission?.()
     if (permission === 'denied' || permission === 'restricted') {
-      return { ok: false, success: false, error: '没有屏幕录制权限，请在系统设置的「隐私与安全性」中允许 ZTools 录制屏幕' }
+      return { ok: false, success: false, errorCode: 'PERMISSION_DENIED', error: t('hostPlugin.media.screenPermissionRequired') }
     }
-    if (this.#regionOcrActive) return { ok: false, success: false, error: '正在框选识别，请先完成或取消当前框选' }
+    if (this.#regionOcrActive) return { ok: false, success: false, errorCode: 'PLUGIN_BUSY', error: t('hostPlugin.media.regionOcrBusy') }
     this.#regionOcrActive = true
     const capturePath = path.join(os.tmpdir(), `ztools_ocr_region_${randomUUID()}.png`)
     let restoreWindow: (() => void) | undefined
@@ -601,15 +606,15 @@ export class MediaOcrHostPluginHandler {
     try {
       restoreWindow = this.#hideCallerWindow?.(caller)
       const rect = await regionSelector.selectScreenRegion(signal)
-      if (!rect) return { ok: false, success: false, canceled: true, error: '已取消框选' }
+      if (!rect) return { ok: false, success: false, canceled: true, errorCode: 'CANCELLED', error: t('hostPlugin.media.regionCancelled') }
       if (!(await this.#captureScreenRegionToPng(rect, capturePath, signal))) {
-        return { ok: false, success: false, error: '截取所选区域失败' }
+        return { ok: false, success: false, errorCode: 'SCREEN_ERROR', error: t('hostPlugin.media.regionCaptureFailed') }
       }
       // 截图已完成，立即恢复插件窗口以便界面展示“识别中”状态，不必等 OCR 推理结束
       restoreCallerWindow()
       return await this.#recognizeTarget(capturePath, params, signal)
     } catch (err) {
-      if (signal?.aborted) return { ok: false, success: false, canceled: true, error: '已取消框选' }
+      if (signal?.aborted) return { ok: false, success: false, canceled: true, errorCode: 'CANCELLED', error: t('hostPlugin.media.regionCancelled') }
       return { ok: false, success: false, error: errorText(err) }
     } finally {
       this.#regionOcrActive = false
@@ -629,7 +634,7 @@ export class MediaOcrHostPluginHandler {
         return {
           ok: false,
           success: false,
-          error: '屏幕像素采样失败'
+          error: t('hostPlugin.media.pixelSampleFailed')
         }
       }
 
@@ -638,7 +643,7 @@ export class MediaOcrHostPluginHandler {
       const hasCoord = typeof params.x === 'number' && typeof params.y === 'number'
       // 坐标取整后插入脚本，只接受有限数字；NaN / Infinity 如实报错，不能改取鼠标位置冒充指定坐标的颜色
       if (hasCoord && (!Number.isFinite(reqX) || !Number.isFinite(reqY))) {
-        return { ok: false, success: false, error: '屏幕像素采样失败：坐标必须是有限数字' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.media.pixelCoordsInvalid') }
       }
       const psScript = `
         $ErrorActionPreference = 'Stop'
@@ -664,13 +669,13 @@ export class MediaOcrHostPluginHandler {
       try {
         raw = await this.#sys.runPowerShell(psScript, 8_000, signal)
       } catch (err) {
-        return { ok: false, success: false, error: `屏幕像素采样失败：${err instanceof Error ? err.message : String(err)}` }
+        return { ok: false, success: false, errorCode: 'SCREEN_ERROR', error: t('hostPlugin.media.pixelSampleFailedDetail', { detail: err instanceof Error ? err.message : String(err) }) }
       }
       if (!raw) {
         return {
           ok: false,
           success: false,
-          error: '屏幕像素采样失败'
+          error: t('hostPlugin.media.pixelSampleFailed')
         }
       }
 
@@ -693,7 +698,7 @@ export class MediaOcrHostPluginHandler {
           return {
             ok: false,
             success: false,
-            error: '屏幕像素采样失败'
+            error: t('hostPlugin.media.pixelSampleFailed')
           }
         }
         x = parsed.x
@@ -705,7 +710,7 @@ export class MediaOcrHostPluginHandler {
         return {
           ok: false,
           success: false,
-          error: '屏幕像素采样失败'
+          error: t('hostPlugin.media.pixelSampleFailed')
         }
       }
 
@@ -819,17 +824,17 @@ export class MediaOcrHostPluginHandler {
 
       // gdigrab 只能抓屏幕画面，旧接口从未实现录音；以前会“开始成功”，到停止时才因输出无效失败
       if (type === 'audio') {
-        return startFailed('旧录制接口只能录制屏幕画面，不支持单独录音', 'UNSUPPORTED_ACTION')
+        return startFailed(t('hostPlugin.media.recordVideoOnly'), 'UNSUPPORTED_ACTION')
       }
       const ffmpegCheck =
         process.env.ZTOOLS_DISABLE_FFMPEG === '1'
           ? { exitCode: 1, stdout: '', stderr: 'disabled' }
           : await this.#sys.runCommand('ffmpeg', ['-version'], 4_000, signal)
       if (ffmpegCheck.exitCode !== 0) {
-        return startFailed('本机未检测到 ffmpeg，无法启动屏幕视频或音频录制')
+        return startFailed(t('hostPlugin.media.ffmpegUnavailableRecord'), 'TOOL_UNAVAILABLE')
       }
       if (process.platform !== 'win32') {
-        return startFailed('旧录制接口只支持在 Windows 上用 ffmpeg 录制屏幕视频')
+        return startFailed(t('hostPlugin.media.recordWindowsOnly'), 'PLATFORM_NOT_SUPPORTED')
       }
 
       const parsedOut = path.parse(resolvedOutput)
@@ -847,7 +852,13 @@ export class MediaOcrHostPluginHandler {
         await fs.rm(tempPath, { force: true }).catch(() => undefined)
         const tail = run.stderrTail()
         return startFailed(
-          `ffmpeg 录制进程启动后立即退出（${early.error ?? `退出码 ${early.code ?? '未知'}`}）${tail ? `：${tail}` : ''}`
+          (() => {
+            const fallbackReason = t('hostPlugin.media.exitCodeOnly', { code: early.code ?? t('hostPlugin.media.unknownExitCode') })
+            const reason = early.error ? early.error : fallbackReason
+            return tail
+              ? t('hostPlugin.media.ffmpegExitedEarlyDetail', { reason, detail: tail })
+              : t('hostPlugin.media.ffmpegExitedEarly', { reason })
+          })()
         )
       }
 
@@ -899,7 +910,7 @@ export class MediaOcrHostPluginHandler {
           success: false,
           recording: false,
           ...(sessionId ? { sessionId } : {}),
-          error: sessionId ? `录制会话不存在或已结束：${sessionId}` : '当前没有正在进行的录制'
+          error: sessionId ? t('hostPlugin.media.recordSessionNotFound', { sessionId }) : t('hostPlugin.media.noActiveRecording')
         }
       }
       return this.#finalizeRecording(active, FFMPEG_STOP_TIMEOUT_MS)
@@ -933,16 +944,16 @@ export class MediaOcrHostPluginHandler {
       try {
         captured = await this.#captureScreenToPng(tempPath, signal)
       } catch (err) {
-        return { ok: false, error: `屏幕录制或抓图失败：${errorText(err)}` }
+        return { ok: false, error: t('hostPlugin.media.recordOrCaptureFailedDetail', { detail: errorText(err) }) }
       }
       const stat = captured ? await fs.stat(tempPath).catch(() => null) : null
       if (!stat || !stat.isFile() || stat.size === 0) {
-        return { ok: false, error: '屏幕录制或抓图失败，未生成有效输出文件' }
+        return { ok: false, error: t('hostPlugin.media.recordNoOutputFile') }
       }
       try {
         await fs.rename(tempPath, outputPath)
       } catch (err) {
-        return { ok: false, error: `屏幕截图保存失败：${errorText(err)}` }
+        return { ok: false, error: t('hostPlugin.media.screenshotSaveFailed', { detail: errorText(err) }) }
       }
       return { ok: true, sizeBytes: stat.size }
     } finally {
@@ -956,7 +967,7 @@ export class MediaOcrHostPluginHandler {
       // stdin 用来发送 q 让 ffmpeg 正常写完文件尾；stderr 必须持续读取，否则管道写满会卡住 ffmpeg
       child = this.#spawnProcess('ffmpeg', args, { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] })
     } catch (err) {
-      return { error: `启动 ffmpeg 录制进程失败：${errorText(err)}` }
+      return { error: t('hostPlugin.media.ffmpegLaunchFailed', { detail: errorText(err) }) }
     }
     let tail = ''
     child.stderr?.on('data', (chunk: Buffer | string) => {
@@ -1015,21 +1026,25 @@ export class MediaOcrHostPluginHandler {
       if (forced || !exit || exit.code !== 0) {
         await fs.rm(run.tempPath, { force: true }).catch(() => undefined)
         const tail = run.stderrTail()
+        const fallbackExitReason = t('hostPlugin.media.exitCodeOnly', { code: exit?.code ?? t('hostPlugin.media.unknownExitCode') })
+        const exitReason = exit?.error ? exit.error : fallbackExitReason
         const reason = forced
-          ? 'ffmpeg 未能在限定时间内正常结束，录制文件可能不完整，已丢弃'
-          : `ffmpeg 录制异常退出（${exit?.error ?? `退出码 ${exit?.code ?? '未知'}`}）${tail ? `：${tail}` : ''}`
-        return failed(`屏幕录制失败：${reason}`)
+          ? t('hostPlugin.media.ffmpegStopTimeout')
+          : (tail
+            ? t('hostPlugin.media.ffmpegAbnormalExitDetail', { reason: exitReason, detail: tail })
+            : t('hostPlugin.media.ffmpegAbnormalExit', { reason: exitReason }))
+        return failed(t('hostPlugin.media.recordFailedReason', { reason }))
       }
       const stat = await fs.stat(run.tempPath).catch(() => null)
       if (!stat || !stat.isFile() || stat.size === 0) {
         await fs.rm(run.tempPath, { force: true }).catch(() => undefined)
-        return failed('屏幕录制或抓图失败，未生成有效输出文件')
+        return failed(t('hostPlugin.media.recordNoOutputFile'))
       }
       try {
         await fs.rename(run.tempPath, active.outputPath)
       } catch (err) {
         await fs.rm(run.tempPath, { force: true }).catch(() => undefined)
-        return failed(`录制文件保存失败：${errorText(err)}`)
+        return failed(t('hostPlugin.media.recordSaveFailed', { detail: errorText(err) }))
       }
       return {
         ok: true,
@@ -1046,7 +1061,7 @@ export class MediaOcrHostPluginHandler {
     // PNG 单帧模式：开始录制时已抓好并写入目标文件，这里只核对文件仍然有效
     const stat = await fs.stat(active.outputPath).catch(() => null)
     if (!stat || !stat.isFile() || stat.size === 0) {
-      return failed('屏幕录制或抓图失败，未生成有效输出文件')
+      return failed(t('hostPlugin.media.recordNoOutputFile'))
     }
     return {
       ok: true,
@@ -1282,7 +1297,7 @@ export class MediaOcrHostPluginHandler {
 
     // 普通转码不能冒充 AI 模型推理；探测仍可用，处理必须等真实引擎接入。
     if (pluginName === 'AiVideoPlugin') {
-      return { ok: false, success: false, processedCount: 0, errorCode: 'NOT_SUPPORTED', error: 'AI 视频补帧、超分和降噪引擎尚未接入，无法执行增强；普通转码不能代替 AI 处理' }
+      return { ok: false, success: false, processedCount: 0, errorCode: 'NOT_SUPPORTED', error: t('hostPlugin.media.aiVideoUnsupported') }
     }
 
     if (pluginName === 'BatchAudioPlugin') {
@@ -1345,7 +1360,7 @@ export class MediaOcrHostPluginHandler {
         if (!hasFfmpeg) {
           errors.push({
             file: resolvedSrc,
-            error: '本机未检测到 ffmpeg，无法执行音视频转码处理'
+            error: t('hostPlugin.media.ffmpegUnavailableTranscode')
           })
           continue
         }
@@ -1358,7 +1373,7 @@ export class MediaOcrHostPluginHandler {
           }
           errors.push({
             file: resolvedSrc,
-            error: res.stderr || 'ffmpeg 转码执行失败，未生成有效输出文件'
+            error: res.stderr || t('hostPlugin.media.ffmpegTranscodeFailed')
           })
           continue
         }
@@ -1368,7 +1383,7 @@ export class MediaOcrHostPluginHandler {
           await fs.unlink(outPath).catch(() => undefined)
           errors.push({
             file: resolvedSrc,
-            error: 'ffmpeg 转码输出文件为空'
+            error: t('hostPlugin.media.ffmpegOutputEmpty')
           })
           continue
         }
@@ -1438,7 +1453,7 @@ export class MediaOcrHostPluginHandler {
       return {
         ok: false,
         success: false,
-        error: `当前宿主未安装 LibreOffice 转换组件，不支持将 PDF 转换为专有 Office 格式 (${params.operation ?? fn})`
+        error: t('hostPlugin.media.pdfToOfficeUnsupported', { op: String(params.operation ?? fn) })
       }
     }
 
@@ -1453,13 +1468,13 @@ export class MediaOcrHostPluginHandler {
         ok: false,
         success: false,
         errorCode: 'UNSUPPORTED_ACTION',
-        error: `当前宿主没有 PDF 渲染组件，不支持将 PDF 转换为图片 (${params.operation ?? fn})`
+        error: t('hostPlugin.media.pdfToImageUnsupported', { op: String(params.operation ?? fn) })
       }
     }
 
     if (lowerFn === 'inspectpdf' || lowerFn === 'getpdfinfo' || lowerFn === 'inspect') {
       if (!rawFiles[0]) {
-        return { ok: false, success: false, error: '未提供 PDF 文件路径' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.media.pdfPathMissing') }
       }
       const resolvedFile = await this.#ctx.authorizeExistingPath(rawFiles[0], caller, 'read')
       const buf = await fs.readFile(resolvedFile)
@@ -1488,12 +1503,12 @@ export class MediaOcrHostPluginHandler {
       effectiveOp === 'pdftohtml'
     ) {
       if (!rawFiles[0]) {
-        return { ok: false, success: false, error: '未提供 PDF 文件路径' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.media.pdfPathMissing') }
       }
       const resolvedFile = await this.#ctx.authorizeExistingPath(rawFiles[0], caller, 'read')
       const buf = await fs.readFile(resolvedFile)
       if (!isValidPdfBuffer(buf)) {
-        return { ok: false, success: false, error: '源文件不是有效的 PDF 格式' }
+        return { ok: false, success: false, errorCode: 'DATA_CORRUPT', error: t('hostPlugin.media.invalidPdfFormat') }
       }
       const raw = buf.toString('latin1')
       const literalMatches = Array.from(raw.matchAll(/\(([^()\\]*(?:\\.[^()\\]*)*)\)\s*Tj/g)).map((m) =>
@@ -1504,7 +1519,7 @@ export class MediaOcrHostPluginHandler {
         return {
           ok: false,
           success: false,
-          error: '未能从 PDF 中提取到文字：可能是扫描件，或文字经过压缩/字体编码，旧接口无法解析'
+          error: t('hostPlugin.media.pdfTextExtractFailed')
         }
       }
       const extractedText = literalMatches.join('\n')
@@ -1557,7 +1572,7 @@ export class MediaOcrHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'UNSUPPORTED_ACTION',
-          error: `当前宿主不支持将这些文件转换为 PDF（只支持 .txt / .md 纯文本）：${unsupportedInputs.map((f) => path.basename(f)).join('、')}`
+          error: t('hostPlugin.media.convertToPdfUnsupported', { files: unsupportedInputs.map((f) => path.basename(f)).join(', ') })
         }
       }
       const contentLines: string[] = []
@@ -1570,14 +1585,14 @@ export class MediaOcrHostPluginHandler {
         contentLines.push(...txt.split(/\r?\n/))
       }
       if (contentLines.every((line) => !line.trim())) {
-        return { ok: false, success: false, error: '没有可写入 PDF 的文本内容' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.media.pdfNoTextContent') }
       }
       if (contentLines.some((line) => /[^\x20-\x7E\t]/.test(line))) {
         return {
           ok: false,
           success: false,
           errorCode: 'UNSUPPORTED_ACTION',
-          error: '当前宿主生成 PDF 时没有内嵌中文等非 ASCII 字体，这些字符会变成问号，已停止生成'
+          error: t('hostPlugin.media.pdfNonAsciiUnsupported')
         }
       }
       if (contentLines.length > 45) {
@@ -1585,7 +1600,7 @@ export class MediaOcrHostPluginHandler {
           ok: false,
           success: false,
           errorCode: 'UNSUPPORTED_ACTION',
-          error: `当前宿主只能生成单页 PDF（最多 45 行），本次内容有 ${contentLines.length} 行，已停止生成以免截断`
+          error: t('hostPlugin.media.pdfPageLimitExceeded', { count: contentLines.length })
         }
       }
       const resolvedOutPdf = await this.#ctx.authorizeOutputPath(rawOutPdf, caller)
@@ -1606,7 +1621,7 @@ export class MediaOcrHostPluginHandler {
 
     // [P-2] 针对现有 PDF 的合并/压缩/拆分/水印/解密操作：严禁使用 buildMinimalValidPdf 覆盖原文档
     if (rawFiles.length === 0) {
-      return { ok: false, success: false, error: '未提供有效的源 PDF 文件路径' }
+      return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.media.pdfSourcePathMissing') }
     }
 
     const inputBuffers: Buffer[] = []
@@ -1614,11 +1629,11 @@ export class MediaOcrHostPluginHandler {
     for (const f of rawFiles) {
       const resolvedInput = await this.#ctx.authorizeExistingPath(f, caller, 'read')
       if (!fsSync.existsSync(resolvedInput)) {
-        return { ok: false, success: false, error: `源 PDF 文件不存在: ${resolvedInput}` }
+        return { ok: false, success: false, errorCode: 'FILE_NOT_FOUND', error: t('hostPlugin.media.pdfSourceNotFound', { path: resolvedInput }) }
       }
       const buf = await fs.readFile(resolvedInput)
       if (!isValidPdfBuffer(buf)) {
-        return { ok: false, success: false, error: `文件不是有效的 PDF 格式: ${path.basename(resolvedInput)}` }
+        return { ok: false, success: false, errorCode: 'DATA_CORRUPT', error: t('hostPlugin.media.pdfFileInvalidNamed', { fileName: path.basename(resolvedInput) }) }
       }
       resolvedInputPaths.push(resolvedInput)
       inputBuffers.push(buf)
@@ -1730,14 +1745,14 @@ export class MediaOcrHostPluginHandler {
 
     if (lowerFn === 'mergeimagestopdf' || lowerFn === 'mergepdf' || String(params.mode ?? '').toLowerCase() === 'merge_pdf') {
       if (rawFiles.length === 0) {
-        return { ok: false, success: false, error: '未提供待合并的图片文件路径' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.media.mergeImagesMissing') }
       }
       const resolvedInputs: string[] = []
       const pageStreams: string[] = []
       for (const f of rawFiles) {
         const resolved = await this.#ctx.authorizeExistingPath(f, caller, 'read')
         if (!fsSync.existsSync(resolved)) {
-          return { ok: false, success: false, error: `源图片文件不存在: ${resolved}` }
+          return { ok: false, success: false, errorCode: 'FILE_NOT_FOUND', error: t('hostPlugin.media.sourceImageNotFound', { path: resolved }) }
         }
         const st = await fs.stat(resolved)
         resolvedInputs.push(resolved)
@@ -1773,7 +1788,7 @@ export class MediaOcrHostPluginHandler {
     }
 
     if (rawFiles.length === 0) {
-      return { ok: false, success: false, error: '未提供有效的待处理图片文件路径' }
+      return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.media.imageFilesMissing') }
     }
 
     const qualityTier = String(params.qualityTier ?? params.quality ?? 'q85').toLowerCase()
@@ -1785,7 +1800,7 @@ export class MediaOcrHostPluginHandler {
         ok: false,
         success: false,
         errorCode: 'INVALID_PARAMS',
-        error: `不支持的缩放预设：${resizePreset.slice(0, 40)}（可选：${Array.from(IMAGE_RESIZE_PRESETS).join(' / ')}）`
+        error: t('hostPlugin.media.unsupportedResizePreset', { preset: resizePreset.slice(0, 40), options: Array.from(IMAGE_RESIZE_PRESETS).join(' / ') })
       }
     }
     const rawOutFmt = String(params.outputFormat ?? params.format ?? 'keep').trim().toLowerCase().replace(/^\./, '')
@@ -1795,7 +1810,7 @@ export class MediaOcrHostPluginHandler {
         ok: false,
         success: false,
         errorCode: 'INVALID_PARAMS',
-        error: `不支持的输出格式：${rawOutFmt.slice(0, 40)}（可选：keep / ${Object.keys(IMAGE_OUTPUT_FORMAT_EXT).join(' / ')}）`
+        error: t('hostPlugin.media.unsupportedImageOutputFormat', { format: rawOutFmt.slice(0, 40), options: Object.keys(IMAGE_OUTPUT_FORMAT_EXT).join(' / ') })
       }
     }
     const isGrayscale =
@@ -1811,12 +1826,12 @@ export class MediaOcrHostPluginHandler {
       try {
         const resolvedSrc = await this.#ctx.authorizeExistingPath(src, caller, 'read')
         if (!fsSync.existsSync(resolvedSrc)) {
-          errors.push({ file: src, error: `源图片文件不存在: ${resolvedSrc}` })
+          errors.push({ file: src, error: t('hostPlugin.media.sourceImageNotFound', { path: resolvedSrc }) })
           continue
         }
         const srcStat = await fs.stat(resolvedSrc)
         if (srcStat.size === 0) {
-          errors.push({ file: src, error: `源图片文件为空 (0 字节): ${resolvedSrc}` })
+          errors.push({ file: src, error: t('hostPlugin.media.sourceImageEmpty', { path: resolvedSrc }) })
           continue
         }
         const parsed = path.parse(resolvedSrc)
@@ -1827,7 +1842,7 @@ export class MediaOcrHostPluginHandler {
         if (!isSupportedImageOutputExt(targetExt)) {
           errors.push({
             file: src,
-            error: `不支持输出 ${targetExt.slice(0, 20)} 格式的图片，请指定输出格式（png / jpg / webp / bmp / gif / tiff）`
+            error: t('hostPlugin.media.unsupportedTargetImageExt', { ext: targetExt.slice(0, 20) })
           })
           continue
         }
@@ -1840,7 +1855,7 @@ export class MediaOcrHostPluginHandler {
         if (explicitOutExt && canonicalImageExt(explicitOutExt) !== canonicalImageExt(targetExt)) {
           errors.push({
             file: src,
-            error: `输出路径扩展名 ${explicitOutExt.slice(0, 20)} 与输出格式 ${targetExt} 不一致`
+            error: t('hostPlugin.media.outputExtFormatMismatch', { ext: explicitOutExt.slice(0, 20), format: targetExt })
           })
           continue
         }
@@ -2069,7 +2084,7 @@ export class MediaOcrHostPluginHandler {
               } elseif ($format -eq 'png') {
                 $dstBmp.Save('${escapedOut}', [System.Drawing.Imaging.ImageFormat]::Png)
               } else {
-                throw "不支持的编码格式：$format"
+                throw "Unsupported image encoding format: $format"
               }
               [PSCustomObject]@{ width = $w; height = $h } | ConvertTo-Json -Compress
             } finally {
@@ -2094,16 +2109,16 @@ export class MediaOcrHostPluginHandler {
             await fs.rename(tempPath, outPath)
             return { width, height, engine: 'GDI+' }
           }
-          gdiIssue = '未生成输出文件'
+          gdiIssue = t('hostPlugin.media.noOutputFileGenerated')
         } catch (err) {
           gdiIssue = errorText(err)
         }
       } else {
-        gdiIssue = `不支持编码 ${options.targetExt} 格式`
+        gdiIssue = t('hostPlugin.media.gdiEncodeUnsupported', { ext: options.targetExt })
       }
 
       if (signal?.aborted) {
-        throw new Error(`图片编码转换已取消: ${path.basename(resolvedSrc)}`)
+        throw hostPluginError(errorCodes.cancelled, 'hostPlugin.media.imageEncodeCancelled', { hostCode: 'IMAGE_ENCODE_CANCELLED', i18nParams: { fileName: path.basename(resolvedSrc) } })
       }
       await fs.rm(tempPath, { force: true }).catch(() => undefined)
       const ff = await this.#sys.runCommand('ffmpeg', buildFfmpegImageArgs(resolvedSrc, tempPath, options), 25_000, signal)
@@ -2114,11 +2129,13 @@ export class MediaOcrHostPluginHandler {
       const ffStderr = ff.stderr.trim()
       const ffIssue =
         ff.exitCode === 0
-          ? '未生成输出文件'
+          ? t('hostPlugin.media.noOutputFileGenerated')
           : /ENOENT/.test(ffStderr)
-            ? '本机未检测到 ffmpeg'
-            : `退出码 ${ff.exitCode}${ffStderr ? `：${ffStderr.slice(-300)}` : ''}`
-      throw new Error(`图片编码转换失败: ${path.basename(resolvedSrc)}（GDI+：${gdiIssue}；ffmpeg：${ffIssue}）`)
+            ? t('hostPlugin.media.ffmpegNotFound')
+            : (ffStderr
+              ? t('hostPlugin.media.exitCodeWithDetail', { code: ff.exitCode, detail: ffStderr.slice(-300) })
+              : t('hostPlugin.media.exitCodeOnly', { code: ff.exitCode }))
+      throw hostPluginError(errorCodes.fileError, 'hostPlugin.media.imageEncodeFailed', { hostCode: 'IMAGE_ENCODE_FAILED', i18nParams: { fileName: path.basename(resolvedSrc), gdiIssue, ffIssue } })
     } finally {
       await fs.rm(tempPath, { force: true }).catch(() => undefined)
     }
@@ -2209,7 +2226,7 @@ export class MediaOcrHostPluginHandler {
     const xmlSeller = combined.match(/<(?:SellerName|xhfmc|Xhfmc)>([^<\r\n]+)<\//i)?.[1]?.trim()
     const labelSeller = combined.match(/(?:销售方|销方名称|收款方)[名称：:\s]*([^\r\n，,;；]{2,36})/)?.[1]?.trim()
     const corpMatch = combined.match(/([\u4e00-\u9fa5A-Za-z0-9()（）]{2,24}(?:有限公司|股份有限公司|集团|事务所|酒店|航空|铁路|出行|科技|餐饮))/)?.[1]
-    const sellerName = xmlSeller || labelSeller || corpMatch || '未知销售商户'
+    const sellerName = xmlSeller || labelSeller || corpMatch || t('hostPlugin.media.invoice.unknownSeller')
 
     const xmlBuyer = combined.match(/<(?:BuyerName|ghfmc|Ghfmc)>([^<\r\n]+)<\//i)?.[1]?.trim()
     const labelBuyer = combined.match(/(?:购买方|购方名称|付款方|抬头)[名称：:\s]*([^\r\n，,;；]{2,36})/)?.[1]?.trim()
@@ -2220,23 +2237,25 @@ export class MediaOcrHostPluginHandler {
     const buyerTaxId = xmlTaxId || labelTaxId || ''
 
     // 5. 智能归类科目
-    let category = '其他费用'
+    let categoryKey = 'hostPlugin.media.invoice.category.other'
     if (/滴滴|出行|打车|客运|高铁|铁路|航空|机票|交通|通行费|加油/.test(combined)) {
-      category = '差旅交通'
+      categoryKey = 'hostPlugin.media.invoice.category.travel'
     } else if (/酒店|住宿|宾馆|旅馆|华住|如家|亚朵|万豪/.test(combined)) {
-      category = '酒店住宿'
+      categoryKey = 'hostPlugin.media.invoice.category.hotel'
     } else if (/餐饮|美食|星巴克|瑞幸|咖啡|饭店|食品|茶饮/.test(combined)) {
-      category = '餐饮招待'
+      categoryKey = 'hostPlugin.media.invoice.category.dining'
     } else if (/京东|办公|文具|电脑|显示器|鼠标|键盘|耗材|数码|设备/.test(combined)) {
-      category = '办公设备'
+      categoryKey = 'hostPlugin.media.invoice.category.office'
     } else if (/云|软件|技术服务|电信|移动|联通|宽带|通信|服务器|算力/.test(combined)) {
-      category = '技术与云服务'
+      categoryKey = 'hostPlugin.media.invoice.category.cloud'
     }
+    const category = t(categoryKey)
 
+    const defaultBuyerLabel = t('hostPlugin.media.invoice.defaultBuyer')
     const isHeaderAbnormal =
-      buyerName === '个人' ||
-      buyerName.includes('个人') ||
-      (buyerName !== '默认企业抬头' && !buyerTaxId && /个人|先生|女士/.test(buyerName))
+      buyerName === '个人' || // i18n-allow: Chinese VAT invoice parser
+      buyerName.includes('个人') || // i18n-allow: Chinese VAT invoice parser
+      (buyerName !== defaultBuyerLabel && !buyerTaxId && /个人|先生|女士/.test(buyerName))
 
     return {
       path: filePath,
@@ -2253,6 +2272,7 @@ export class MediaOcrHostPluginHandler {
       taxAmount,
       netAmount,
       category,
+      categoryKey,
       isHeaderAbnormal
     }
   }
@@ -2275,7 +2295,7 @@ export class MediaOcrHostPluginHandler {
         try {
           const resolved = await this.#ctx.authorizeExistingPath(f, caller, 'read')
           if (!fsSync.existsSync(resolved)) {
-            errors.push({ file: f, error: `发票文件不存在: ${resolved}` })
+            errors.push({ file: f, error: t('hostPlugin.media.invoice.fileNotFound', { path: resolved }) })
             continue
           }
           const st = await fs.stat(resolved)
@@ -2313,7 +2333,7 @@ export class MediaOcrHostPluginHandler {
     ) {
       const invoiceItems = Array.isArray(params.invoices) ? (params.invoices as Array<Record<string, unknown>>) : []
       if (invoiceItems.length === 0 && rawFiles.length === 0) {
-        return { ok: false, success: false, error: '未提供待导出的发票列表' }
+        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.media.invoice.emptyList') }
       }
 
       const firstPath = String(invoiceItems[0]?.path ?? rawFiles[0] ?? '').trim()
@@ -2328,7 +2348,7 @@ export class MediaOcrHostPluginHandler {
       const renamedFiles: string[] = []
       const pdfBuffers: Buffer[] = []
       const csvRows: string[] = [
-        '序号,发票号码,开票日期,报销类目,销售方名称,购买方抬头,不含税金额(元),税额(元),价税合计(元),原文件名,归档文件名'
+        t('hostPlugin.media.invoice.csvHeader')
       ]
 
       let totalAmountSum = 0
@@ -2357,9 +2377,9 @@ export class MediaOcrHostPluginHandler {
 
         const invNo = String(parsedMeta.invoiceNo ?? '00000000')
         const issueDate = String(parsedMeta.issueDate ?? new Date().toISOString().slice(0, 10))
-        const category = String(parsedMeta.category ?? '其他费用')
-        const sellerName = String(parsedMeta.sellerName ?? '未知商户').replace(/[\\/:*?"<>|]/g, '_')
-        const buyerName = String(parsedMeta.buyerName ?? '默认企业抬头')
+        const category = String(parsedMeta.category ?? t('hostPlugin.media.invoice.category.other'))
+        const sellerName = String(parsedMeta.sellerName ?? t('hostPlugin.media.invoice.unknownMerchant')).replace(/[\\/:*?"<>|]/g, '_')
+        const buyerName = String(parsedMeta.buyerName ?? t('hostPlugin.media.invoice.defaultBuyer'))
         const totalAmount = Number(parsedMeta.totalAmount ?? 0)
         const taxAmount = Number(parsedMeta.taxAmount ?? 0)
         const netAmount = Number(parsedMeta.netAmount ?? Math.max(0, totalAmount - taxAmount))
@@ -2370,7 +2390,7 @@ export class MediaOcrHostPluginHandler {
 
         const rawTargetName = String(
           item.targetFileName ??
-            `[${category}]_${issueDate}_${sellerName}_${totalAmount.toFixed(2)}元_${invNo.slice(-4)}${ext}`
+            t('hostPlugin.media.invoice.archiveName', { category, date: issueDate, seller: sellerName, amount: totalAmount.toFixed(2), tail: invNo.slice(-4), ext })
         ).replace(/[\\/:*?"<>|]/g, '_')
 
         const destFilePath = await this.#ctx.authorizeOutputPath(path.join(outDir, rawTargetName), caller)
@@ -2402,13 +2422,13 @@ export class MediaOcrHostPluginHandler {
       }
 
       csvRows.push(
-        `合计,-,-,-,-,-,${totalNetSum.toFixed(2)},${totalTaxSum.toFixed(2)},${totalAmountSum.toFixed(2)},共 ${sourceList.length} 张,-`
+        t('hostPlugin.media.invoice.csvTotalRow', { net: totalNetSum.toFixed(2), tax: totalTaxSum.toFixed(2), total: totalAmountSum.toFixed(2), count: sourceList.length })
       )
 
       let csvOutputPath = ''
       if (lowerFn !== 'batchrenameinvoices' && lowerFn !== 'mergeinvoicespdf') {
         csvOutputPath = await this.#ctx.authorizeOutputPath(
-          path.join(outDir, '报销发票明细汇总表.csv'),
+          path.join(outDir, t('hostPlugin.media.invoice.csvFileName')),
           caller
         )
         await fs.writeFile(csvOutputPath, `\uFEFF${csvRows.join('\r\n')}`, 'utf8')
@@ -2417,7 +2437,7 @@ export class MediaOcrHostPluginHandler {
       let mergedPdfPath = ''
       if (pdfBuffers.length > 0 && lowerFn !== 'batchrenameinvoices' && lowerFn !== 'exportinvoicescsv') {
         mergedPdfPath = await this.#ctx.authorizeOutputPath(
-          path.join(outDir, '报销发票合并打印版.pdf'),
+          path.join(outDir, t('hostPlugin.media.invoice.pdfFileName')),
           caller
         )
         const merged = mergePdfBuffers(pdfBuffers)
@@ -2438,7 +2458,7 @@ export class MediaOcrHostPluginHandler {
       }
     }
 
-    return { ok: false, success: false, error: `未知的发票助手操作: ${fn}` }
+    return { ok: false, success: false, errorCode: 'METHOD_NOT_FOUND', error: t('hostPlugin.media.invoice.unknownAction', { action: fn }) }
   }
 
   // ==================== 06. 音频输入输出设备一键切换 (AudioDevicePlugin) ====================
@@ -2454,7 +2474,7 @@ export class MediaOcrHostPluginHandler {
       ok: false,
       success: false,
       errorCode: 'UNSUPPORTED_ACTION',
-      error: '请更新音频设备插件，通过新版接口读取和切换音频设备、调节音量与静音'
+      error: t('hostPlugin.media.audioDeviceUpgradeRequired')
     }
   }
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import test from 'node:test'
 import vm from 'node:vm'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 
 interface DatabaseSdk {
   setPluginId(id: string): Promise<void>
@@ -9,8 +9,7 @@ interface DatabaseSdk {
 }
 
 function createApi(reply: unknown): DatabaseSdk {
-  const source = fs.readFileSync('../frontend/public/js/cef-ipc/src/api/db.js', 'utf8')
-    .replace(/^export .+$/mg, '')
+  const source = loadCefIpcSources(['api/db'])
   const Api = vm.runInNewContext(source + '\nDatabaseAPI', { console }) as
     new (transport: unknown) => DatabaseSdk
   return new Api({ call: async () => reply })

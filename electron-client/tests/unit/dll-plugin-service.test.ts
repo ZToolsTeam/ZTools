@@ -12,6 +12,7 @@ import type {
 } from '../../src/main/native-host/native-host-client.js'
 import type { NativeDllInvocationContext } from '../../src/main/native-host/dll-client-port.js'
 import { DllPluginService } from '../../src/main/services/dll-plugin-service.js'
+import { getResolvedLocale } from '../../src/main/i18n/index.js'
 import type { RuntimeCapabilityLease } from '../../src/main/services/runtime-capability-authorization-service.js'
 import type { PluginManifest, PluginManifestRuntimeMetadata } from '../../src/main/services/plugin-install-service.js'
 import { NativeMediaPathPolicy } from '../../src/main/services/native-media-policy.js'
@@ -584,9 +585,10 @@ test('ordinary and administrator DLL calls use separate trusted transports', win
     success: true,
     data: { echo: 'native' }
   })
+  const currentLocale = getResolvedLocale()
   assert.deepEqual(native.calls.at(-1), {
     method: 'callDll',
-    args: ['clipboard-manager', 'ClipboardManagerPlugin', 'Echo', { value: 1 }]
+    args: ['clipboard-manager', 'ClipboardManagerPlugin', 'Echo', { value: 1, __locale: currentLocale }]
   })
   assert.equal(service.calls.length, 0)
 
@@ -602,7 +604,7 @@ test('ordinary and administrator DLL calls use separate trusted transports', win
     'context-menu',
     'ContextMenuPlugin',
     'CheckAdmin',
-    {}
+    { __locale: currentLocale }
   ]])
   assert.equal(native.calls.filter((call) => call.method === 'callDll').length, 1)
   dllPlugins.stop()
@@ -1992,6 +1994,7 @@ test('media calls across all native transports pass canonical caller-authorized 
     policy
   )
 
+  const currentLocale = getResolvedLocale()
   await dllPlugins.call({
     plugin: 'BatchAudioPlugin', func: 'GetFileInfo', params: { filePath: 'source.wav' }
   }, mediaCaller)
@@ -1999,7 +2002,7 @@ test('media calls across all native transports pass canonical caller-authorized 
     mediaManifest.id,
     'BatchAudioPlugin',
     'GetFileInfo',
-    { filePath: canonical('source.wav') }
+    { filePath: canonical('source.wav'), __locale: currentLocale }
   ])
 
   const asyncStarted = await dllPlugins.callAsync({
@@ -2010,7 +2013,7 @@ test('media calls across all native transports pass canonical caller-authorized 
     mediaManifest.id,
     'BatchAudioPlugin',
     'BatchDetectSilence',
-    { files: [canonical('source.wav')] }
+    { files: [canonical('source.wav')], __locale: currentLocale }
   ])
   assert.equal(asyncStarted.taskId, native.assignedTaskIds[0])
   assert.match(String(native.assignedTaskIds[0]), /^task_[A-Za-z0-9_-]{1,123}$/)
@@ -2028,7 +2031,8 @@ test('media calls across all native transports pass canonical caller-authorized 
     {
       taskId: 'media_callback_task',
       files: [canonical('source.wav')],
-      outputDir: canonical('output')
+      outputDir: canonical('output'),
+      __locale: currentLocale
     }
   ])
   assert.match(String(callbackArgs?.at(-1)), /^task_[A-Za-z0-9_-]{1,123}$/)

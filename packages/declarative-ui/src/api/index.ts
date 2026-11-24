@@ -16,6 +16,9 @@ export * from "./process.js";
 export {
   SUPPORTED_LOCALES,
   DEFAULT_LOCALE,
+  SYSTEM_LOCALE,
+  stripLocaleSuffix,
+  matchSupportedLocale,
   resolveLocale,
   getLocale,
   setRuntimeLocale,
@@ -28,5 +31,6 @@ export type {
   TranslationParamValue,
   TranslationParams,
   CreateTranslatorOptions,
+  MessageCatalog,
   Translator
 } from "../runtime/locale.js";

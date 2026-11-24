@@ -206,8 +206,8 @@ describe('keymap 统一快捷键分发器测试套件', () => {
     expect(dispatchKeyEvent(undefined)).toBe(false)
 
     // 4.2 非法 scope 注册拒绝
-    expect(() => registerKeyHandler('invalid_scope', () => {})).toThrow(/无效的作用域/)
-    expect(() => registerKeyHandler(KEYMAP_SCOPES.GLOBAL, null)).toThrow(/处理器必须/)
+    expect(() => registerKeyHandler('invalid_scope', () => {})).toThrow(/Invalid scope/)
+    expect(() => registerKeyHandler(KEYMAP_SCOPES.GLOBAL, null)).toThrow(/Handler must be/)
 
     // 4.3 处理器内部抛错隔离
     registerKeyHandler(KEYMAP_SCOPES.GLOBAL, {

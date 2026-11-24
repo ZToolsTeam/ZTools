@@ -26,6 +26,7 @@ const categoriesStore = useCategoriesStore()
 const pluginsStore = usePluginsStore()
 
 const mainScrollRef = ref(null)
+const activePage = ref(null)
 const workbenchScrollPositions = new Map()
 
 const isDeclarativeView = computed(() => route.name === 'declarative')
@@ -119,8 +120,7 @@ const goBackFromDetails = () => {
 }
 
 // 底栏左侧「打开 ↵」与右侧「动作 Ctrl+K」只在支持插件卡片交互的主页和插件市场显示
-const showOpenHint = computed(() => route.name === 'my' || route.name === 'list')
-const showActionPanelBtn = computed(() => route.name === 'my' || route.name === 'list')
+const showCardActions = computed(() => route.name === 'my' || (route.name === 'list' && activePage.value?.hasCardActions))
 const isDetails = computed(() => route.name === 'details')
 
 // 全局基础快捷键调度 (GLOBAL 作用域)
@@ -130,6 +130,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     return true
   },
   [SHELL_SHORTCUTS.ACTION_PANEL]: () => {
+    if (!showCardActions.value) return false
     openGlobalActions()
     return true
   },
@@ -187,7 +188,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
       >
         <router-view v-slot="{ Component }">
           <keep-alive :exclude="['DeclarativePage']" :max="8">
-            <component :is="Component" :key="routeViewKey" />
+            <component :is="Component" :key="routeViewKey" ref="activePage" />
           </keep-alive>
         </router-view>
       </main>
@@ -196,7 +197,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     <!-- 底部动作栏：左侧当前可执行动作，右侧全局快捷键；按平台显示 ⌘ / Ctrl -->
     <footer v-if="!isDeclarativeView" class="action-bar select-none">
       <div class="flex items-center gap-4">
-        <span v-if="showOpenHint" class="action-hint is-primary">
+        <span v-if="showCardActions" class="action-hint is-primary">
           {{ t('common.open') }}
           <ShortcutKeys combo="Enter" />
         </span>
@@ -212,7 +213,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
       </div>
 
       <div class="flex items-center gap-1">
-        <button v-if="showActionPanelBtn" type="button" class="action-btn" @click="openGlobalActions">
+        <button v-if="showCardActions" type="button" class="action-btn" @click="openGlobalActions">
           {{ t('nav.actions') }}
           <ShortcutKeys :combo="SHELL_SHORTCUTS.ACTION_PANEL" />
         </button>

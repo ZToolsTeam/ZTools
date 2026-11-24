@@ -36,7 +36,7 @@ interface TreeSummary {
 
 function validatePluginId(pluginId: string): void {
   if (!PLUGIN_ID_PATTERN.test(pluginId) || pluginId.endsWith('.') || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(pluginId)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'pluginId 格式无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid pluginId format')
   }
 }
 
@@ -62,7 +62,7 @@ function isSafeDirectoryName(value: string): boolean {
 
 function normalizeAssetPath(value: string): string {
   if (value.length === 0 || value.length > 4096 || value.includes('\0')) {
-    throw new ZToolsError(errorCodes.invalidRequest, '恢复资产路径无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid recovery asset path')
   }
   const normalized = value.replaceAll('\\', '/')
   const segments = normalized.split('/')
@@ -71,7 +71,7 @@ function normalizeAssetPath(value: string): string {
     /^[A-Za-z]:\//.test(normalized) ||
     segments.some((segment) => segment === '' || segment === '.' || segment === '..')
   ) {
-    throw new ZToolsError(errorCodes.invalidRequest, '恢复资产路径越界')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Recovery asset path escapes allowed root')
   }
   return segments.join(path.sep)
 }
@@ -89,18 +89,18 @@ async function summarizeTree(root: string): Promise<TreeSummary> {
     const entries = await fs.readdir(current, { withFileTypes: true })
     for (const entry of entries) {
       const target = path.join(current, entry.name)
-      if (entry.isSymbolicLink()) throw new ZToolsError(errorCodes.dataCorrupt, '插件历史数据包含符号链接')
+      if (entry.isSymbolicLink()) throw new ZToolsError(errorCodes.dataCorrupt, 'Legacy plugin data contains a symbolic link')
       if (entry.isDirectory()) {
         summary.directories += 1
         pending.push(target)
         continue
       }
-      if (!entry.isFile()) throw new ZToolsError(errorCodes.dataCorrupt, '插件历史数据包含不支持的文件类型')
+      if (!entry.isFile()) throw new ZToolsError(errorCodes.dataCorrupt, 'Legacy plugin data contains an unsupported file type')
       const stats = await fs.stat(target)
       summary.files += 1
       summary.bytes += stats.size
       if (summary.files > MAX_RECOVERY_FILES || summary.bytes > MAX_RECOVERY_BYTES) {
-        throw new ZToolsError(errorCodes.fileTooLarge, '插件历史数据超过恢复预算')
+        throw new ZToolsError(errorCodes.fileTooLarge, 'Legacy plugin data exceeds recovery budget')
       }
     }
   }
@@ -113,7 +113,7 @@ async function copyOrdinaryTree(
   summary: TreeSummary
 ): Promise<void> {
   const stats = await fs.lstat(source)
-  if (stats.isSymbolicLink()) throw new ZToolsError(errorCodes.dataCorrupt, '插件历史数据包含符号链接')
+  if (stats.isSymbolicLink()) throw new ZToolsError(errorCodes.dataCorrupt, 'Legacy plugin data contains a symbolic link')
   if (stats.isDirectory()) {
     summary.directories += 1
     await fs.mkdir(destination, { recursive: false, mode: 0o700 })
@@ -127,11 +127,11 @@ async function copyOrdinaryTree(
     }
     return
   }
-  if (!stats.isFile()) throw new ZToolsError(errorCodes.dataCorrupt, '插件历史数据包含不支持的文件类型')
+  if (!stats.isFile()) throw new ZToolsError(errorCodes.dataCorrupt, 'Legacy plugin data contains an unsupported file type')
   summary.files += 1
   summary.bytes += stats.size
   if (summary.files > MAX_RECOVERY_FILES || summary.bytes > MAX_RECOVERY_BYTES) {
-    throw new ZToolsError(errorCodes.fileTooLarge, '插件历史数据超过恢复预算')
+    throw new ZToolsError(errorCodes.fileTooLarge, 'Legacy plugin data exceeds recovery budget')
   }
   await fs.copyFile(source, destination)
 }
@@ -190,41 +190,41 @@ export class PluginDataRecoveryService {
   ): Promise<PluginDataRecoveryResult> {
     validatePluginId(pluginId)
     if (!isSafeDirectoryName(preservationId)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'preservationId 格式无效')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Invalid preservationId format')
     }
     if (requestedAssets.length === 0 || requestedAssets.length > MAX_ASSETS_PER_RECOVERY) {
-      throw new ZToolsError(errorCodes.invalidRequest, '恢复资产列表为空或超过上限')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Recovery asset list is empty or exceeds the limit')
     }
     const assets = requestedAssets.map(normalizeAssetPath)
     const keys = new Set<string>()
     for (const asset of assets) {
       const key = asset.toLocaleLowerCase('en-US')
-      if (keys.has(key)) throw new ZToolsError(errorCodes.invalidRequest, '恢复资产包含重复路径')
+      if (keys.has(key)) throw new ZToolsError(errorCodes.invalidRequest, 'Recovery assets contain duplicate paths')
       keys.add(key)
     }
     const legacyRoot = await this.#legacyRoot(pluginId, true)
-    if (!legacyRoot) throw new ZToolsError(errorCodes.dataCorrupt, '插件历史数据目录不存在')
+    if (!legacyRoot) throw new ZToolsError(errorCodes.dataCorrupt, 'Legacy plugin data directory does not exist')
     const sourceRoot = path.join(legacyRoot, preservationId)
     if (!isWithin(legacyRoot, sourceRoot) || !(await ordinaryDirectory(sourceRoot))) {
-      throw new ZToolsError(errorCodes.dataCorrupt, '插件历史数据快照不存在或不是普通目录')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Legacy plugin data snapshot does not exist or is not a regular directory')
     }
     const sourceStats = await summarizeTree(sourceRoot)
     if (sourceStats.files > MAX_RECOVERY_FILES || sourceStats.bytes > MAX_RECOVERY_BYTES) {
-      throw new ZToolsError(errorCodes.fileTooLarge, '插件历史数据超过恢复预算')
+      throw new ZToolsError(errorCodes.fileTooLarge, 'Legacy plugin data exceeds recovery budget')
     }
     const restoredRoot = path.join(this.#pluginDataRoot, pluginId, 'restored')
     const restoredStats = await fs.lstat(restoredRoot).catch(() => undefined)
     if (restoredStats && (!restoredStats.isDirectory() || restoredStats.isSymbolicLink())) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件恢复目录不是普通目录')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Plugin recovery directory is not a regular directory')
     }
     await fs.mkdir(restoredRoot, { recursive: true, mode: 0o700 })
     if (!(await ordinaryDirectory(restoredRoot))) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件恢复目录不是普通目录')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Plugin recovery directory is not a regular directory')
     }
     const restorationId = recoveryId(preservationId, assets)
     const destination = path.join(restoredRoot, restorationId)
     if (!isWithin(restoredRoot, destination)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '恢复目标路径越界')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Recovery destination path escapes allowed root')
     }
     const manifestPath = path.join(destination, '.ztools-recovery.json')
     const existingManifest = await fs.readFile(manifestPath, 'utf8').catch(() => undefined)
@@ -233,7 +233,7 @@ export class PluginDataRecoveryService {
       try {
         value = JSON.parse(existingManifest) as Record<string, unknown>
       } catch {
-        throw new ZToolsError(errorCodes.dataCorrupt, '恢复记录损坏')
+        throw new ZToolsError(errorCodes.dataCorrupt, 'Recovery manifest is corrupted')
       }
       if (
         value.pluginId === pluginId &&
@@ -252,10 +252,10 @@ export class PluginDataRecoveryService {
           relativeRoot: path.relative(this.#dataRoot, destination)
         }
       }
-      throw new ZToolsError(errorCodes.storageError, '恢复目标已存在且内容不匹配')
+      throw new ZToolsError(errorCodes.storageError, 'Recovery destination already exists with mismatched content')
     }
     if (await fs.lstat(destination).then(() => true, () => false)) {
-      throw new ZToolsError(errorCodes.storageError, '恢复目标已存在但缺少有效记录')
+      throw new ZToolsError(errorCodes.storageError, 'Recovery destination already exists without a valid manifest')
     }
 
     const copied: TreeSummary = { files: 0, directories: 0, bytes: 0 }
@@ -264,11 +264,11 @@ export class PluginDataRecoveryService {
       for (const asset of assets) {
         const source = path.resolve(sourceRoot, asset)
         if (!isWithin(sourceRoot, source) || source === path.resolve(sourceRoot)) {
-          throw new ZToolsError(errorCodes.invalidRequest, '恢复资产路径越界')
+          throw new ZToolsError(errorCodes.invalidRequest, 'Recovery asset path escapes allowed root')
         }
         const target = path.resolve(destination, asset)
         if (!isWithin(destination, target) || path.basename(target) === '.ztools-recovery.json') {
-          throw new ZToolsError(errorCodes.invalidRequest, '恢复资产目标路径无效')
+          throw new ZToolsError(errorCodes.invalidRequest, 'Invalid recovery asset destination path')
         }
         await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 })
         await copyOrdinaryTree(source, target, copied)
@@ -302,17 +302,17 @@ export class PluginDataRecoveryService {
   async #legacyRoot(pluginId: string, required: boolean): Promise<string | undefined> {
     const dataStats = await fs.lstat(this.#pluginDataRoot).catch(() => undefined)
     if (dataStats && (!dataStats.isDirectory() || dataStats.isSymbolicLink())) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件数据根不是普通目录')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Plugin data root is not a regular directory')
     }
     await fs.mkdir(this.#pluginDataRoot, { recursive: true, mode: 0o700 })
     const pluginRoot = path.join(this.#pluginDataRoot, pluginId)
     if (!(await ordinaryDirectory(pluginRoot))) {
-      if (required) throw new ZToolsError(errorCodes.dataCorrupt, '插件数据目录不是普通目录')
+      if (required) throw new ZToolsError(errorCodes.dataCorrupt, 'Plugin data directory is not a regular directory')
       return undefined
     }
     const legacyRoot = path.join(pluginRoot, 'legacy')
     if (!(await fs.lstat(legacyRoot).then((stats) => stats.isDirectory() && !stats.isSymbolicLink(), () => false))) {
-      if (required) throw new ZToolsError(errorCodes.dataCorrupt, '插件历史数据目录不是普通目录')
+      if (required) throw new ZToolsError(errorCodes.dataCorrupt, 'Legacy plugin data directory is not a regular directory')
       return undefined
     }
     return legacyRoot

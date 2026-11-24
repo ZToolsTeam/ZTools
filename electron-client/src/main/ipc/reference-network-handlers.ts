@@ -14,12 +14,12 @@ export function createReferenceNetworkHandlers(network: Pick<NetworkService, 'do
     try {
       if (merged.aborted) throw cancelled(merged.reason)
       const result = await work(merged)
-      if (merged.aborted) throw mutating ? new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '下载提交后结果未交付') : cancelled(merged.reason)
+      if (merged.aborted) throw mutating ? new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Result was not delivered after download commit') : cancelled(merged.reason)
       return result
     } finally { clearTimeout(timer) }
   }
   const cancelled = (reason: unknown) => new ZToolsError(reason === errorCodes.requestTimeout ? errorCodes.requestTimeout :
-    reason === errorCodes.appStopping ? errorCodes.appStopping : errorCodes.callerDestroyed, '文件传输已取消')
+    reason === errorCodes.appStopping ? errorCodes.appStopping : errorCodes.callerDestroyed, 'File transfer was cancelled')
   return {
     network_http_download: { execute: async (value: unknown, caller: CallerIdentity, signal: AbortSignal) => {
       const params = parseDownloadReference(value)

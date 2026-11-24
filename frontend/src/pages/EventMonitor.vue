@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { RcButton } from '@/components/base'
-import { useAppI18n } from '@/i18n'
+import { useAppI18n, getCurrentLocale } from '@/i18n'
 
 const { t } = useAppI18n()
 const events = ref([])
@@ -57,7 +57,7 @@ onBeforeUnmount(() => {
     <div class="event-list">
       <div v-for="(e, idx) in events" :key="idx" class="event-item">
         <div class="event-meta">
-          {{ new Date(e.timestamp).toLocaleString() }} · {{ e.type }}
+          {{ new Date(e.timestamp).toLocaleString(getCurrentLocale()) }} · {{ e.type }}
         </div>
         <pre class="event-body">{{ format(e) }}</pre>
       </div>

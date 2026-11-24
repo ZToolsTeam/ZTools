@@ -11,4 +11,4 @@ export function parseReferenceFind(value: unknown) {
   return { ...parseReferenceDirectory({ directoryGrantId: v.directoryGrantId, relativePath: v.relativePath }, true),
     pattern: v.pattern, caseSensitive: v.caseSensitive ?? true }
 }
-function invalid(): ZToolsError { return new ZToolsError(errorCodes.invalidRequest, '引用文件查找参数无效') }
+function invalid(): ZToolsError { return new ZToolsError(errorCodes.invalidRequest, 'Invalid file reference search parameters') }

@@ -91,7 +91,19 @@
             "share wifi"
           ]
         }
-      }
+      },
+      "screenshots": [
+        {
+          "file": "screenshots/en-US/01.png",
+          "title": "QR Code Generation"
+        }
+      ]
     }
-  }
+  },
+  "screenshots": [
+    {
+      "path": "screenshots/01.png",
+      "title": "文本生成二维码"
+    }
+  ]
 }

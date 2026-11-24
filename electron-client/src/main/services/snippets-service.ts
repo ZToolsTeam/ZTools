@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
+import { getResolvedLocale } from '../i18n/index.js'
+
+function _snippetText(zh: string, en: string): string {
+  return getResolvedLocale() === 'zh-CN' ? zh : en
+}
 
 export interface SnippetRecord {
   id: string
@@ -333,7 +338,7 @@ export class SnippetsService {
     } catch (err: unknown) {
       const errMessage = err instanceof Error ? err.message : String(err)
       if (errMessage.includes('UNIQUE constraint failed')) {
-        throw new Error(`触发词 "${input.keyword}" 已存在，不可重复`)
+        throw new Error(_snippetText(`触发词 "${input.keyword}" 已存在，不可重复`, `Keyword "${input.keyword}" already exists`))
       }
       throw err
     }
@@ -360,12 +365,12 @@ export class SnippetsService {
     now = Date.now()
   ): SnippetRecord {
     if (!this.db) throw new Error('Database is closed')
-    if (!id || typeof id !== 'string') throw new Error('无效的短语 ID')
+    if (!id || typeof id !== 'string') throw new Error('Invalid snippet ID')
 
     const existingStmt = this.db.prepare('SELECT * FROM snippets WHERE id = ?')
     const existing = existingStmt.get(id) as unknown as SnippetRow | undefined
     if (!existing) {
-      throw new Error(`未找到 ID 为 "${id}" 的短语`)
+      throw new Error(`Snippet with ID "${id}" not found`)
     }
 
     const name = updates.name !== undefined ? updates.name.trim() : existing.name
@@ -373,9 +378,9 @@ export class SnippetsService {
     const snippet = updates.snippet !== undefined ? updates.snippet : existing.snippet
     const enabled = updates.enabled !== undefined ? (updates.enabled ? 1 : 0) : existing.enabled
 
-    if (!name) throw new Error('短语名称不能为空')
-    if (!keyword) throw new Error('触发词不能为空')
-    if (typeof snippet !== 'string') throw new Error('短语内容必须为字符串')
+    if (!name) throw new Error('Snippet name cannot be empty')
+    if (!keyword) throw new Error('Snippet keyword cannot be empty')
+    if (typeof snippet !== 'string') throw new Error('Snippet content must be a string')
 
     const updateStmt = this.db.prepare(`
       UPDATE snippets
@@ -388,7 +393,7 @@ export class SnippetsService {
     } catch (err: unknown) {
       const errMessage = err instanceof Error ? err.message : String(err)
       if (errMessage.includes('UNIQUE constraint failed')) {
-        throw new Error(`触发词 "${keyword}" 与其他短语冲突`)
+        throw new Error(_snippetText(`触发词 "${keyword}" 与其他短语冲突`, `Keyword "${keyword}" conflicts with another snippet`))
       }
       throw err
     }
@@ -555,12 +560,12 @@ export class SnippetsService {
         items = JSON.parse(data) as unknown[]
       } catch (err: unknown) {
         const errMessage = err instanceof Error ? err.message : String(err)
-        throw new Error(`JSON 解析失败: ${errMessage}`)
+        throw new Error(`Failed to parse JSON: ${errMessage}`)
       }
     } else if (Array.isArray(data)) {
       items = data
     } else {
-      throw new Error('导入数据必须为 JSON 字符串或数组')
+      throw new Error('Import data must be a JSON string or array')
     }
 
     let imported = 0
@@ -573,7 +578,7 @@ export class SnippetsService {
       const rawItem = items[i]
       if (!rawItem || typeof rawItem !== 'object') {
         failed++
-        errors.push(`第 ${i + 1} 项数据格式错误`)
+        errors.push(`Item #${i + 1} has invalid data format`)
         continue
       }
       const item = rawItem as Record<string, unknown>
@@ -585,7 +590,7 @@ export class SnippetsService {
 
       if (!name || !keyword || !snippet) {
         failed++
-        errors.push(`第 ${i + 1} 项缺少必要字段 (name, keyword, snippet)`)
+        errors.push(`Item #${i + 1} is missing required fields (name, keyword, snippet)`)
         continue
       }
 
@@ -628,16 +633,16 @@ export class SnippetsService {
 
   private validateSnippetInput(input: SnippetInput): void {
     if (!input || typeof input !== 'object') {
-      throw new Error('入参必须为对象')
+      throw new Error('Input must be an object')
     }
     if (!input.name || typeof input.name !== 'string' || !input.name.trim()) {
-      throw new Error('短语名称不能为空')
+      throw new Error('Snippet name cannot be empty')
     }
     if (!input.keyword || typeof input.keyword !== 'string' || !input.keyword.trim()) {
-      throw new Error('触发词不能为空')
+      throw new Error('Snippet keyword cannot be empty')
     }
     if (typeof input.snippet !== 'string') {
-      throw new Error('短语内容必须为字符串')
+      throw new Error('Snippet content must be a string')
     }
   }
 

@@ -36,11 +36,11 @@ async function findEditor(editor: ProjectEditor, signal: AbortSignal) {
       try {
         const real = await fs.realpath(file), bundle = await inspect(real, signal)
         if (app.ids.includes(bundle.bundleIdentifier)) return { ...app, path: real, executable: bundle.executableName }
-        errors.push(`${path.basename(file)} 的应用标识不匹配`)
+        errors.push(`${path.basename(file)} bundle identifier mismatch`)
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') errors.push(error instanceof Error ? error.message : String(error)) }
     }
   }
-  throw new Error(`未找到可用的 ${app.names[0]}${errors.length ? `：${errors[0]}` : '，请先安装对应编辑器'}`)
+  throw new Error(`No usable ${app.names[0]} found${errors.length ? `: ${errors[0]}` : '; please install the editor first'}`)
 }
 /** Windows 上各编辑器的可执行文件：只在固定安装位置查找，不经过 PATH 里的 .cmd 脚本 */
 const windowsEditors: Record<ProjectEditor, { dirs: string[]; exe: string }> = {
@@ -89,33 +89,33 @@ export async function findWindowsEditor(editor: ProjectEditor, deps: WindowsLaun
   for (const file of candidates) {
     try { if ((await deps.stat(file)).isFile()) return file } catch { /* 继续查找下一个安装位置 */ }
   }
-  throw new Error(`未找到 ${app.dirs[0]} 的安装位置，请确认已安装对应编辑器`)
+  throw new Error(`Could not find installation location for ${app.dirs[0]}; ensure the editor is installed`)
 }
 
 type ProjectStat = { isFile(): boolean; isDirectory(): boolean }
-/** 把 fs.stat 的系统错误转换成给用户看的中文原因；原始错误放在 cause 里，不直接透给插件 */
+/** 把 fs.stat 的系统错误转换成给用户看的原因；原始错误放在 cause 里，不直接透给插件 */
 export function describeProjectPathError(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code
   switch (code) {
-    case 'ENOENT': return '项目路径不存在，可能已被移动、重命名或删除，请重新扫描'
-    case 'ENOTDIR': return '项目路径的上级不是文件夹，项目可能已被移动，请重新扫描'
+    case 'ENOENT': return 'Project path does not exist; it may have been moved, renamed, or deleted. Please rescan'
+    case 'ENOTDIR': return 'Parent of project path is not a folder; the project may have been moved. Please rescan'
     case 'EACCES':
-    case 'EPERM': return '没有权限访问项目路径，请检查文件夹权限（macOS 需在“系统设置 > 隐私与安全性”中允许访问该位置）'
-    case 'ELOOP': return '项目路径包含循环的符号链接，无法打开'
-    case 'ENAMETOOLONG': return '项目路径过长，无法打开'
+    case 'EPERM': return 'Permission denied accessing project path; check folder permissions (on macOS, allow access in System Settings > Privacy & Security)'
+    case 'ELOOP': return 'Project path contains a symbolic link loop and cannot be opened'
+    case 'ENAMETOOLONG': return 'Project path is too long to open'
     case 'EIO':
     case 'ETIMEDOUT':
     case 'EHOSTDOWN':
-    case 'ENXIO': return '项目所在磁盘或网络位置无法读取，请确认已连接后重试'
-    default: return `无法读取项目路径${code ? `（${code}）` : ''}，请重新扫描`
+    case 'ENXIO': return 'Project disk or network location is unreadable; confirm it is connected and retry'
+    default: return `Unable to read project path${code ? ` (${code})` : ''}; please rescan`
   }
 }
-/** 读取项目路径并确认类型与记录一致；失败时给出中文原因 */
+/** 读取项目路径并确认类型与记录一致；失败时给出明确原因 */
 async function checkProjectPath(project: RecentProject, stat: (file: string) => Promise<ProjectStat>): Promise<void> {
   let info: ProjectStat
   try { info = await stat(project.path) } catch (error) { throw new Error(describeProjectPathError(error), { cause: error }) }
-  if (project.kind === 'folder' && !info.isDirectory()) throw new Error('项目路径类型已改变：记录的是文件夹，现在不是文件夹，请重新扫描')
-  if (project.kind !== 'folder' && !info.isFile()) throw new Error('项目路径类型已改变：记录的是工作区文件，现在不是普通文件，请重新扫描')
+  if (project.kind === 'folder' && !info.isDirectory()) throw new Error('Project path type changed: expected a folder, please rescan')
+  if (project.kind !== 'folder' && !info.isFile()) throw new Error('Project path type changed: expected a workspace file, please rescan')
 }
 
 /** 直接启动可执行文件并等待其启动成功或失败；参数原样传递，路径里的空格与 & 等字符不会被当成命令 */
@@ -124,7 +124,7 @@ function spawnDetached(start: typeof spawn, file: string, args: string[], cwd?: 
     let child: ReturnType<typeof spawn>
     try { child = start(file, args, { shell: false, detached: true, stdio: 'ignore', windowsHide: false, ...(cwd ? { cwd } : {}), ...(verbatim ? { windowsVerbatimArguments: true } : {}) }) }
     catch (error) { reject(error instanceof Error ? error : new Error(String(error))); return }
-    child.once('error', error => reject(new Error(`启动失败：${error.message}`)))
+    child.once('error', error => reject(new Error(`Launch failed: ${error.message}`)))
     child.once('spawn', () => { child.unref(); resolve() })
   })
 }
@@ -140,7 +140,7 @@ export async function launchWindowsProject(project: RecentProject, action: 'open
     // /K 之后的内容由 cmd 自己解析：Node 只给含空格的参数加引号，不带空格的 \\srv\s\x&calc 会被 cmd 拆成两条命令。
     // 因此拒绝含 cmd 特殊字符的网络路径（% 在引号内也会展开），其余路径自行加引号并按原样传给 cmd。
     if (directory.startsWith('\\\\')) {
-      if (/[&|<>^%!"\r\n]/.test(directory)) throw new Error('网络路径含 & | < > ^ % ! 等字符，无法安全地在终端中打开，请先映射为盘符')
+      if (/[&|<>^%!"\r\n]/.test(directory)) throw new Error('Network path contains unsafe shell characters (& | < > ^ % !); map it to a drive letter before opening in terminal')
       await spawnDetached(deps.spawn, shell, ['/K', 'pushd', `"${directory}"`], undefined, true)
     } else await spawnDetached(deps.spawn, shell, ['/K'], directory)
   } else {
@@ -162,9 +162,9 @@ export async function launchRecentProject(project: RecentProject, action: 'open'
     if (editor.cli) {
       const cli = path.join(editor.path, 'Contents', 'Resources', 'app', 'out', 'cli.js')
       const cliStat = await fs.stat(cli).catch((error: unknown) => {
-        throw new Error(`编辑器命令行入口不可用（${(error as NodeJS.ErrnoException).code === 'ENOENT' ? '文件不存在，请重新安装编辑器' : describeProjectPathError(error)}）`, { cause: error })
+        throw new Error(`Editor CLI entry is unavailable (${(error as NodeJS.ErrnoException).code === 'ENOENT' ? 'file does not exist; please reinstall the editor' : describeProjectPathError(error)})`, { cause: error })
       })
-      if (!cliStat.isFile()) throw new Error('编辑器命令行入口不是普通文件')
+      if (!cliStat.isFile()) throw new Error('Editor CLI entry is not a regular file')
       const executable = path.join(editor.path, 'Contents', 'MacOS', editor.executable)
       const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
       for (const key of ['VSCODE_IPC_HOOK_CLI', 'NODE_OPTIONS', 'NODE_REPL_EXTERNAL_MODULE']) delete (env as NodeJS.ProcessEnv)[key]

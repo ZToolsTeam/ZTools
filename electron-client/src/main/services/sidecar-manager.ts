@@ -17,6 +17,7 @@ import {
   type MacosWindowBounds
 } from '../platform/macos/window-controller.js'
 import { expandSnippetMacros } from './snippets-service.js'
+import { getResolvedLocale, ZTOOLS_LOCALE_ENV_KEY } from '../i18n/index.js'
 
 export type SidecarState = 'stopped' | 'starting' | 'running' | 'restarting' | 'degraded'
 
@@ -541,7 +542,8 @@ export class ManagedSidecarProcess {
           windowsHide: true,
           env: {
             ...process.env,
-            ZTOOLS_SIDECAR_TOKEN: sessionToken
+            ZTOOLS_SIDECAR_TOKEN: sessionToken,
+            [ZTOOLS_LOCALE_ENV_KEY]: getResolvedLocale()
           }
         })
 

@@ -1,3 +1,4 @@
+import { resolveSdkText, resolveSdkErrorText } from './environment.js'
 // ============================================================
 // Mock Provider - 智能 Mock 数据提供者
 // 职责: 根据方法名自动生成合理的 Mock 响应
@@ -25,7 +26,10 @@ class MockProvider {
         const data = JSON.parse(cached)
         this._cache = new Map(Object.entries(data))
       }
-    } catch (e) {}
+    } catch (storageReadError) {
+      // 无存储权限或缓存损坏时保持空缓存
+      void storageReadError
+    }
   }
 
   /**
@@ -35,7 +39,10 @@ class MockProvider {
     try {
       const data = Object.fromEntries(this._cache.entries())
       localStorage.setItem('ztools_mock_cache', JSON.stringify(data))
-    } catch (e) {}
+    } catch (storageWriteError) {
+      // 无存储权限或配额不足时忽略持久化
+      void storageWriteError
+    }
   }
 
   /**
@@ -145,7 +152,7 @@ class MockProvider {
         // 否则返回模拟内容
         return {
           success: true,
-          content: btoa('这是 Mock 文件内容\nMock file content'),
+          content: btoa(unescape(encodeURIComponent(resolveSdkErrorText('mockFileContent')))),
           encoding: 'base64'
         }
       },
@@ -285,13 +292,13 @@ class MockProvider {
       // 存储加密数据
       db_put_secure: () => ({
         success: false,
-        error: { code: 'NOT_SUPPORTED', message: 'Mock 环境不支持安全凭据存储' }
+        error: { code: 'NOT_SUPPORTED', message: resolveSdkErrorText('mockSecureStorageUnsupported') }
       }),
 
       // 读取加密数据
       db_get_secure: () => ({
         success: false,
-        error: { code: 'NOT_SUPPORTED', message: 'Mock 环境不支持安全凭据存储' }
+        error: { code: 'NOT_SUPPORTED', message: resolveSdkErrorText('mockSecureStorageUnsupported') }
       }),
 
       // Credentials are never written to browser/mock storage.
@@ -301,15 +308,15 @@ class MockProvider {
       }),
       credential_v1_set: () => ({
         success: false,
-        error: { code: 'NOT_SUPPORTED', message: 'Mock 环境不支持安全凭据存储' }
+        error: { code: 'NOT_SUPPORTED', message: resolveSdkErrorText('mockSecureStorageUnsupported') }
       }),
       credential_v1_get: () => ({
         success: false,
-        error: { code: 'NOT_SUPPORTED', message: 'Mock 环境不支持安全凭据存储' }
+        error: { code: 'NOT_SUPPORTED', message: resolveSdkErrorText('mockSecureStorageUnsupported') }
       }),
       credential_v1_delete: () => ({
         success: false,
-        error: { code: 'NOT_SUPPORTED', message: 'Mock 环境不支持安全凭据存储' }
+        error: { code: 'NOT_SUPPORTED', message: resolveSdkErrorText('mockSecureStorageUnsupported') }
       })
     }
 
@@ -725,7 +732,7 @@ class MockProvider {
       }),
       plugin_create_shortcut: () => {
         console.log('[Mock] 创建桌面快捷方式:', params.pluginId)
-        return { success: true, message: '快捷方式已创建 (Mock)' }
+        return { success: true, message: resolveSdkErrorText('mockShortcutCreated') }
       }
     }
 
@@ -1003,7 +1010,7 @@ class MockProvider {
       }),
       process_start: () => ({
         success: true,
-        pid: Math.floor(Math.random() * 10000)
+        pid: (this._mockPidSeq = ((this._mockPidSeq || 2000) % 9000) + 1001)
       }),
       process_kill: () => {
         console.log('[Mock] 终止进程:', params.pid)
@@ -1039,7 +1046,7 @@ class MockProvider {
   _mockOCR(method, params) {
     return {
       success: true,
-      text: 'Mock OCR 识别结果\nMock OCR text result',
+      text: resolveSdkErrorText('mockOcrResult'),
       blocks: [{ text: 'Mock OCR', x: 10, y: 10, width: 100, height: 30 }]
     }
   }
@@ -1048,21 +1055,10 @@ class MockProvider {
    * Mock DLL Plugin API
    */
   _mockDLLPlugin(method, params) {
-    const mockUnavailableMsg = (() => {
-      let raw = 'en-US'
-      try {
-        raw = (typeof document !== 'undefined' && document.documentElement?.lang)
-          || (typeof localStorage !== 'undefined' && localStorage.getItem('ztools_locale'))
-          || (typeof navigator !== 'undefined' && navigator.language)
-          || 'en-US'
-      } catch {}
-      const isZh = /^zh(?:$|[-_])/i.test(String(raw).trim())
-      const dict = {
-        'zh-CN': 'DLL 插件在 Mock 环境下不可用，请在 ZTools 应用中运行',
-        'en-US': 'DLL plugins are unavailable in browser/mock mode. Please run inside the ZTools desktop app.'
-      }
-      return isZh ? dict['zh-CN'] : dict['en-US']
-    })()
+    const mockUnavailableMsg = resolveSdkText(
+      'DLL 插件在 Mock 环境下不可用，请在 ZTools 应用中运行',
+      'DLL plugins are unavailable in browser/mock mode. Please run inside the ZTools desktop app.'
+    )
     const handlers = {
       dllplugin_list: () => ({
         success: true,

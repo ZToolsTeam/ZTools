@@ -94,12 +94,12 @@ export interface ProcessWindowReader {
 
 function abortError(signal: AbortSignal): ZToolsError {
   if (signal.reason === errorCodes.requestTimeout) {
-    return new ZToolsError(errorCodes.requestTimeout, '调用超时')
+    return new ZToolsError(errorCodes.requestTimeout, 'Request timed out')
   }
   if (signal.reason === errorCodes.appStopping) {
-    return new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    return new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
   }
-  return new ZToolsError(errorCodes.callerDestroyed, '调用者已销毁')
+  return new ZToolsError(errorCodes.callerDestroyed, 'Caller has been destroyed')
 }
 
 function normalizedPath(value: string): string {
@@ -151,7 +151,7 @@ const defaultProcessWindowCommandRunner: ProcessWindowCommandRunner = {
 function parseWindowHandle(output: string): number {
   const handle = Number(output.trim())
   if (!Number.isSafeInteger(handle) || handle < 0) {
-    throw new ZToolsError(errorCodes.processError, '读取进程窗口句柄失败')
+    throw new ZToolsError(errorCodes.processError, 'Failed to read process window handle')
   }
   return handle
 }
@@ -163,10 +163,10 @@ export function createProcessWindowReader(
   return {
     async read(pid, signal) {
       if (!Number.isInteger(pid) || pid < 1 || pid > 0xffff_ffff) {
-        throw new ZToolsError(errorCodes.invalidRequest, 'pid 无效')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid pid')
       }
       if (platform !== 'win32') {
-        throw new ZToolsError(errorCodes.notSupported, '当前平台不支持进程窗口查询')
+        throw new ZToolsError(errorCodes.notSupported, 'Process window lookup is not supported on this platform')
       }
       if (signal.aborted) throw abortError(signal)
       const script = `${PROCESS_WINDOW_SCRIPT}\n$targetPid = ${pid}\n[ZToolsProcessWindow]::FindVisibleWindow([uint32]$targetPid)`
@@ -179,7 +179,7 @@ export function createProcessWindowReader(
       } catch (error) {
         if (error instanceof ZToolsError) throw error
         if (signal.aborted) throw abortError(signal)
-        throw new ZToolsError(errorCodes.processError, '读取进程窗口失败')
+        throw new ZToolsError(errorCodes.processError, 'Failed to read process window')
       }
     }
   }
@@ -243,9 +243,9 @@ export class ProcessService {
   }
 
   async listPorts(signal: AbortSignal): Promise<PortSnapshot & { success: true }> {
-    if (this.#portsStopped) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#portsStopped) throw new ZToolsError(errorCodes.appStopping, 'Application is shutting down')
     if (signal.aborted) throw abortError(signal)
-    if (this.#portRequests.size >= 4) throw new ZToolsError(errorCodes.pluginBusy, '端口查询正在处理中')
+    if (this.#portRequests.size >= 4) throw new ZToolsError(errorCodes.pluginBusy, 'Port query is already in progress')
     const controller = new AbortController(), combined = AbortSignal.any([signal, controller.signal]); this.#portRequests.add(controller)
     try {
       const result = await (this.portDiscoveryAdapter ?? createPlatformPortDiscoveryAdapter(this.runtimePlatform)).list(combined)
@@ -264,7 +264,7 @@ export class ProcessService {
     signal: AbortSignal
   ): Promise<{ success: true; data: ProcessSummary }> {
     const item = (await this.#listProcesses(signal)).find((processItem) => processItem.pid === params.pid)
-    if (!item) throw new ZToolsError(errorCodes.processError, '进程不存在')
+    if (!item) throw new ZToolsError(errorCodes.processError, 'Process not found')
     return { success: true, data: item }
   }
 
@@ -305,7 +305,7 @@ export class ProcessService {
     signal: AbortSignal
   ): Promise<{ success: true; pid: number }> {
     if (this.runtimePlatform !== 'win32') {
-      throw new ZToolsError(errorCodes.notSupported, '当前平台尚未实现工具与应用启动适配器')
+      throw new ZToolsError(errorCodes.notSupported, 'Process launch adapter is not implemented on this platform')
     }
     if (signal.aborted) throw abortError(signal)
     const executable = await this.#resolveExecutable(params.path, caller)
@@ -316,9 +316,9 @@ export class ProcessService {
     try {
       workingStats = await fs.stat(workingDirectory)
     } catch {
-      throw new ZToolsError(errorCodes.processError, '工作目录不存在')
+      throw new ZToolsError(errorCodes.processError, 'Working directory does not exist')
     }
-    if (!workingStats.isDirectory()) throw new ZToolsError(errorCodes.processError, '工作目录不是目录')
+    if (!workingStats.isDirectory()) throw new ZToolsError(errorCodes.processError, 'Working directory is not a directory')
     if (signal.aborted) throw abortError(signal)
 
     let child: ChildProcess
@@ -330,7 +330,7 @@ export class ProcessService {
         windowsHide: !params.show
       })
     } catch {
-      throw new ZToolsError(errorCodes.processError, '启动进程失败')
+      throw new ZToolsError(errorCodes.processError, 'Failed to start process')
     }
 
     await new Promise<void>((resolve, reject) => {
@@ -345,7 +345,7 @@ export class ProcessService {
       }
       const onError = (): void => {
         cleanup()
-        reject(new ZToolsError(errorCodes.processError, '启动进程失败'))
+        reject(new ZToolsError(errorCodes.processError, 'Failed to start process'))
       }
       const onAbort = (): void => {
         cleanup()
@@ -360,7 +360,7 @@ export class ProcessService {
     const pid = child.pid
     if (!pid) {
       child.kill()
-      throw new ZToolsError(errorCodes.processError, '进程未返回有效 PID')
+      throw new ZToolsError(errorCodes.processError, 'Process did not return a valid PID')
     }
     const record: ManagedProcess = {
       child,
@@ -395,9 +395,9 @@ export class ProcessService {
 
   kill(params: ProcessKillParams, caller: CallerIdentity): { success: true } {
     const record = this.#ownedProcess(params.pid, caller)
-    if (record.exited) throw new ZToolsError(errorCodes.processError, '进程已经退出')
+    if (record.exited) throw new ZToolsError(errorCodes.processError, 'Process has already exited')
     const killed = record.child.kill(params.force ? 'SIGKILL' : 'SIGTERM')
-    if (!killed) throw new ZToolsError(errorCodes.processError, '终止进程失败')
+    if (!killed) throw new ZToolsError(errorCodes.processError, 'Failed to terminate process')
     return { success: true }
   }
 
@@ -428,7 +428,7 @@ export class ProcessService {
       if (params.timeout > 0) {
         timeout = setTimeout(() => {
           cleanup()
-          reject(new ZToolsError(errorCodes.requestTimeout, '等待进程超时'))
+          reject(new ZToolsError(errorCodes.requestTimeout, 'Timed out waiting for process'))
         }, params.timeout)
       }
       if (signal.aborted) onAbort()
@@ -446,11 +446,11 @@ export class ProcessService {
     for (const record of records?.values() ?? []) {
       if (record.exited || record.name !== target) continue
       const killed = record.child.kill(params.force ? 'SIGKILL' : 'SIGTERM')
-      if (!killed) throw new ZToolsError(errorCodes.processError, '终止进程失败')
+      if (!killed) throw new ZToolsError(errorCodes.processError, 'Failed to terminate process')
       killedCount += 1
     }
     if (killedCount === 0) {
-      throw new ZToolsError(errorCodes.processError, '未找到匹配的进程')
+      throw new ZToolsError(errorCodes.processError, 'No matching process found')
     }
     return { success: true, killedCount }
   }
@@ -460,7 +460,7 @@ export class ProcessService {
   }
 
   runFFmpeg(): never {
-    throw new ZToolsError(errorCodes.notSupported, 'FFmpeg 进程由独立迁移批次提供')
+    throw new ZToolsError(errorCodes.notSupported, 'FFmpeg process execution is provided by a separate module')
   }
 
   async #resolveExecutable(value: string, caller: CallerIdentity): Promise<string> {
@@ -475,17 +475,17 @@ export class ProcessService {
     try {
       stats = await fs.stat(target)
     } catch {
-      throw new ZToolsError(errorCodes.processError, '可执行文件不存在')
+      throw new ZToolsError(errorCodes.processError, 'Executable file does not exist')
     }
     if (!stats.isFile() || path.extname(target).toLocaleLowerCase('en-US') !== '.exe') {
-      throw new ZToolsError(errorCodes.processError, '启动目标必须是普通 EXE 文件')
+      throw new ZToolsError(errorCodes.processError, 'Launch target must be a regular EXE file')
     }
     return target
   }
 
   async #resolveTrustedSystemExecutable(value: string, caller: CallerIdentity): Promise<string> {
     if (caller.type !== 'plugin' || !caller.pluginId || !TRUSTED_POWERSHELL_PLUGIN_IDS.has(caller.pluginId)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '可执行文件未由当前窗口授权')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Executable file is not authorized by the current window')
     }
     const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
     const trusted = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
@@ -494,10 +494,10 @@ export class ProcessService {
     try {
       [canonicalTarget, canonicalTrusted] = await Promise.all([fs.realpath(value), fs.realpath(trusted)])
     } catch {
-      throw new ZToolsError(errorCodes.permissionDenied, '可信系统可执行文件不可用')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Trusted system executable is unavailable')
     }
     if (normalizedPath(canonicalTarget) !== normalizedPath(canonicalTrusted)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '可执行文件未由当前窗口授权')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Executable file is not authorized by the current window')
     }
     return canonicalTarget
   }
@@ -507,7 +507,7 @@ export class ProcessService {
     if (records) this.#prune(records)
     const record = records?.get(pid)
     if (!record || record.ownerWebContentsId !== caller.webContentsId) {
-      throw new ZToolsError(errorCodes.permissionDenied, '只能管理当前窗口启动的进程')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Can only manage processes started by the current window')
     }
     return record
   }
@@ -531,7 +531,7 @@ export class ProcessService {
   #listProcesses(signal: AbortSignal): Promise<ProcessSummary[]> {
     if (signal.aborted) return Promise.reject(abortError(signal))
     if (!this.discoveryAdapter) {
-      return Promise.reject(new ZToolsError(errorCodes.notSupported, '当前平台未配置进程发现适配器'))
+      return Promise.reject(new ZToolsError(errorCodes.notSupported, 'Process discovery adapter is not configured on this platform'))
     }
     return this.discoveryAdapter.list(signal).then(
       (processes) => {
@@ -777,11 +777,11 @@ export class ProcessService {
       case 'GetProcessDetail': {
         const pid = Number(params?.pid)
         if (!Number.isInteger(pid) || pid <= 0 || pid > 0xffff_ffff) {
-          return { success: true, data: { error: 'INVALID_PID: 进程 PID 无效' } }
+          return { success: true, data: { error: 'INVALID_PID: Invalid process PID' } }
         }
         if (this.runtimePlatform !== 'win32') {
           const cached = (await this.#queryRichProcessSnapshot(signal)).find((p) => p.pid === pid)
-          if (!cached) return { success: true, data: { error: 'PROCESS_NOT_FOUND: 进程已退出或不可见' } }
+          if (!cached) return { success: true, data: { error: 'PROCESS_NOT_FOUND: Process has exited or is not visible' } }
           return {
             success: true,
             data: {
@@ -914,13 +914,14 @@ export class ProcessService {
         // 「process」权限是审核可见性标记，不是运行时边界；新插件一律用 process_terminate_pid。
         const pid = Number(params?.pid)
         if (!Number.isInteger(pid) || pid <= 0 || pid > 0xffff_ffff) {
-          return { success: true, data: { error: 'INVALID_PID: 进程 PID 无效' } }
+          return { success: true, data: { error: 'INVALID_PID: Invalid process PID' } }
         }
         const legacyMode = params?.mode === 'tree' || params?.tree === true
           ? 'tree'
           : params?.mode === 'graceful' || params?.force === false
           ? 'graceful'
           : 'force'
+        let failureError: string | undefined
         try {
           await this.terminatePid({
             pid,
@@ -929,9 +930,12 @@ export class ProcessService {
           }, signal)
         } catch (error) {
           if (signal.aborted) throw abortError(signal)
-          const failure = error instanceof ZToolsError ? error : new ZToolsError(errorCodes.processError, '终止进程失败')
+          const failure = error instanceof ZToolsError ? error : new ZToolsError(errorCodes.processError, 'Failed to terminate process')
           const prefix = failure.code === errorCodes.processProtected ? 'SECURITY_INTERCEPTED' : failure.code
-          return { success: true, data: { error: `${prefix}: ${failure.message}` } }
+          failureError = `${prefix}: ${failure.message}`
+        }
+        if (failureError !== undefined) {
+          return { success: true, data: { error: failureError } }
         }
         return {
           success: true,
@@ -942,7 +946,7 @@ export class ProcessService {
       case 'OpenFileLocation': {
         const filePath = String(params?.path || '').trim()
         if (!filePath) {
-          return { success: false, data: { opened: false, error: '路径不能为空' } }
+          return { success: false, data: { opened: false, error: 'Path must not be empty' } }
         }
         const resolved = path.resolve(filePath)
         if (!fsSync.existsSync(resolved)) {

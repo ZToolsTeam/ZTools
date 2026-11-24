@@ -68,27 +68,27 @@ function databaseFailure(error: unknown, action: string): ZToolsError {
     .filter((item): item is Error => item instanceof Error)
     .map((item) => item.message)
     .join(': ')
-    .slice(0, 512) || '未知数据库错误'
+    .slice(0, 512) || 'Unknown database error'
   if (codes.includes('LEVEL_LOCKED')) {
-    return new ZToolsError(errorCodes.databaseLocked, '数据库正在被另一个进程使用')
+    return new ZToolsError(errorCodes.databaseLocked, 'Database is currently in use by another process')
   }
   if (codes.includes('LEVEL_CORRUPTION') || /corrupt/i.test(detail)) {
-    return new ZToolsError(errorCodes.dataCorrupt, '数据库已损坏')
+    return new ZToolsError(errorCodes.dataCorrupt, 'Database is corrupted')
   }
-  return new ZToolsError(errorCodes.storageError, `${action}失败`)
+  return new ZToolsError(errorCodes.storageError, `Failed to ${action}`)
 }
 
 function requireNotAborted(signal: AbortSignal): void {
   if (!signal.aborted) return
   if (signal.reason === errorCodes.appStopping) {
-    throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    throw new ZToolsError(errorCodes.appStopping, 'Application is stopping')
   }
-  throw new ZToolsError(errorCodes.callerDestroyed, '数据库操作已取消')
+  throw new ZToolsError(errorCodes.callerDestroyed, 'Database operation cancelled')
 }
 
 function requirePluginId(pluginId: string): void {
   if (!PLUGIN_ID_PATTERN.test(pluginId) || pluginId.endsWith('.') || WINDOWS_DEVICE_PATTERN.test(pluginId)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'plugin_id 格式无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid plugin_id format')
   }
 }
 
@@ -100,7 +100,7 @@ function isWithin(root: string, target: string): boolean {
 function strictBase64(value: string): Buffer {
   // 逐字符校验：整段正则在数百万字符时会回溯栈溢出
   if (!isValidFileBase64(value)) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'value 不是有效 Base64')
+    throw new ZToolsError(errorCodes.invalidRequest, 'value is not valid Base64')
   }
   return Buffer.from(value, 'base64')
 }
@@ -108,25 +108,25 @@ function strictBase64(value: string): Buffer {
 function serializeValue(value: unknown, isBase64 = false): Buffer {
   const serialized = typeof value === 'string' ? value : JSON.stringify(value)
   if (!isBase64 && serialized === undefined) {
-    throw new ZToolsError(errorCodes.invalidRequest, 'value 不能序列化为 JSON')
+    throw new ZToolsError(errorCodes.invalidRequest, 'value cannot be serialized to JSON')
   }
   const result = isBase64
     ? strictBase64(value as string)
     : Buffer.from(serialized as string, 'utf8')
   if (result.byteLength > MAX_VALUE_BYTES) {
-    throw new ZToolsError(errorCodes.fileTooLarge, '数据库值超过 16 MiB 上限')
+    throw new ZToolsError(errorCodes.fileTooLarge, 'Database value exceeds the 16 MiB limit')
   }
   return result
 }
 
 function decodeUtf8(value: Buffer): string {
   if (value.byteLength > MAX_VALUE_BYTES) {
-    throw new ZToolsError(errorCodes.responseTooLarge, '数据库值超过 16 MiB 返回上限')
+    throw new ZToolsError(errorCodes.responseTooLarge, 'Database value exceeds the 16 MiB response limit')
   }
   try {
     return utf8Decoder.decode(value)
   } catch {
-    throw new ZToolsError(errorCodes.dataCorrupt, '数据库文本不是有效 UTF-8')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Database text is not valid UTF-8')
   }
 }
 
@@ -205,7 +205,7 @@ export function encryptLegacySecure(pluginId: string, key: string, value: string
 export function decryptLegacySecure(pluginId: string, key: string, encryptedValue: string): string {
   const bytes = strictBase64(encryptedValue)
   if (bytes.byteLength % 2 !== 0) {
-    throw new ZToolsError(errorCodes.dataCorrupt, '加密数据库值长度无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid encrypted database value length')
   }
   return transformLegacySecure(pluginId, key, bytes.toString('utf16le'), true)
 }
@@ -229,7 +229,7 @@ export type CredentialV1Value =
 
 function requireCredentialKey(key: string): void {
   if (typeof key !== 'string' || !CREDENTIAL_KEY_PATTERN.test(key)) {
-    throw new ZToolsError(errorCodes.invalidRequest, '凭据 key 格式无效')
+    throw new ZToolsError(errorCodes.invalidRequest, 'Invalid credential key format')
   }
 }
 
@@ -248,7 +248,7 @@ function isCredentialDatabaseKey(key: string): boolean {
 
 function rejectCredentialDatabaseKey(key: string): void {
   if (isCredentialDatabaseKey(key)) {
-    throw new ZToolsError(errorCodes.permissionDenied, '该数据库键由宿主凭据存储保留')
+    throw new ZToolsError(errorCodes.permissionDenied, 'This database key is reserved by host credential storage')
   }
 }
 
@@ -294,7 +294,7 @@ export class DatabaseService {
 
   async recordClipboard(entry: ClipboardHistoryEntry): Promise<void> {
     await this.#perform('clipboard-manager', { type: 'main', webContentsId: 0 },
-      new AbortController().signal, '保存剪贴板历史', (store) => saveClipboardHistory(store, entry))
+      new AbortController().signal, 'save clipboard history', (store) => saveClipboardHistory(store, entry))
   }
 
   async put(
@@ -303,7 +303,7 @@ export class DatabaseService {
     signal: AbortSignal
   ): Promise<{ success: true; data: 'OK' }> {
     rejectCredentialDatabaseKey(params.key)
-    return this.#perform(params.plugin_id, caller, signal, '写入数据库', async (store) => {
+    return this.#perform(params.plugin_id, caller, signal, 'write to database', async (store) => {
       await store.put(params.key, serializeValue(params.value, params.is_base64), { sync: true })
       return { success: true, data: 'OK' }
     })
@@ -315,20 +315,20 @@ export class DatabaseService {
     rejectCredentialDatabaseKey(params.key)
     const value = serializeValue(params.value)
     const expected = params.expectedValue === null ? undefined : serializeValue(params.expectedValue)
-    let committed = false
+    let committedResult: { success: true; data: true } | undefined
     try {
-      return await this.#perform(params.plugin_id, caller, signal, '更新数据库', async (store) => {
+      return await this.#perform(params.plugin_id, caller, signal, 'update database', async (store) => {
         const current = await store.get(params.key)
         const matches = current === undefined ? expected === undefined : expected !== undefined && current.equals(expected)
         if (!matches) return { success: true, data: false }
         requireNotAborted(signal)
         await store.put(params.key, value, { sync: true })
-        committed = true
-        return { success: true, data: true }
+        committedResult = { success: true, data: true }
+        return committedResult
       })
     } catch (error) {
       // 同步提交已成功，随后取消不能撤销写入；不得让调用方误以为可以重做同一次更新。
-      if (committed && isCancellation(error)) return { success: true, data: true }
+      if (committedResult && isCancellation(error)) return committedResult
       throw error
     }
   }
@@ -339,7 +339,7 @@ export class DatabaseService {
     signal: AbortSignal
   ): Promise<{ success: true; data: string }> {
     rejectCredentialDatabaseKey(params.key)
-    return this.#perform(params.plugin_id, caller, signal, '读取数据库', async (store) => {
+    return this.#perform(params.plugin_id, caller, signal, 'read from database', async (store) => {
       const value = await store.get(params.key)
       if (value === undefined) {
         throw new ZToolsError(errorCodes.databaseKeyNotFound, 'Key not found')
@@ -357,7 +357,7 @@ export class DatabaseService {
     signal: AbortSignal
   ): Promise<{ success: true; data: 'OK' }> {
     rejectCredentialDatabaseKey(params.key)
-    return this.#perform(params.plugin_id, caller, signal, '删除数据库值', async (store) => {
+    return this.#perform(params.plugin_id, caller, signal, 'delete database value', async (store) => {
       await store.del(params.key, { sync: true })
       return { success: true, data: 'OK' }
     })
@@ -369,7 +369,7 @@ export class DatabaseService {
     signal: AbortSignal
   ): Promise<{ success: true; data: boolean }> {
     rejectCredentialDatabaseKey(params.key)
-    return this.#perform(params.plugin_id, caller, signal, '检查数据库值', async (store) => ({
+    return this.#perform(params.plugin_id, caller, signal, 'check database value', async (store) => ({
       success: true,
       data: await store.has(params.key)
     }))
@@ -380,7 +380,7 @@ export class DatabaseService {
     caller: CallerIdentity,
     signal: AbortSignal
   ): Promise<{ success: true; data: Array<{ key: string; value: string }> }> {
-    return this.#perform(params.plugin_id, caller, signal, '查询数据库', async (store) => {
+    return this.#perform(params.plugin_id, caller, signal, 'query database', async (store) => {
       const data: Array<{ key: string; value: string }> = []
       let responseBytes = 0
       for await (const [key, encodedValue] of store.iterator({
@@ -395,7 +395,7 @@ export class DatabaseService {
         const value = decodeUtf8(encodedValue)
         responseBytes += Buffer.byteLength(key, 'utf8') + Buffer.byteLength(value, 'utf8')
         if (responseBytes > MAX_QUERY_RESPONSE_BYTES) {
-          throw new ZToolsError(errorCodes.responseTooLarge, '数据库查询结果超过 16 MiB 上限')
+          throw new ZToolsError(errorCodes.responseTooLarge, 'Database query result exceeds the 16 MiB limit')
         }
         data.push({ key, value })
       }
@@ -409,7 +409,7 @@ export class DatabaseService {
     signal: AbortSignal
   ): Promise<{ success: true; data: 'OK' }> {
     for (const operation of params.operations) rejectCredentialDatabaseKey(operation.key)
-    return this.#perform(params.plugin_id, caller, signal, '批量写入数据库', async (store) => {
+    return this.#perform(params.plugin_id, caller, signal, 'batch write to database', async (store) => {
       const operations: Array<BatchOperation<LevelStore, string, Buffer>> = params.operations.map((operation) =>
         operation.op === 'put'
           ? { type: 'put', key: operation.key, value: serializeValue(operation.value) }
@@ -426,7 +426,7 @@ export class DatabaseService {
     signal: AbortSignal
   ): Promise<{ success: true; data: 'OK' }> {
     if (Buffer.byteLength(params.value, 'utf8') > MAX_SECURE_VALUE_BYTES) {
-      throw new ZToolsError(errorCodes.fileTooLarge, '安全数据库值超过 1 MiB 上限')
+      throw new ZToolsError(errorCodes.fileTooLarge, 'Secure database value exceeds the 1 MiB limit')
     }
     const namespace = this.#namespace(params.plugin_id, caller)
     const encrypted = encryptLegacySecure(namespace, params.key, params.value)
@@ -444,7 +444,7 @@ export class DatabaseService {
       return { success: true, data: decryptLegacySecure(namespace, params.key, result.data) }
     } catch (error) {
       if (error instanceof ZToolsError && error.code === errorCodes.invalidRequest) {
-        throw new ZToolsError(errorCodes.dataCorrupt, '安全数据库值不是有效密文')
+        throw new ZToolsError(errorCodes.dataCorrupt, 'Secure database value is not valid ciphertext')
       }
       throw error
     }
@@ -464,13 +464,13 @@ export class DatabaseService {
   ): Promise<{ success: true; data: 'OK' | 'EXISTS' | 'CONFLICT' }> {
     requireCredentialKey(params.key)
     if (params.ifAbsent !== undefined && typeof params.ifAbsent !== 'boolean') {
-      throw new ZToolsError(errorCodes.invalidRequest, 'ifAbsent 必须是布尔值')
+      throw new ZToolsError(errorCodes.invalidRequest, 'ifAbsent must be a boolean')
     }
     if (typeof params.value !== 'string') {
-      throw new ZToolsError(errorCodes.invalidRequest, '凭据 value 必须是字符串')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Credential value must be a string')
     }
     if (Buffer.byteLength(params.value, 'utf8') > MAX_CREDENTIAL_VALUE_BYTES) {
-      throw new ZToolsError(errorCodes.fileTooLarge, '凭据超过 64 KiB 上限')
+      throw new ZToolsError(errorCodes.fileTooLarge, 'Credential exceeds the 64 KiB limit')
     }
     const pluginId = this.#credentialNamespace(caller)
     return this.#withCredentialKeyLock(pluginId, params.key, async () => {
@@ -486,18 +486,18 @@ export class DatabaseService {
       try {
         ciphertext = await protection.encrypt(plaintext)
       } catch {
-        throw new ZToolsError(errorCodes.storageError, '安全凭据加密失败')
+        throw new ZToolsError(errorCodes.storageError, 'Failed to encrypt secure credential')
       }
       if (!Buffer.isBuffer(ciphertext) || ciphertext.byteLength === 0 ||
           ciphertext.byteLength > MAX_CREDENTIAL_CIPHERTEXT_BYTES) {
-        throw new ZToolsError(errorCodes.storageError, '安全凭据加密结果无效')
+        throw new ZToolsError(errorCodes.storageError, 'Invalid secure credential encryption result')
       }
 
       const record = Buffer.from(`${CREDENTIAL_RECORD_PREFIX}${ciphertext.toString('base64')}`, 'utf8')
       const dbKey = credentialDatabaseKey(params.key)
-      let committed = false
+      let committedResult: { success: true; data: 'OK' } | undefined
       try {
-        return await this.#performCredential(caller, signal, '保存安全凭据', async (store): Promise<{ success: true; data: 'OK' | 'EXISTS' | 'CONFLICT' }> => {
+        return await this.#performCredential(caller, signal, 'save secure credential', async (store): Promise<{ success: true; data: 'OK' | 'EXISTS' | 'CONFLICT' }> => {
           requireNotAborted(signal)
           // 已在按 key 串行的锁内：判断与写入之间不会插入同 key 的其他写入
           if (Object.hasOwn(params, 'expectedValue')) {
@@ -508,12 +508,12 @@ export class DatabaseService {
           if (params.ifAbsent === true && await store.has(dbKey)) return { success: true, data: 'EXISTS' }
           requireNotAborted(signal)
           await store.put(dbKey, record, { sync: true })
-          committed = true
-          return { success: true, data: 'OK' }
+          committedResult = { success: true, data: 'OK' }
+          return committedResult
         })
       } catch (error) {
         // Once LevelDB confirms the synchronous write, cancellation cannot undo the commit.
-        if (committed && isCancellation(error)) return { success: true, data: 'OK' }
+        if (committedResult && isCancellation(error)) return committedResult
         throw error
       }
     })
@@ -529,7 +529,7 @@ export class DatabaseService {
     const pluginId = this.#credentialNamespace(caller)
     return this.#withCredentialKeyLock(pluginId, params.key, async () => {
       const protection = await this.#requireCredentialProtection()
-      return this.#performCredential(caller, signal, '读取安全凭据', async (store) => {
+      return this.#performCredential(caller, signal, 'read secure credential', async (store) => {
         return { success: true, data: await this.#readCredential(store, protection, pluginId, params.key, signal) }
       })
     })
@@ -548,39 +548,39 @@ export class DatabaseService {
     if (record === undefined) return { status: 'missing' }
     const maxEncodedRecordBytes = CREDENTIAL_RECORD_PREFIX.length + Math.ceil(MAX_CREDENTIAL_CIPHERTEXT_BYTES / 3) * 4
     if (record.byteLength > maxEncodedRecordBytes) {
-      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录超过大小上限')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Secure credential record exceeds the size limit')
     }
     const encoded = decodeUtf8(record)
     if (!encoded.startsWith(CREDENTIAL_RECORD_PREFIX)) {
-      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录格式无效')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid secure credential record format')
     }
     const base64 = encoded.slice(CREDENTIAL_RECORD_PREFIX.length)
     let ciphertext: Buffer
     try {
       ciphertext = strictBase64(base64)
     } catch {
-      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录格式无效')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid secure credential record format')
     }
     if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_CREDENTIAL_CIPHERTEXT_BYTES ||
         ciphertext.toString('base64') !== base64) {
-      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录格式无效')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Invalid secure credential record format')
     }
     requireNotAborted(signal)
     let decrypted: { readonly plaintext: string; readonly shouldReEncrypt: boolean }
     try {
       decrypted = await protection.decrypt(ciphertext)
     } catch {
-      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据无法解密')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Failed to decrypt secure credential')
     }
     let envelope: unknown
     try {
       envelope = JSON.parse(decrypted.plaintext)
     } catch {
-      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据内容损坏')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Secure credential content is corrupted')
     }
     if (!isCredentialEnvelope(envelope) || envelope.pluginId !== pluginId || envelope.key !== key ||
         Buffer.byteLength(envelope.value, 'utf8') > MAX_CREDENTIAL_VALUE_BYTES) {
-      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据内容损坏')
+      throw new ZToolsError(errorCodes.dataCorrupt, 'Secure credential content is corrupted')
     }
     if (decrypted.shouldReEncrypt) {
       requireNotAborted(signal)
@@ -588,11 +588,11 @@ export class DatabaseService {
       try {
         refreshedCiphertext = await protection.encrypt(decrypted.plaintext)
       } catch {
-        throw new ZToolsError(errorCodes.storageError, '安全凭据重新保护失败')
+        throw new ZToolsError(errorCodes.storageError, 'Failed to re-protect secure credential')
       }
       if (!Buffer.isBuffer(refreshedCiphertext) || refreshedCiphertext.byteLength === 0 ||
           refreshedCiphertext.byteLength > MAX_CREDENTIAL_CIPHERTEXT_BYTES) {
-        throw new ZToolsError(errorCodes.storageError, '安全凭据重新保护结果无效')
+        throw new ZToolsError(errorCodes.storageError, 'Invalid secure credential re-protection result')
       }
       requireNotAborted(signal)
       await store.put(
@@ -614,16 +614,16 @@ export class DatabaseService {
     const pluginId = this.#credentialNamespace(caller)
     return this.#withCredentialKeyLock(pluginId, params.key, async () => {
       const dbKey = credentialDatabaseKey(params.key)
-      let committed = false
+      let committedResult: { success: true; data: 'OK' } | undefined
       try {
-        return await this.#performCredential(caller, signal, '删除安全凭据', async (store) => {
+        return await this.#performCredential(caller, signal, 'delete secure credential', async (store) => {
           requireNotAborted(signal)
           await store.del(dbKey, { sync: true })
-          committed = true
-          return { success: true, data: 'OK' }
+          committedResult = { success: true, data: 'OK' }
+          return committedResult
         })
       } catch (error) {
-        if (committed && isCancellation(error)) return { success: true, data: 'OK' }
+        if (committedResult && isCancellation(error)) return committedResult
         throw error
       }
     })
@@ -643,9 +643,9 @@ export class DatabaseService {
     requirePluginId(params.plugin_id)
     if (caller.type === 'main') {
       const attributed = caller.attributedPlugin
-      if (!attributed) throw new ZToolsError(errorCodes.pluginIdentityRequired, '该能力需要由已安装插件调用')
+      if (!attributed) throw new ZToolsError(errorCodes.pluginIdentityRequired, 'This capability must be called by an installed plugin')
       if (attributed.pluginId !== params.plugin_id) {
-        throw new ZToolsError(errorCodes.permissionDenied, '插件只能压缩自身数据库')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Plugins can only compact their own database')
       }
     }
     // 插件窗口沿用 #namespace 规则（只能访问自己的库）
@@ -694,7 +694,7 @@ export class DatabaseService {
         requireNotAborted(signal)
       }
     } catch (error) {
-      throw databaseFailure(error, '压缩数据库')
+      throw databaseFailure(error, 'compact database')
     }
   }
 
@@ -712,7 +712,7 @@ export class DatabaseService {
       this.#databases.clear()
       this.#state = 'stopped'
       const failure = closed.find((result): result is PromiseRejectedResult => result.status === 'rejected')
-      if (failure) throw databaseFailure(failure.reason, '关闭数据库')
+      if (failure) throw databaseFailure(failure.reason, 'close database')
     })()
     return this.#stopPromise
   }
@@ -747,14 +747,14 @@ export class DatabaseService {
     const isTimestampNamespace = caller.pluginId === 'timestamp' &&
       (requested === 'timestamp' || requested === 'time')
     if (!caller.pluginId || (caller.pluginId !== requested && !isTimestampNamespace)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件只能访问自身数据库')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Plugins can only access their own database')
     }
     return caller.pluginId === 'timestamp' ? 'time' : caller.pluginId
   }
 
   #credentialNamespace(caller: CallerIdentity): string {
     if (!Number.isSafeInteger(caller.webContentsId) || caller.webContentsId <= 0) {
-      throw new ZToolsError(errorCodes.permissionDenied, '安全凭据仅允许已注册的插件实例访问')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Secure credentials can only be accessed by registered plugin instances')
     }
     if (caller.type === 'main') {
       // 主窗口里的声明式插件：只认主进程按会话令牌查出的归属（pluginId 来自主进程读到的清单）。
@@ -762,12 +762,12 @@ export class DatabaseService {
       const attributed = caller.attributedPlugin
       if (!attributed || !PLUGIN_ID_PATTERN.test(attributed.pluginId) ||
           !PLUGIN_INSTANCE_ID_PATTERN.test(attributed.sessionId)) {
-        throw new ZToolsError(errorCodes.pluginIdentityRequired, '该能力需要由已安装插件调用')
+        throw new ZToolsError(errorCodes.pluginIdentityRequired, 'This capability must be called by an installed plugin')
       }
       return attributed.pluginId
     }
     if (caller.type !== 'plugin' || !caller.pluginId || !PLUGIN_INSTANCE_ID_PATTERN.test(caller.pluginInstanceId ?? '')) {
-      throw new ZToolsError(errorCodes.permissionDenied, '安全凭据仅允许已注册的插件实例访问')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Secure credentials can only be accessed by registered plugin instances')
     }
     // Keep credential ownership bound to the exact host-registered ID. In particular,
     // do not inherit the legacy timestamp -> time database alias.
@@ -812,7 +812,7 @@ export class DatabaseService {
   async #requireCredentialProtection(): Promise<CredentialProtection> {
     const status = await this.#credentialProtectionStatus()
     if (status.status !== 'available' || !this.credentialProtection) {
-      throw new ZToolsError(errorCodes.notSupported, '安全凭据存储当前不可用')
+      throw new ZToolsError(errorCodes.notSupported, 'Secure credential storage is currently unavailable')
     }
     return this.credentialProtection
   }
@@ -863,7 +863,7 @@ export class DatabaseService {
       await store.open()
       if (this.#state !== 'running') {
         await store.close()
-        throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+        throw new ZToolsError(errorCodes.appStopping, 'Application is stopping')
       }
       return { namespace, store }
     } catch (error) {
@@ -890,18 +890,18 @@ export class DatabaseService {
     }
     const stats = await fs.lstat(target)
     if (stats.isSymbolicLink() || !stats.isDirectory()) {
-      throw new ZToolsError(errorCodes.permissionDenied, '数据库目录不是普通目录')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Database path is not a regular directory')
     }
     const canonicalTarget = await fs.realpath(target)
     if (!isWithin(canonicalRoot, canonicalTarget)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '数据库目录越界')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Database directory is out of bounds')
     }
     return canonicalTarget
   }
 
   #requireRunning(): void {
     if (this.#state !== 'running') {
-      throw new ZToolsError(errorCodes.appStopping, '数据库服务正在退出')
+      throw new ZToolsError(errorCodes.appStopping, 'Database service is stopping')
     }
   }
 }

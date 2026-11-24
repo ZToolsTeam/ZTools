@@ -22,6 +22,7 @@ import type { AnchoredPathObject } from '../platform/path-access.js'
 import { resolvePathAccessBroker, type PathAccessBrokerContext } from '../platform/path-access-broker.js'
 import { createPathSemanticsAdapter } from '../platform/path-semantics.js'
 import type { PathSemanticsAdapter } from '../platform/path-semantics.js'
+import { getResolvedLocale } from '../i18n/index.js'
 
 const MAX_FILE_BYTES = 16 * 1024 * 1024
 const MAX_FILE_CHUNK_BYTES = 2 * 1024 * 1024
@@ -194,14 +195,14 @@ export interface ConfirmedReplaceOptions {
 export function fileFailure(error: unknown): ZToolsError {
   if (error instanceof ZToolsError) return error
   if (errorCode(error) === 'ERR_ENCODING_INVALID_ENCODED_DATA') {
-    return new ZToolsError(errorCodes.fileError, '文件不是有效的 UTF-8 文本，请先转换为 UTF-8 编码')
+    return new ZToolsError(errorCodes.fileError, 'File is not valid UTF-8 text; convert it to UTF-8 encoding first')
   }
-  if (errorCode(error) === 'EEXIST') return new ZToolsError(errorCodes.fileAlreadyExists, '输出已存在，未覆盖')
-  if (errorCode(error) === 'ENOSPC') return new ZToolsError(errorCodes.diskFull, '磁盘空间不足')
+  if (errorCode(error) === 'EEXIST') return new ZToolsError(errorCodes.fileAlreadyExists, 'Output already exists; not overwritten')
+  if (errorCode(error) === 'ENOSPC') return new ZToolsError(errorCodes.diskFull, 'Insufficient disk space')
   if (errorCode(error) === 'EACCES' || errorCode(error) === 'EPERM') {
-    return new ZToolsError(errorCodes.permissionDenied, '文件操作权限不足')
+    return new ZToolsError(errorCodes.permissionDenied, 'Insufficient file operation permissions')
   }
-  return new ZToolsError(errorCodes.fileError, '文件操作失败')
+  return new ZToolsError(errorCodes.fileError, 'File operation failed')
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -277,10 +278,10 @@ async function samePathComponent(parent: string, left: string, right: string): P
   try {
     entries = await fs.readdir(parent)
   } catch {
-    throw new ZToolsError(errorCodes.permissionDenied, '无法确认目标目录的大小写语义')
+    throw new ZToolsError(errorCodes.permissionDenied, 'Unable to determine case-sensitivity semantics for target directory')
   }
   if (entries.length > MAX_DIRECTORY_ENTRIES) {
-    throw new ZToolsError(errorCodes.permissionDenied, '目标目录过大，无法确认大小写语义')
+    throw new ZToolsError(errorCodes.permissionDenied, 'Target directory is too large to determine case-sensitivity semantics')
   }
   if (entries.includes(left) && entries.includes(right)) return false
 
@@ -293,12 +294,12 @@ async function samePathComponent(parent: string, left: string, right: string): P
   } catch (error) {
     const code = errorCode(error)
     if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-      throw new ZToolsError(errorCodes.permissionDenied, '无法确认目标目录的大小写语义')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Unable to determine case-sensitivity semantics for target directory')
     }
     if (asciiCaseFold(left) !== asciiCaseFold(right)) return false
     const caseSensitivity = await detectCaseSensitivity(parent)
     if (caseSensitivity === 'unknown') {
-      throw new ZToolsError(errorCodes.permissionDenied, '无法确认目标目录的大小写语义')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Unable to determine case-sensitivity semantics for target directory')
     }
     return caseSensitivity === 'insensitive'
   }
@@ -469,7 +470,7 @@ export class FileSystemService {
   /** Search results belong only to the requesting host window, without directory recursion or write access. */
   async grantSearchResult(value: string, caller: CallerIdentity): Promise<void> {
     if (caller.type !== 'main') {
-      throw new ZToolsError(errorCodes.permissionDenied, '仅宿主窗口可以接收搜索结果授权')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Only host windows can receive search result grants')
     }
     this.#assertCallerAvailable(caller)
     const target = await this.#canonical(value, false)
@@ -493,7 +494,7 @@ export class FileSystemService {
     options: ResultGrantOptions = {}
   ): Promise<ResultGrantSummary> {
     if (caller.type !== 'main') {
-      throw new ZToolsError(errorCodes.permissionDenied, '仅宿主窗口可以接收结果路径授权')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Only host windows can receive result path grants')
     }
     this.#assertCallerAvailable(caller)
     const owner = caller.attributedPlugin
@@ -503,7 +504,7 @@ export class FileSystemService {
     let rootKey: string | null | undefined
     if (options.scanRoot !== undefined) {
       try {
-        if (!path.isAbsolute(options.scanRoot)) throw new Error('scanRoot 必须是绝对路径')
+        if (!path.isAbsolute(options.scanRoot)) throw new Error('scanRoot must be an absolute path')
         rootKey = resultGrantKey(await fs.realpath(path.resolve(options.scanRoot)))
       } catch {
         rootKey = null
@@ -583,12 +584,12 @@ export class FileSystemService {
     ownerPluginId?: string
   ): Promise<GrantTransfer> {
     if (source.type !== 'main') {
-      throw new ZToolsError(errorCodes.permissionDenied, '仅宿主窗口可以转交路径授权')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Only host windows can transfer path grants')
     }
     this.#assertCallerAvailable(source)
     const target = this.registry.get(targetWebContentsId)
     if (!target || target.type !== 'main' || target.webContentsId === source.webContentsId) {
-      throw new ZToolsError(errorCodes.permissionDenied, '路径授权只能转交给另一个宿主窗口')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Path grants can only be transferred to another host window')
     }
     this.#assertCallerAvailable(target)
 
@@ -716,7 +717,7 @@ export class FileSystemService {
   async grantFolder(value: string, caller: CallerIdentity): Promise<void> {
     const target = await this.#canonical(value, false)
     const stats = await fs.stat(target)
-    if (!stats.isDirectory()) throw new ZToolsError(errorCodes.invalidRequest, '授权目标不是目录')
+    if (!stats.isDirectory()) throw new ZToolsError(errorCodes.invalidRequest, 'Grant target is not a directory')
     await this.#grant(caller, target, true, true, true)
   }
 
@@ -730,9 +731,9 @@ export class FileSystemService {
       try {
         signal?.throwIfAborted()
         const stats = await handle.stat()
-        if (!stats.isFile()) throw new ZToolsError(errorCodes.fileError, '目标不是文件')
+        if (!stats.isFile()) throw new ZToolsError(errorCodes.fileError, 'Target is not a file')
         if (stats.size > MAX_FILE_BYTES) {
-          throw new ZToolsError(errorCodes.fileTooLarge, '文件超过 16 MiB IPC 上限')
+          throw new ZToolsError(errorCodes.fileTooLarge, 'File exceeds 16 MiB IPC limit')
         }
         const data = await handle.readFile({ ...(signal ? { signal } : {}) })
         signal?.throwIfAborted()
@@ -744,7 +745,7 @@ export class FileSystemService {
         await handle.close()
       }
     } catch (error) {
-      if (signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '文件读取已取消')
+      if (signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'File read was canceled')
       throw fileFailure(error)
     }
   }
@@ -760,7 +761,7 @@ export class FileSystemService {
         ? Buffer.from(params.content, 'base64')
         : Buffer.from(params.content, 'utf8')
       if (data.byteLength > MAX_FILE_BYTES) {
-        throw new ZToolsError(errorCodes.fileTooLarge, '文件超过 16 MiB IPC 上限')
+        throw new ZToolsError(errorCodes.fileTooLarge, 'File exceeds 16 MiB IPC limit')
       }
       const target = await this.resolveAuthorizedPath(params.path, caller, 'write', true)
       let overwrite = params.overwrite !== false
@@ -804,11 +805,11 @@ export class FileSystemService {
     })
     signal?.throwIfAborted()
     if (!existing) return false
-    if (!existing.isFile()) throw new ZToolsError(errorCodes.fileError, '目标已不是普通文件，未替换')
+    if (!existing.isFile()) throw new ZToolsError(errorCodes.fileError, 'Target is no longer a regular file; not replaced')
     if (protectedPath !== undefined) {
       const source = await fs.stat(await this.resolveAuthorizedPath(protectedPath, caller, 'read', false))
       if (source.dev === existing.dev && source.ino === existing.ino) {
-        throw new ZToolsError(errorCodes.invalidRequest, '不能用新副本替换原文件，请另存为其他文件名')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Cannot replace original file with a new copy; save under a different file name')
       }
     }
     return true
@@ -819,7 +820,7 @@ export class FileSystemService {
   }
 
   async writeCache(params: FileCacheParams, caller: CallerIdentity): Promise<{ success: true; size: number }> {
-    if (params.content === undefined) throw new ZToolsError(errorCodes.invalidRequest, 'content 字段缺失')
+    if (params.content === undefined) throw new ZToolsError(errorCodes.invalidRequest, 'Missing content field')
     return this.writeFile({
       path: await this.#cachePath(params.relativePath, caller),
       encoding: params.encoding,
@@ -833,7 +834,7 @@ export class FileSystemService {
     caller: CallerIdentity
   ): Promise<{ path: string; size: number }> {
     if (data.byteLength > MAX_FILE_BYTES) {
-      throw new ZToolsError(errorCodes.fileTooLarge, '生成文件超过 16 MiB 缓存上限')
+      throw new ZToolsError(errorCodes.fileTooLarge, 'Generated file exceeds 16 MiB cache limit')
     }
     try {
       const target = await this.#cachePath(relativePath, caller)
@@ -889,7 +890,7 @@ export class FileSystemService {
     const context = this.options.pathAccessBroker
     const resolution = context ? resolvePathAccessBroker(context) : undefined
     if (!resolution?.available) {
-      throw new ZToolsError(errorCodes.notSupported, '安全改名所需的原生文件组件缺失，客户端安装不完整，请重新安装客户端')
+      throw new ZToolsError(errorCodes.notSupported, 'Native file helper required for safe rename is missing; client installation is incomplete, please reinstall')
     }
     const adapter = new NativePathAccessAdapter(resolution.executable, 5000, { platform: resolution.platform })
     try {
@@ -926,7 +927,7 @@ export class FileSystemService {
       fs.lstat(path.join(parent, requestedName), { bigint: true }).catch(() => undefined)
     ])
     if (!requestedStats || !sourceStats.isFile() || requestedStats.dev !== sourceStats.dev || requestedStats.ino !== sourceStats.ino) {
-      throw new ZToolsError(errorCodes.fileAlreadyExists, '输出已存在，未覆盖')
+      throw new ZToolsError(errorCodes.fileAlreadyExists, 'Output already exists; not overwritten')
     }
     const temporaryName = `.ztools-rename-${randomUUID()}`
     const temporary = await adapter.pin(path.join(parent, temporaryName), 'save', ['write'], signal)
@@ -941,7 +942,7 @@ export class FileSystemService {
         const original = await adapter.pin(source, 'save', ['write'], committedSignal)
         await adapter.move(directory, [temporaryName], original, false, committedSignal)
       } catch {
-        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, `改名未完成，文件暂存为 ${temporaryName}`)
+        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, `Rename did not complete; file temporarily stored as ${temporaryName}`)
       }
       throw error
     }
@@ -1008,7 +1009,7 @@ export class FileSystemService {
   async setCurrentDirectory(params: FilePathParams, caller: CallerIdentity): Promise<{ success: true }> {
     const target = await this.resolveAuthorizedPath(params.path, caller, 'read', false)
     try {
-      if (!(await fs.stat(target)).isDirectory()) throw new ZToolsError(errorCodes.fileError, '目标不是目录')
+      if (!(await fs.stat(target)).isDirectory()) throw new ZToolsError(errorCodes.fileError, 'Target is not a directory')
       this.#currentDirectories.set(caller.webContentsId, target)
       return { success: true }
     } catch (error) {
@@ -1022,7 +1023,7 @@ export class FileSystemService {
     const target = await this.resolveAuthorizedPath(params.path, caller, 'read', false)
     const caseSensitivity = await detectCaseSensitivity(target)
     if (caseSensitivity === 'unknown') {
-      throw new ZToolsError(errorCodes.permissionDenied, '无法确认目标目录的大小写语义')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Unable to determine case-sensitivity semantics for target directory')
     }
     const matcher = wildcardRegex(params.pattern, caseSensitivity === 'sensitive')
     return {
@@ -1087,9 +1088,9 @@ export class FileSystemService {
       const file = await fs.open(target, 'r')
       try {
         const stats = await file.stat()
-        if (!stats.isFile()) throw new ZToolsError(errorCodes.fileError, '目标不是文件')
+        if (!stats.isFile()) throw new ZToolsError(errorCodes.fileError, 'Target is not a file')
         if (stats.size > MAX_STREAM_FILE_BYTES) {
-          throw new ZToolsError(errorCodes.fileTooLarge, '文件超过分块读取上限')
+          throw new ZToolsError(errorCodes.fileTooLarge, 'File exceeds chunked read limit')
         }
         if (params.offset >= stats.size) {
           return { success: true, content: '', offset: params.offset, size: 0, totalSize: stats.size }
@@ -1130,12 +1131,12 @@ export class FileSystemService {
     caller: CallerIdentity
   ): Promise<{ success: true; handle: string; totalSize: number }> {
     if (!Number.isSafeInteger(params.totalSize) || params.totalSize < 0 || params.totalSize > MAX_STREAM_FILE_BYTES) {
-      throw new ZToolsError(errorCodes.fileTooLarge, '文件超过分块写入上限')
+      throw new ZToolsError(errorCodes.fileTooLarge, 'File exceeds chunked write limit')
     }
     const active = [...this.#writeSessions.values()]
       .filter((session) => session.webContentsId === caller.webContentsId)
     if (active.length >= MAX_WRITE_SESSIONS_PER_CALLER) {
-      throw new ZToolsError(errorCodes.fileError, '当前窗口的写入句柄数量超过上限')
+      throw new ZToolsError(errorCodes.fileError, 'Maximum write handles per window reached')
     }
     try {
       const target = await this.resolveAuthorizedPath(params.path, caller, 'write', true)
@@ -1177,18 +1178,18 @@ export class FileSystemService {
     caller: CallerIdentity
   ): Promise<{ success: true; written: number; totalSize: number }> {
     const session = await this.#getWriteSession(params.handle, caller)
-    if (session.finishing) throw new ZToolsError(errorCodes.invalidRequest, '写入句柄正在提交')
+    if (session.finishing) throw new ZToolsError(errorCodes.invalidRequest, 'Write handle is already committing')
     try {
       const data = Buffer.from(params.content, 'base64')
       if (data.byteLength === 0 || data.byteLength > MAX_FILE_CHUNK_BYTES) {
-        throw new ZToolsError(errorCodes.invalidRequest, '写入分块为空或过大')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Write chunk is empty or exceeds size limit')
       }
       if (params.offset !== session.written || params.offset + data.byteLength > session.totalSize) {
-        throw new ZToolsError(errorCodes.invalidRequest, '写入分块偏移不连续')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Write chunk offset is not contiguous')
       }
       const result = await session.file.write(data, 0, data.byteLength, params.offset)
       if (result.bytesWritten !== data.byteLength) {
-        throw new ZToolsError(errorCodes.fileError, '写入分块未完成')
+        throw new ZToolsError(errorCodes.fileError, 'Write chunk did not complete')
       }
       session.written += data.byteLength
       session.expiresAt = this.now() + STREAM_TTL_MS
@@ -1204,9 +1205,9 @@ export class FileSystemService {
     signal?: AbortSignal
   ): Promise<{ success: true; size: number }> {
     const session = await this.#getWriteSession(handle, caller)
-    if (session.finishing) throw new ZToolsError(errorCodes.invalidRequest, '写入句柄正在提交')
+    if (session.finishing) throw new ZToolsError(errorCodes.invalidRequest, 'Write handle is already committing')
     if (session.written !== session.totalSize) {
-      throw new ZToolsError(errorCodes.invalidRequest, '写入内容尚未完成')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Write payload is incomplete')
     }
     // 关闭文件也会异步等待。提交前保留会话，窗口关闭、取消和 stop 均可使它失效并等待收尾。
     session.finishing = (async () => {
@@ -1214,7 +1215,7 @@ export class FileSystemService {
         await session.file.close()
         await replaceFile(session.temporary, session.target, () => {
           this.#assertCallerAvailable(caller)
-          if (session.cancelled || signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '分块写入已取消')
+          if (session.cancelled || signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Chunked write was canceled')
         })
         return { success: true as const, size: session.totalSize }
       } catch (error) {
@@ -1289,7 +1290,7 @@ export class FileSystemService {
         break
       }
     }
-    if (!allowed) throw new ZToolsError(errorCodes.permissionDenied, '路径未由当前窗口授权')
+    if (!allowed) throw new ZToolsError(errorCodes.permissionDenied, 'Path is not authorized for the current window')
     return target
   }
 
@@ -1313,23 +1314,23 @@ export class FileSystemService {
 
   async resolveFileCapability(value: string, webContentsId?: number): Promise<string> {
     const token = capabilityToken(value)
-    if (!token) throw new ZToolsError(errorCodes.permissionDenied, '文件 capability URL 无效')
+    if (!token) throw new ZToolsError(errorCodes.permissionDenied, 'Invalid file capability URL')
     const capability = this.#capabilities.get(token)
     if (!capability || capability.expiresAt <= this.now()) {
       if (capability) this.#capabilities.delete(token)
-      throw new ZToolsError(errorCodes.permissionDenied, '文件 capability 已过期')
+      throw new ZToolsError(errorCodes.permissionDenied, 'File capability has expired')
     }
     if (!capability.readable) {
-      throw new ZToolsError(errorCodes.permissionDenied, '文件 capability 不允许读取')
+      throw new ZToolsError(errorCodes.permissionDenied, 'File capability does not allow reading')
     }
     if (webContentsId !== undefined && capability.webContentsId !== webContentsId) {
-      throw new ZToolsError(errorCodes.permissionDenied, '文件 capability 不属于当前窗口')
+      throw new ZToolsError(errorCodes.permissionDenied, 'File capability does not belong to the current window')
     }
     const target = await this.#canonical(capability.path, false)
     if (!await samePathOnVolume(target, capability.path)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '文件 capability 目标已变化')
+      throw new ZToolsError(errorCodes.permissionDenied, 'File capability target has changed')
     }
-    if (!(await fs.stat(target)).isFile()) throw new ZToolsError(errorCodes.fileError, '目标不是文件')
+    if (!(await fs.stat(target)).isFile()) throw new ZToolsError(errorCodes.fileError, 'Target is not a file')
     return target
   }
 
@@ -1493,11 +1494,11 @@ export class FileSystemService {
   async resolveFileUrl(value: string, webContentsId?: number): Promise<string> {
     if (capabilityToken(value)) return this.resolveFileCapability(value, webContentsId)
     if (webContentsId === undefined) {
-      throw new ZToolsError(errorCodes.permissionDenied, '文件 URL 缺少调用者身份')
+      throw new ZToolsError(errorCodes.permissionDenied, 'File URL is missing caller identity')
     }
     const caller = this.registry.get(webContentsId)
     const target = rawFileUrlPath(value)
-    if (!caller || !target) throw new ZToolsError(errorCodes.permissionDenied, '文件 URL 无效')
+    if (!caller || !target) throw new ZToolsError(errorCodes.permissionDenied, 'Invalid file URL')
     return this.resolveAuthorizedPath(target, caller, 'read', false)
   }
 
@@ -1516,9 +1517,9 @@ export class FileSystemService {
   }
 
   #assertCallerAvailable(caller: CallerIdentity): void {
-    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, '文件服务已停止')
+    if (this.#stopped) throw new ZToolsError(errorCodes.appStopping, 'File system service is stopped')
     if (this.#closedCallers.has(caller.webContentsId)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '文件授权窗口已关闭')
+      throw new ZToolsError(errorCodes.permissionDenied, 'File grant window is closed')
     }
   }
 
@@ -1531,7 +1532,7 @@ export class FileSystemService {
     const callerCapabilityCount = [...this.#capabilities.values()]
       .filter((capability) => capability.webContentsId === caller.webContentsId).length
     if (callerCapabilityCount >= MAX_CAPABILITIES_PER_CALLER) {
-      throw new ZToolsError(errorCodes.fileError, '当前窗口的文件 capability 数量超过上限')
+      throw new ZToolsError(errorCodes.fileError, 'Maximum file capabilities per window reached')
     }
     const token = randomBytes(32).toString('base64url')
     this.#capabilities.set(token, {
@@ -1558,7 +1559,7 @@ export class FileSystemService {
   async #cachePath(relativePath: string, caller: CallerIdentity): Promise<string> {
     const root = await this.#cacheRoot(caller)
     const target = path.resolve(root, relativePath)
-    if (!isWithin(root, target)) throw new ZToolsError(errorCodes.invalidRequest, '缓存路径越界')
+    if (!isWithin(root, target)) throw new ZToolsError(errorCodes.invalidRequest, 'Cache path escapes root directory')
     return target
   }
 
@@ -1570,11 +1571,11 @@ export class FileSystemService {
     this.#assertCallerAvailable(caller)
     const session = this.#writeSessions.get(handle)
     if (!session || session.cancelled || session.webContentsId !== caller.webContentsId) {
-      throw new ZToolsError(errorCodes.permissionDenied, '写入句柄未授权')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Write handle is not authorized')
     }
     if (session.expiresAt <= this.now()) {
       await this.#cleanupWriteSession(session)
-      throw new ZToolsError(errorCodes.requestTimeout, '写入句柄已过期')
+      throw new ZToolsError(errorCodes.requestTimeout, 'Write handle has expired')
     }
     return session
   }
@@ -1607,7 +1608,7 @@ export class FileSystemService {
     let cursor = absolute
     while (true) {
       const parent = path.dirname(cursor)
-      if (parent === cursor) throw new ZToolsError(errorCodes.fileError, '无法解析路径祖先')
+      if (parent === cursor) throw new ZToolsError(errorCodes.fileError, 'Unable to resolve path ancestor')
       missing.unshift(path.basename(cursor))
       cursor = parent
       try {
@@ -1624,7 +1625,7 @@ export class FileSystemService {
     try {
       const entries = await fs.readdir(target, { withFileTypes: true })
       if (entries.length > MAX_DIRECTORY_ENTRIES) {
-        throw new ZToolsError(errorCodes.fileError, '目录条目超过 10000 上限')
+        throw new ZToolsError(errorCodes.fileError, 'Directory entries exceed limit of 10000')
       }
       return await Promise.all(entries.map(async (entry) => {
         const entryPath = path.join(target, entry.name)
@@ -1634,7 +1635,7 @@ export class FileSystemService {
           name: fullPath ? entryPath : entry.name,
           size: isDirectory ? 0 : stats.size,
           isDirectory,
-          lastModified: stats.mtime.toLocaleString(),
+          lastModified: stats.mtime.toLocaleString(getResolvedLocale()),
           attributes: isDirectory ? 16 : 32
         }
       }))

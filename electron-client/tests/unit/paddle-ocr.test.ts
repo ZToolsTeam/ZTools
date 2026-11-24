@@ -99,7 +99,7 @@ test('检测后处理：两块文字区域各得一个外扩后的框，低分�
   assert.ok(Math.abs(first.cx - 59.5) < 0.6 && Math.abs(first.cy - 19.5) < 0.6)
   assert.ok(first.w > 99 + 2 * 6 && first.h > 19 + 2 * 6, '按 unclip 比例外扩')
   assert.ok(Math.abs(second.cx - 34.5) < 0.6 && Math.abs(second.cy - 69.5) < 0.6)
-  assert.throws(() => detectionBoxes(new Float32Array(10), 5, 5), /输出尺寸与输入不一致/)
+  assert.throws(() => detectionBoxes(new Float32Array(10), 5, 5), /output size does not match input/)
   assert.deepEqual(detectionBoxes(new Float32Array(width * height), width, height), [])
 })
 
@@ -170,8 +170,8 @@ test('完整流程：按批次识别并过滤低分结果；模型与字典不�
   assert.deepEqual(await recognizeText(solidImage(200, 60), runner(3, 0.9), dictionary), ['好'])
   assert.deepEqual(calls, [{ batch: 1, width: 320 }])
   assert.deepEqual(await recognizeText(solidImage(200, 60), runner(3, 0.3), dictionary), [], '低分结果丢弃')
-  await assert.rejects(recognizeText(solidImage(200, 60), runner(5, 0.9), dictionary), /模型与字典不匹配/)
-  await assert.rejects(recognizeText({ width: 10, height: 10, data: new Uint8Array(4) }, runner(3, 0.9), dictionary), /像素数据无效/)
+  await assert.rejects(recognizeText(solidImage(200, 60), runner(5, 0.9), dictionary), /does not match character dictionary/)
+  await assert.rejects(recognizeText({ width: 10, height: 10, data: new Uint8Array(4) }, runner(3, 0.9), dictionary), /Invalid image pixel data/)
 })
 
 test('图片解码：空图返回 undefined，超大图先缩小，像素长度不符返回 undefined', () => {
@@ -262,19 +262,19 @@ test('子进程管理：识别报错、无效结果、意外退出、超时都�
     await tick()
     const worker = workers.at(-1)!
     worker.reply({ id: worker.requests.at(-1)!.id, ...bad })
-    await expectCode(invalid, errorCodes.processError, /无效结果/)
+    await expectCode(invalid, errorCodes.processError, /invalid result/)
   }
 
   const crashed = engine.recognize(image)
   await tick()
   workers.at(-1)!.exit(3)
-  await expectCode(crashed, errorCodes.processError, /意外退出（退出码 3）/)
+  await expectCode(crashed, errorCodes.processError, /exited unexpectedly \(exit code 3\)/)
 
   const count = workers.length
   const timedOut = engine.recognize(image)
   await tick()
   assert.equal(workers.length, count + 1, '崩溃后重新启动')
-  await expectCode(timedOut, errorCodes.requestTimeout, /超时/)
+  await expectCode(timedOut, errorCodes.requestTimeout, /timed out/)
   assert.equal(workers.at(-1)!.killed, true, '超时结束子进程')
   engine.stop()
 })
@@ -316,13 +316,13 @@ test('子进程管理：一分钟内连续失败 3 次后暂停，过一分钟�
   }
   assert.equal(engine.suspended, true)
   const spawned = workers.length
-  await expectCode(engine.recognize(image), errorCodes.serviceUnavailable, /已暂停使用/)
+  await expectCode(engine.recognize(image), errorCodes.serviceUnavailable, /suspended/)
   assert.equal(workers.length, spawned, '暂停期间不再启动子进程')
   now += 61_000
   assert.equal(engine.suspended, false)
 
   const broken = new PaddleOcrEngine({ spawnWorker: () => { throw new Error('找不到入口') } })
-  await expectCode(broken.recognize(image), errorCodes.processError, /无法启动文字识别进程：找不到入口/)
+  await expectCode(broken.recognize(image), errorCodes.processError, /Failed to start Text OCR worker: 找不到入口/)
 
   const pending = engine.recognize(image)
   await tick()
@@ -345,7 +345,7 @@ test('本机识别入口：模型不全时不启用，图片无法解码时报�
     createImageFromPath: () => ({ isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }), resize: () => { throw new Error() }, toBitmap: () => Buffer.alloc(0) }),
     forkUtilityProcess: () => { forks++; throw new Error('不应启动') }
   })!
-  await expectCode(local.recognizeImage('broken.png'), errorCodes.fileError, /无法读取图片/)
+  await expectCode(local.recognizeImage('broken.png'), errorCodes.fileError, /Unable to read image/)
   assert.equal(forks, 0)
   local.stop()
 })

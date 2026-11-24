@@ -28,26 +28,26 @@ const windowsDeps: WindowsWifiDeps = { run: (command, args, timeoutMs) => runDec
 export interface WindowsWlanProfile { name: string; ssid?: string; authentication?: string; encryption?: string; useOneX?: boolean; keyProtected?: boolean; keyMaterial?: string }
 const xmlEntities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
 function xmlText(value: string): string {
-  if (/<|\]\]>/.test(value)) throw new Error('无线网络配置导出文件包含无法识别的嵌套内容')
+  if (/<|\]\]>/.test(value)) throw new Error('Exported WLAN profile contains unrecognized nested content')
   return value.replace(/&(?:#x([0-9a-fA-F]{1,6})|#(\d{1,7})|([a-z]+));/g, (all, hex: string | undefined, dec: string | undefined, named: string | undefined) => {
-    if (named !== undefined) { const known = xmlEntities[named]; if (known === undefined) throw new Error('无线网络配置导出文件包含未知实体'); return known }
+    if (named !== undefined) { const known = xmlEntities[named]; if (known === undefined) throw new Error('Exported WLAN profile contains an unknown XML entity'); return known }
     const code = hex !== undefined ? parseInt(hex, 16) : Number(dec)
-    if (!Number.isInteger(code) || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) throw new Error(`无线网络配置导出文件包含无效字符 ${all}`)
+    if (!Number.isInteger(code) || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) throw new Error(`Exported WLAN profile contains an invalid character reference ${all}`)
     return String.fromCodePoint(code)
   })
 }
 const element = (xml: string, tag: string) => new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`).exec(xml)?.[1]
 function decodeXmlBytes(bytes: Buffer): string {
   if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString('utf16le')
-  try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes) } catch { throw new Error('无线网络配置导出文件不是有效的 UTF-8/UTF-16 文本') }
+  try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes) } catch { throw new Error('Exported WLAN profile is not valid UTF-8/UTF-16 text') }
 }
 /** 解析 netsh wlan export profile 导出的 WLANProfile XML；只取元素文本，名称与密钥保留首尾空白，不按系统语言解析。 */
 export function parseWlanProfileXml(content: Buffer | string): WindowsWlanProfile {
   const xml = typeof content === 'string' ? content : decodeXmlBytes(content)
-  if (!/<WLANProfile[\s>]/.test(xml) || !/<\/WLANProfile>\s*$/.test(xml)) throw new Error('无线网络配置导出文件格式无法识别')
+  if (!/<WLANProfile[\s>]/.test(xml) || !/<\/WLANProfile>\s*$/.test(xml)) throw new Error('Unrecognized exported WLAN profile XML format')
   const ssidConfig = element(xml, 'SSIDConfig'), outer = ssidConfig === undefined ? xml : xml.replace(/<SSIDConfig(?:\s[^>]*)?>[\s\S]*?<\/SSIDConfig>/, '')
   const rawName = element(outer, 'name')
-  if (rawName === undefined || !rawName.length) throw new Error('无线网络配置导出文件缺少配置名称')
+  if (rawName === undefined || !rawName.length) throw new Error('Exported WLAN profile is missing profile name')
   const profile: WindowsWlanProfile = { name: xmlText(rawName) }
   const ssidBlock = ssidConfig === undefined ? undefined : element(ssidConfig, 'SSID')
   if (ssidBlock !== undefined) {
@@ -97,10 +97,10 @@ export function parseWlanInterfaceSsids(output: string): Set<string> | undefined
   return ssids
 }
 function netshFailure(action: string, result: { stdout: string; stderr: string; exitCode: number }) {
-  if (result.exitCode === 124) return `${action}超时，请稍后重试`
-  if (result.exitCode === 130) return `${action}已取消`
+  if (result.exitCode === 124) return `${action} timed out; please retry later`
+  if (result.exitCode === 130) return `${action} cancelled`
   const detail = (result.stderr || result.stdout).replace(/\s+/g, ' ').trim().slice(0, 200)
-  return `${action}失败（netsh 退出码 ${result.exitCode}）；请确认 WLAN AutoConfig 服务已启动且有无线网卡${detail ? `：${detail}` : ''}`
+  return `${action} failed (netsh exit code ${result.exitCode}); ensure WLAN AutoConfig service is running and a wireless adapter is available${detail ? `: ${detail}` : ''}`
 }
 /** netsh 导出到私有临时目录后立即删除；删除失败时报错并给出位置，避免含密钥的文件静默残留。 */
 async function exportWlanProfiles(deps: WindowsWifiDeps, extra: string[], action: string): Promise<WindowsWlanProfile[]> {
@@ -110,22 +110,22 @@ async function exportWlanProfiles(deps: WindowsWifiDeps, extra: string[], action
     const result = await deps.run(netsh(), ['wlan', 'export', 'profile', ...extra, `folder=${directory}`], 15_000)
     if (result.exitCode !== 0) throw new Error(netshFailure(action, result))
     const files = (await fs.readdir(directory)).filter(name => name.toLowerCase().endsWith('.xml'))
-    if (files.length > 1024) throw new Error('导出的无线网络配置过多，停止读取')
+    if (files.length > 1024) throw new Error('Too many exported WLAN profiles; aborting read')
     profiles = []
     for (const file of files.sort()) {
       const bytes = await fs.readFile(path.join(directory, file))
-      if (bytes.length > 256 * 1024) throw new Error('无线网络配置导出文件过大')
+      if (bytes.length > 256 * 1024) throw new Error('Exported WLAN profile file exceeds size limit')
       profiles.push(parseWlanProfileXml(bytes))
     }
   } catch (error) { failure = error }
   try { await fs.rm(directory, { recursive: true, force: true }) }
-  catch { throw new Error(`临时导出目录清理失败，其中可能包含无线网络配置，请手动删除：${directory}`) }
+  catch { throw new Error(`Failed to clean up temporary WLAN export directory; please remove manually: ${directory}`) }
   if (failure !== undefined || !profiles) throw failure
   return profiles
 }
 export async function readWindowsWifiProfiles(deps: WindowsWifiDeps = windowsDeps): Promise<SystemWifiProfile[]> {
   // 不带 key=clear：导出文件中的密钥保持系统加密，列表不接触明文密码。
-  const exported = await exportWlanProfiles(deps, [], '读取已保存的无线网络')
+  const exported = await exportWlanProfiles(deps, [], 'Read saved WLAN profiles')
   const interfaces = await deps.run(netsh(), ['wlan', 'show', 'interfaces'], 6_000)
   // 当前连接读取失败或无法解析时保持未知，不伪造“未连接”。
   const connected = interfaces.exitCode === 0 ? parseWlanInterfaceSsids(interfaces.stdout) : undefined
@@ -135,7 +135,7 @@ export async function readWindowsWifiProfiles(deps: WindowsWifiDeps = windowsDep
   const unmatched = connected !== undefined && [...connected].some(ssid => !known.has(ssid))
   const result = new Map<string, SystemWifiProfile>()
   for (const profile of exported) {
-    if (!profile.ssid) throw new Error('无线网络配置缺少可识别的 SSID，无法生成正确的网络连接信息')
+    if (!profile.ssid) throw new Error('WLAN profile is missing a recognizable SSID')
     const previous = result.get(profile.name), security = windowsWifiSecurity(profile)
     const matched = connected?.has(profile.ssid) === true || previous?.current === true
     const current = connected === undefined || (unmatched && !matched) ? previous?.current : matched
@@ -145,12 +145,12 @@ export async function readWindowsWifiProfiles(deps: WindowsWifiDeps = windowsDep
   return [...result.values()]
 }
 export async function readWindowsWifiPassword(name: string, deps: WindowsWifiDeps = windowsDeps): Promise<string> {
-  const exported = (await exportWlanProfiles(deps, [`name=${name}`, 'key=clear'], '读取该无线网络配置')).filter(profile => profile.name === name)
-  if (!exported.length) throw new Error('系统没有导出所选网络的配置，请刷新列表后重试')
+  const exported = (await exportWlanProfiles(deps, [`name=${name}`, 'key=clear'], 'Read WLAN profile')).filter(profile => profile.name === name)
+  if (!exported.length) throw new Error('Selected WLAN profile was not exported by the system; refresh the list and retry')
   const clear = exported.find(profile => profile.keyProtected === false && profile.keyMaterial !== undefined && profile.keyMaterial.length > 0)
   if (clear) return clear.keyMaterial!
-  if (exported.some(profile => profile.keyProtected === true)) throw new Error('Windows 未提供明文密钥；读取明文密码可能需要以管理员身份运行客户端')
-  throw new Error('未找到该网络的可共享密码；开放网络与企业认证网络可能没有预共享密码')
+  if (exported.some(profile => profile.keyProtected === true)) throw new Error('Windows did not provide a plaintext key; reading plaintext Wi-Fi passwords may require administrator privileges')
+  throw new Error('No shareable pre-shared password found for this network; open and enterprise networks may not have one')
 }
 
 function parseMacPassword(output: string): string {
@@ -161,7 +161,7 @@ function parseMacPassword(output: string): string {
   const hex = /^password: 0x((?:[\da-fA-F]{2})+)(?: |  "[\x20-\x7e]*")\n$/.exec(output)
   if (hex) return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.from(hex[1]!, 'hex'))
   if (output === 'password: \n') return ''
-  throw new Error('系统未返回可识别的密码格式')
+  throw new Error('Unrecognized Wi-Fi password format returned by system')
 }
 
 export async function readWifiProfiles(platform: NodeJS.Platform, run: WifiCommandRunner = runCommand, windows: WindowsWifiDeps = windowsDeps): Promise<SystemWifiProfile[]> {
@@ -169,7 +169,7 @@ export async function readWifiProfiles(platform: NodeJS.Platform, run: WifiComma
     const ports = await run('/usr/sbin/networksetup', ['-listallhardwareports'], 4_000)
     const block = ports.split(/\r?\n\r?\n/).find(value => /Hardware Port: (?:Wi-Fi|AirPort)\r?\n/.test(value))
     const device = block?.match(/^Device: ([a-z0-9]+)\r?$/im)?.[1]
-    if (!device) throw new Error('未找到无线网络接口')
+    if (!device) throw new Error('No wireless network interface found')
     const [saved, connection] = await Promise.all([
       run('/usr/sbin/networksetup', ['-listpreferredwirelessnetworks', device], 5_000),
       run('/usr/sbin/networksetup', ['-getairportnetwork', device], 4_000).then(
@@ -177,29 +177,29 @@ export async function readWifiProfiles(platform: NodeJS.Platform, run: WifiComma
         () => undefined // 当前连接信息不可用不影响已保存列表；保持未知，不伪造连接状态。
       )
     ])
-    if (!/^Preferred networks on /i.test(saved)) throw new Error('系统未返回有效的已保存无线网络列表')
+    if (!/^Preferred networks on /i.test(saved)) throw new Error('System did not return a valid list of saved wireless networks')
     return [...new Set(saved.split(/\r?\n/).slice(1).filter(line => line.startsWith('\t')).map(line => line.slice(1)))]
       .filter(ssid => ssid.length > 0)
       .map(ssid => ({ ssid, ...(connection === undefined ? {} : { current: ssid === connection }) }))
   }
   if (platform === 'win32') return readWindowsWifiProfiles(windows)
-  throw new Error('当前系统不支持读取无线网络配置')
+  throw new Error('Reading wireless network profiles is not supported on this platform')
 }
 
 /** 仅由用户主动操作调用；密码不记录日志、不裁剪空白。 */
 export async function readWifiPassword(ssid: string, platform: NodeJS.Platform, run: WifiCommandRunner = runCommand, windows: WindowsWifiDeps = windowsDeps): Promise<{ ssid: string; password: string }> {
-  if (typeof ssid !== 'string' || !ssid.length || ssid.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, 'Wi-Fi SSID 无效')
+  if (typeof ssid !== 'string' || !ssid.length || ssid.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid Wi-Fi SSID')
   let password: string | undefined
   if (platform === 'darwin') {
     try {
       const output = await run('/usr/bin/security', ['find-generic-password', '-D', 'AirPort network password', '-a', ssid, '-g'], 30_000)
       password = parseMacPassword(output)
     } catch {
-      throw new Error('未能读取 Wi-Fi 密码：授权取消或超时、钥匙串中没有该记录，或密钥格式不支持')
+      throw new Error('Failed to read Wi-Fi password: authorization cancelled/timed out, keychain item missing, or unsupported key format')
     }
   } else if (platform === 'win32') {
     password = await readWindowsWifiPassword(ssid, windows)
-  } else throw new Error('当前系统不支持读取 Wi-Fi 密码')
-  if (!password) throw new Error('未找到该网络的可共享密码；开放网络与企业认证网络可能没有预共享密码')
+  } else throw new Error('Reading Wi-Fi passwords is not supported on this platform')
+  if (!password) throw new Error('No shareable pre-shared password found for this network; open and enterprise networks may not have one')
   return { ssid, password }
 }

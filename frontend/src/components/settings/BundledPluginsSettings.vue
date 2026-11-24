@@ -8,14 +8,16 @@ export function queueBundledPluginFocus(pluginId) {
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { RotateCcwIcon, Trash2Icon } from '@lucide/vue'
-import { RcButton, RcSquircle, RcTag } from '@/components/base'
+import { Switch as ASwitch } from 'ant-design-vue'
+import { RcButton, RcSquircle } from '@/components/base'
+import { vSwitchKeyboard } from '@/directives/switchKeyboard'
 import { usePluginsStore } from '@/stores/plugins'
 import { useToast } from '@/composables/useToast'
 import { getBundledPluginEntries, isBundledPlugin } from '@/utils/bundledPlugins'
 import { resolveKeywordGlyph, resolvePluginGlyph } from '@/utils/brandIcons'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { getLocalizedPluginDescription, getLocalizedPluginName } from '@/utils/pluginI18n'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 import { useAppI18n } from '@/i18n'
 
 const { t } = useAppI18n()
@@ -23,8 +25,8 @@ const pluginsStore = usePluginsStore()
 const { toastSuccess, toastError } = useToast()
 
 const highlightedId = ref('')
+const loadFailed = ref(false)
 const rowRefs = new Map()
-const buttonRefs = new Map()
 let highlightTimer = null
 let isUnmounted = false
 
@@ -42,14 +44,6 @@ function setRowRef(pluginId, el) {
   else rowRefs.delete(key)
 }
 
-function setActionBtnRef(pluginId, compOrEl) {
-  const key = String(pluginId || '').toLowerCase()
-  if (!key) return
-  const dom = compOrEl?.$el || compOrEl
-  if (dom) buttonRefs.set(key, dom)
-  else buttonRefs.delete(key)
-}
-
 function clearHighlightTimer() {
   if (highlightTimer) {
     clearTimeout(highlightTimer)
@@ -57,9 +51,21 @@ function clearHighlightTimer() {
   }
 }
 
+async function loadVisibility() {
+  loadFailed.value = false
+  try {
+    await pluginsStore.ensureHiddenBundledLoaded()
+    return !isUnmounted
+  } catch {
+    if (!isUnmounted) loadFailed.value = true
+    return false
+  }
+}
+
 async function focusPlugin(rawPluginId) {
   const key = String(rawPluginId || '').trim().toLowerCase()
   if (!key || !isBundledPlugin(key)) return false
+  if (!pluginsStore._hiddenBundledLoaded && !(await loadVisibility())) return false
   await nextTick()
   if (isUnmounted) return false
   const rowEl = rowRefs.get(key)
@@ -68,9 +74,7 @@ async function focusPlugin(rawPluginId) {
   clearHighlightTimer()
   highlightedId.value = key
   rowEl.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
-  const btnEl = buttonRefs.get(key)
-  const focusable = btnEl?.tagName === 'BUTTON' ? btnEl : btnEl?.querySelector?.('button')
-  focusable?.focus?.({ preventScroll: true })
+  rowEl.querySelector('[role="switch"]')?.focus({ preventScroll: true })
 
   highlightTimer = setTimeout(() => {
     if (!isUnmounted) {
@@ -81,44 +85,29 @@ async function focusPlugin(rawPluginId) {
   return true
 }
 
-async function toggleBundled(item) {
+async function setVisible(item, visible) {
   const pid = item.pluginId
-  if (!pid || isToggling(pid)) return
-  const currentlyHidden = isHidden(pid)
+  if (isToggling(pid)) return
   try {
-    if (currentlyHidden) {
-      const res = await pluginsStore.restoreBundledPlugin(pid)
-      if (!isUnmounted && res?.success) {
-        toastSuccess(t('settings.bundled.restoredToast', { name: getLocalizedPluginName(item) }))
-      }
-    } else {
-      const res = await pluginsStore.hideBundledPlugin(pid)
-      if (!isUnmounted && res?.success) {
-        toastSuccess(t('settings.bundled.uninstalledToast', { name: getLocalizedPluginName(item) }))
-      }
-    }
-    await nextTick()
-    if (!isUnmounted) {
-      const key = String(pid).toLowerCase()
-      const btnEl = buttonRefs.get(key)
-      const focusable = btnEl?.tagName === 'BUTTON' ? btnEl : btnEl?.querySelector?.('button')
-      focusable?.focus?.({ preventScroll: true })
+    const result = visible
+      ? await pluginsStore.restoreBundledPlugin(pid)
+      : await pluginsStore.hideBundledPlugin(pid)
+    if (result.success && !isUnmounted) {
+      toastSuccess(t(visible ? 'settings.bundled.shownToast' : 'settings.bundled.hiddenToast', {
+        name: getLocalizedPluginName(item)
+      }))
     }
   } catch (err) {
     if (!isUnmounted) {
-      toastError(
-        t(currentlyHidden ? 'settings.bundled.restoreFailed' : 'settings.bundled.uninstallFailed', {
-          reason: err?.message || err
-        })
-      )
+      toastError(t(visible ? 'settings.bundled.showFailed' : 'settings.bundled.hideFailed', {
+        reason: resolveErrorMessage(err, 'common.unknownError')
+      }))
     }
   }
 }
 
-onMounted(() => {
-  pluginsStore.ensureHiddenBundledLoaded().catch((err) => {
-    console.warn('[BundledPluginsSettings] 初始化内置插件隐藏状态失败:', err)
-  })
+onMounted(async () => {
+  if (!(await loadVisibility())) return
   if (pendingFocusPluginId) {
     const target = pendingFocusPluginId
     pendingFocusPluginId = ''
@@ -130,7 +119,6 @@ onBeforeUnmount(() => {
   isUnmounted = true
   clearHighlightTimer()
   rowRefs.clear()
-  buttonRefs.clear()
 })
 
 defineExpose({
@@ -145,7 +133,11 @@ defineExpose({
       <p class="card-desc">{{ t('settings.bundled.desc') }}</p>
     </div>
 
-    <div class="bundled-list">
+    <div v-if="loadFailed" class="bundled-load-error" role="alert">
+      <span>{{ t('settings.loadFailed') }}</span>
+      <RcButton variant="secondary" size="xs" @click="loadVisibility">{{ t('common.retry') }}</RcButton>
+    </div>
+    <div v-else-if="pluginsStore._hiddenBundledLoaded" class="bundled-list">
       <div
         v-for="item in bundledItems"
         :key="item.pluginId"
@@ -166,41 +158,21 @@ defineExpose({
             />
           </div>
           <div class="bundled-text">
-            <div class="bundled-title-row">
-              <span class="bundled-name">{{ getLocalizedPluginName(item) }}</span>
-              <RcTag v-if="isHidden(item.pluginId)" class="bundled-status-tag">{{ t('settings.bundled.uninstalledTag') }}</RcTag>
-            </div>
+            <span class="bundled-name">{{ getLocalizedPluginName(item) }}</span>
             <span class="bundled-desc">{{ getLocalizedPluginDescription(item) }}</span>
           </div>
         </div>
 
-        <div class="bundled-action">
-          <RcButton
-            v-if="isHidden(item.pluginId)"
-            :ref="(el) => setActionBtnRef(item.pluginId, el)"
-            variant="secondary"
-            size="xs"
-            :icon="RotateCcwIcon"
-            :loading="isToggling(item.pluginId)"
-            :data-testid="`bundled-restore-${item.pluginId}`"
-            @click="toggleBundled(item)"
-          >
-            {{ t('settings.bundled.restore') }}
-          </RcButton>
-          <RcButton
-            v-else
-            :ref="(el) => setActionBtnRef(item.pluginId, el)"
-            variant="secondary"
-            size="xs"
-            class="bundled-uninstall-btn"
-            :icon="Trash2Icon"
-            :loading="isToggling(item.pluginId)"
-            :data-testid="`bundled-uninstall-${item.pluginId}`"
-            @click="toggleBundled(item)"
-          >
-            {{ t('settings.bundled.uninstall') }}
-          </RcButton>
-        </div>
+        <ASwitch
+          v-switch-keyboard
+          size="small"
+          class="bundled-switch"
+          :checked="!isHidden(item.pluginId)"
+          :aria-label="t('settings.bundled.visibilityLabel', { name: getLocalizedPluginName(item) })"
+          :aria-busy="isToggling(item.pluginId)"
+          :aria-disabled="isToggling(item.pluginId)"
+          @change="setVisible(item, $event)"
+        />
       </div>
     </div>
   </div>
@@ -274,13 +246,6 @@ defineExpose({
   min-width: 0;
 }
 
-.bundled-title-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
 .bundled-name {
   font-size: var(--rc-fs-body);
   font-weight: 500;
@@ -294,10 +259,6 @@ defineExpose({
   color: var(--rc-text-secondary);
 }
 
-.bundled-status-tag {
-  flex-shrink: 0;
-}
-
 .bundled-desc {
   font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
@@ -306,15 +267,15 @@ defineExpose({
   text-overflow: ellipsis;
 }
 
-.bundled-action {
-  flex-shrink: 0;
+.bundled-load-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--rc-text-secondary);
 }
 
-/* 每行都有「卸载」，常态用中性次按钮，避免一屏九个红按钮；悬停或键盘聚焦时才露出危险色 */
-.bundled-uninstall-btn:hover:not(:disabled),
-.bundled-uninstall-btn:focus-visible {
-  color: var(--rc-error);
-  border-color: color-mix(in srgb, var(--rc-error) 40%, var(--rc-border-highlight));
-  background: var(--rc-error-subtle);
+.bundled-switch {
+  flex-shrink: 0;
 }
 </style>

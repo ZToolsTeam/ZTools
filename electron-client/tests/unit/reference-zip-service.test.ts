@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { buildZipFixture as archive } from '../helpers/zip-fixture.js'
 import test from 'node:test'
-import fs from 'node:fs'
 import vm from 'node:vm'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 import { ReferenceZipService } from '../../src/main/services/reference-zip-service.js'
 import type { CallerIdentity } from '../../src/contracts/capabilities.js'
 const caller = { webContentsId: 77 } as CallerIdentity
@@ -46,7 +46,7 @@ test('ZIP rejects unknown parameters and raw paths before read', async () => {
   assert.equal(f.calls.length, 0)
 })
 test('public ZIP SDK sends opaque FileRef IDs and forwards list/test cancellation', async () => {
-  const source = ['fs-reference', 'zip'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join('\n')
+  const source = loadCefIpcSources(['api/fs-reference', 'api/zip'])
   const Constructor = vm.runInNewContext(source + '\nZipAPI', { window: { __ztoolsElectron: { contractVersion: 2, transport: { methods: { zip_list() {}, zip_test() {} }, cancellations: { zip_list() {}, zip_test() {} } } } }, TextEncoder }) as new (dll: unknown, transport: unknown) => { list(ref: unknown, options: unknown): Promise<unknown>; test(ref: unknown, options: unknown): Promise<boolean>; compress(options: unknown): Promise<boolean>; extract(options: unknown): Promise<boolean> }
   const calls: { method: string; params: unknown; options: unknown }[] = [], signal = new AbortController().signal
   const api = new Constructor({}, { supportsAbortSignal: true, call: async (method: string, params: unknown, options: unknown) => { calls.push({ method, params: JSON.parse(JSON.stringify(params)), options }); return method === 'zip_list' ? { success: true, files: [{ name: 'file.txt', size: 5, isDirectory: false }] } : { success: true, valid: true } } })

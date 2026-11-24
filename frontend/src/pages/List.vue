@@ -1,6 +1,5 @@
 <script setup>
 import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon, ExternalLinkIcon, SearchIcon } from '@lucide/vue'
-import { GithubLogo } from '@/utils/appIcons'
 import { ref, computed, onActivated, onDeactivated, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -19,10 +18,18 @@ import { useVersionCompat } from '@/composables/useVersionCompat'
 import { useUIStore } from '@/stores/ui'
 import { useVisualGridNav } from '@/composables/useVisualGridNav'
 import { routeUtils, ROUTES } from '@/router/routes'
+import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { useKeymap, KEYMAP_SCOPES, isInteractiveControlTarget } from '@/utils/keymap'
 import { useAppI18n } from '@/i18n'
 import { getLocalizedCategoryName, getLocalizedPluginName } from '@/utils/pluginI18n'
+import {
+  FAVORITES_CATEGORY_ID,
+  getCategoryIcon,
+  normalizeCategoryRouteParam,
+  resolveCategoryKey
+} from '@/utils/pluginCategories'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 
 const { t } = useAppI18n()
 const nav = useNavStore()
@@ -44,7 +51,7 @@ const previewGroups = ref([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(PAGE_SIZE)
-const category = ref(route.params.category || '')
+const category = ref(normalizeCategoryRouteParam(route.params.category || ''))
 const loading = ref(false)
 const loadingLocalPlugins = ref(false)
 const error = ref('')
@@ -55,8 +62,8 @@ const isAllCategory = computed(() => !category.value || category.value === '')
 const searchKeyword = ref(String(route.query.q || '').trim())
 
 // 页面内分类筛选：与侧栏 selectCategory 行为一致（切换分类时清空搜索词）
-function selectMarketCategory(name) {
-  const next = name === '全部' ? '' : name
+function selectMarketCategory(categoryIdOrName) {
+  const next = normalizeCategoryRouteParam(categoryIdOrName)
   nav.setCategory(next)
   router.push({ ...ROUTES.LIST, params: { category: next } })
 }
@@ -109,21 +116,10 @@ const switchSourceType = async (type) => {
   await load()
 }
 
-// 分类名称 → 图标映射（前端本地维护）
-const CATEGORY_ICON_MAP = {
-  '系统工具': 'fa-wrench',
-  '办公效率': 'fa-briefcase',
-  '媒体处理': 'fa-file-image-o',
-  '安全工具': 'fa-shield',
-  '开发工具': 'fa-code',
-  '效率工具': 'fa-bolt',
-  '设计工具': 'fa-paint-brush'
-}
-
 const categoriesReady = computed(() => categoriesStore.loaded || categoriesStore.error)
 // 当前系统上一个插件都没有的分类不显示（正在查看的分类保留，免得页面没有选中项）
 const visibleMarketCategories = computed(() =>
-  (categoriesStore.sidebarCategories || []).filter((c) => pluginsStore.isCategoryVisible(c.name, category.value))
+  (categoriesStore.sidebarCategories || []).filter((c) => pluginsStore.isCategoryVisible(resolveCategoryKey(c), category.value))
 )
 const isInitialLoading = computed(
   () => loading.value || categoriesStore.loading || (!categoriesStore.loaded && !categoriesStore.error)
@@ -145,10 +141,14 @@ const getPluginId = (pluginOrId) => {
 }
 
 // 插件卡片参数（分类预览与平铺列表共用）；评分汇总由版本提供，开源版没有评分，始终为 null
-const cardProps = (p) => {
+const cardProps = (p, index) => {
   const pid = getPluginId(p)
   return {
     plugin: p,
+    tabindex: index === focusedCardIndex.value ? 0 : -1,
+    actionTabindex: index === focusedCardIndex.value ? 0 : -1,
+    role: 'group',
+    'aria-label': getLocalizedPluginName(p),
     showFavorite: true,
     isFavorite: pluginsStore.isFavorite(pid),
     isInstalled: installedSet.value.has(pid),
@@ -170,7 +170,7 @@ const load = async () => {
   loading.value = true
   error.value = ''
   try {
-    const isFav = requestCategory === 'favorites'
+    const isFav = requestCategory === FAVORITES_CATEGORY_ID
     void refreshSourceCounts({ requestCategory: isFav ? '' : requestCategory, requestKeyword, isFav })
     const categoriesPromise = categoriesStore.fetchCategories()
 
@@ -207,14 +207,18 @@ const load = async () => {
       ])
       if (requestId !== loadRequestId) return
 
-      const groups = categories.map((item) => ({
-        ...item,
-        icon: CATEGORY_ICON_MAP[item.name] || 'fa-cube'
-      }))
+      const groups = categories.map((item) => {
+        const key = resolveCategoryKey(item)
+        return {
+          ...item,
+          id: key || item.id,
+          icon: getCategoryIcon(key || item.name)
+        }
+      })
       const results = await Promise.allSettled(
         groups.map((group) =>
           pluginsStore.loadWithCache({
-            category: group.name,
+            category: group.id || group.name,
             page: 1,
             per_page: CATEGORY_PREVIEW_LIMIT
           })
@@ -251,7 +255,7 @@ const load = async () => {
         throw new Error(t('market.categoryPreviewFailed'))
       }
       if (failedCount > 0) {
-        toastWarning(t('market.partialCategoryFailed', { count: failedCount }))
+        toastWarning(t('market.partialCategoryFailed', { count: failedCount }, failedCount))
       }
 
       previewGroups.value = nextGroups
@@ -295,7 +299,7 @@ const load = async () => {
     }
   } catch (e) {
     if (requestId !== loadRequestId) return
-    error.value = e.message || String(e)
+    error.value = resolveErrorMessage(e, 'common.unknownError')
     toastError(t('market.loadListFailed', { reason: error.value }))
   } finally {
     if (requestId === loadRequestId) {
@@ -308,7 +312,7 @@ watch(
   [() => route.name, () => route.params.category, () => route.query.q],
   ([name, v, q]) => {
     if (name && name !== ROUTES.LIST.name) return
-    const nextCategory = v || ''
+    const nextCategory = normalizeCategoryRouteParam(v || '')
     const nextKeyword = String(q || '').trim()
     if (nextCategory === category.value && nextKeyword === searchKeyword.value) return
     const previousCategory = category.value
@@ -317,9 +321,9 @@ watch(
 
     page.value = 1
     resetListFocus()
-    if (v !== previousCategory) {
+    if (nextCategory !== previousCategory) {
       // 埋点：市场分类筛选
-      track('market_filter', '', { category: v || 'all' })
+      track('market_filter', '', { category: nextCategory || 'all' })
     }
     load()
   }
@@ -335,7 +339,7 @@ const toggleFavorite = async (pluginId) => {
   } catch (e) {
     if (!onAuthRequired(e)) {
       console.error('toggleFavorite error:', e)
-      toastError(t('market.operationFailed', { reason: e.message || e }))
+      toastError(t('market.operationFailed', { reason: resolveErrorMessage(e, 'common.unknownError') }))
     }
   }
 }
@@ -344,8 +348,8 @@ const goDetails = (id) => {
   router.push(routeUtils.toPluginDetails(id))
 }
 
-const goCategory = (categoryName) => {
-  router.push(routeUtils.toListCategory(categoryName))
+const goCategory = (categoryIdOrName) => {
+  router.push(routeUtils.toListCategory(normalizeCategoryRouteParam(categoryIdOrName)))
 }
 
 const handlePaginationChange = async (nextPage) => {
@@ -371,7 +375,7 @@ const openApp = async (id) => {
 
     // 检查是否需要导航到详情页（插件已卸载的情况）
     if (res?.action === 'navigate_to_detail') {
-      toastWarning(res.error || t('market.notInstalledReinstall'))
+      toastWarning(resolveErrorMessage(res, 'market.notInstalledReinstall'))
       router.push(routeUtils.toPluginDetails(res.pluginId || id))
       return
     }
@@ -382,7 +386,7 @@ const openApp = async (id) => {
       toastError(t('market.openFailed'))
     }
   } catch (e) {
-    toastError(t('market.openFailedWithReason', { reason: e.message || e }))
+    toastError(t('market.openFailedWithReason', { reason: resolveErrorMessage(e, 'common.unknownError') }))
   }
 }
 
@@ -393,6 +397,11 @@ const openExtensionsRepo = () => {
   } else {
     window.open(url, '_blank')
   }
+}
+
+function clearSearchAndBrowse() {
+  pluginsStore.setSourceFilter('all')
+  router.replace({ ...ROUTES.LIST, params: { category: '' }, query: {} })
 }
 
 const openDevGuide = () => {
@@ -449,7 +458,10 @@ const gridNav = useVisualGridNav({
   getTotalCount: () => currentDisplayList.value.length,
   fallbackColumns: 2,
   getGroup: getListNavGroup,
-  onFocusGrid: () => uiStore.focusGrid(),
+  onFocusGrid: () => {
+    uiStore.focusGrid()
+    focusCurrentCard()
+  },
   onReachTop: () => {
     if (typeof window !== 'undefined' && typeof window.__ztoolsFocusHomeSearch === 'function') {
       window.__ztoolsFocusHomeSearch()
@@ -466,8 +478,16 @@ function resetListFocus() {
   actionPanelVisible.value = false
 }
 
+function focusCurrentCard() {
+  listContainerRef.value?.querySelector(`[data-nav-index="${focusedCardIndex.value}"]`)?.focus({ preventScroll: true })
+}
+
+watch(() => uiStore.isGridFocused, (focused) => {
+  if (focused && isPageActive.value && document.activeElement === document.body) focusCurrentCard()
+})
+
 function handleCardFocus(idx) {
-  gridNav.setFocusedIndex(idx)
+  if (idx !== focusedCardIndex.value) gridNav.setFocusedIndex(idx)
   uiStore.focusGrid()
 }
 
@@ -482,6 +502,10 @@ watch(
 )
 
 const focusedPlugin = computed(() => currentDisplayList.value[focusedCardIndex.value] || null)
+
+const hasCardActions = computed(() => !isInitialLoading.value && !error.value && !!focusedPlugin.value)
+const emptySearch = computed(() => !!searchKeyword.value && !isInitialLoading.value && !error.value && !currentDisplayList.value.length)
+defineExpose({ hasCardActions })
 
 const activePluginActions = computed(() => {
   const p = focusedPlugin.value
@@ -508,7 +532,7 @@ const activePluginActions = computed(() => {
       actions.push({
         type: 'Action',
         props: {
-          title: t('market.actionInstallPlugin'),
+          title: isBundledPlugin(pid) ? t('common.restore') : t('market.actionInstallPlugin'),
           icon: 'download',
           onAction: () => handleDownload(pid)
         }
@@ -534,7 +558,16 @@ const activePluginActions = computed(() => {
     }
   })
 
-  if (isRevoked && isInstalled) {
+  if (isRevoked && isInstalled && isBundledPlugin(pid)) {
+    actions.push({
+      type: 'Action',
+      props: {
+        title: t('myPage.manageBundledTitle'),
+        icon: 'gear',
+        onAction: () => router.push({ ...ROUTES.ADVANCED_SETTINGS, query: { manageBundled: pid } })
+      }
+    })
+  } else if (isRevoked && isInstalled) {
     actions.push({
       type: 'Action',
       props: {
@@ -545,12 +578,12 @@ const activePluginActions = computed(() => {
           try {
             const res = await pluginsStore.uninstallPlugin(pid)
             if (res?.success === false) {
-              toastError(t('market.uninstallFailed', { reason: res.error || res.message || t('common.unknownError') }))
+              toastError(t('market.uninstallFailed', { reason: resolveErrorMessage(res, 'common.unknownError') }))
             } else {
               toastSuccess(t('market.uninstallSuccess'))
             }
           } catch (err) {
-            toastError(t('market.uninstallFailed', { reason: err?.message || err }))
+            toastError(t('market.uninstallFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }))
           }
         }
       }
@@ -570,7 +603,7 @@ watch(
     if (!isPageActive.value) return
     if (actionPanelVisible.value) {
       actionPanelVisible.value = false
-    } else if (focusedPlugin.value) {
+    } else if (hasCardActions.value) {
       actionPanelVisible.value = true
     }
   }
@@ -590,7 +623,7 @@ function isStandaloneOrInnerActionControl(target) {
 function handleGridDirectionKey(e, key) {
   if (actionPanelVisible.value) return false
   if (isStandaloneControlTarget(e?.target)) return false
-  return gridNav.navigate(key)
+  return hasCardActions.value && gridNav.navigate(key)
 }
 
 useKeymap(KEYMAP_SCOPES.PAGE, {
@@ -603,7 +636,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
   'PageUp': (e) => handleGridDirectionKey(e, 'PageUp'),
   'PageDown': (e) => handleGridDirectionKey(e, 'PageDown'),
   'Enter': (e) => {
-    if (actionPanelVisible.value) return false
+    if (actionPanelVisible.value || !hasCardActions.value) return false
     if (isStandaloneOrInnerActionControl(e?.target)) return false
     const p = currentDisplayList.value[focusedCardIndex.value]
     if (p) {
@@ -622,7 +655,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
       actionPanelVisible.value = false
       return true
     }
-    if (focusedPlugin.value) {
+    if (hasCardActions.value) {
       actionPanelVisible.value = true
       return true
     }
@@ -679,7 +712,7 @@ const handleInstallComplete = async (envelope) => {
         await load()
       }
     } else if (pid) {
-      toastError(t('market.installFailed', { reason: payload.error || t('common.unknownError') }))
+      toastError(t('market.installFailed', { reason: resolveErrorMessage(payload, 'common.unknownError') }))
     }
   } catch (e) {
     console.error('[List] 处理安装完成事件失败:', e)
@@ -701,9 +734,10 @@ const handleUninstallComplete = async (envelope) => {
 }
 
 onMounted(() => {
-  nav.setCategory(route.params.category || '')
+  const initialCategory = normalizeCategoryRouteParam(route.params.category || '')
+  nav.setCategory(initialCategory)
   // 埋点：市场页面访问
-  track('market_view', '', { category: route.params.category || 'all' })
+  track('market_view', '', { category: initialCategory || 'all' })
   load()
   // 插件卡片上的评分：官方版一次拉全量汇总并缓存几分钟，不阻塞列表；开源版没有评分，为空操作
   if (pluginRatings.enabled) {
@@ -769,6 +803,7 @@ onBeforeUnmount(() => {
         variant="secondary"
         size="md"
         :icon="ExternalLinkIcon"
+        v-if="!emptySearch"
         class="market-submit"
         :title="t('market.submitTooltip')"
         @click="openExtensionsRepo"
@@ -798,7 +833,7 @@ onBeforeUnmount(() => {
     >
       <div
         v-for="(group, groupIndex) in previewGroups"
-        :key="group.name"
+        :key="group.id || group.name"
         style="margin-bottom: 16px"
       >
         <!-- 分类标题：Raycast 纯粹极客 Section 风格 -->
@@ -808,7 +843,7 @@ onBeforeUnmount(() => {
         >
           <div class="flex items-center gap-2">
             <span class="text-[length:var(--rc-fs-small)] font-semibold text-[var(--rc-text-primary)] tracking-wide">
-              {{ getLocalizedCategoryName(group.name) }}
+              {{ getLocalizedCategoryName(group.id || group.name) }}
             </span>
             <span class="text-[length:var(--rc-fs-caption)] font-mono text-[var(--rc-text-muted)]">
               {{ group.total }}
@@ -817,7 +852,7 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="category-view-all-btn text-[length:var(--rc-fs-caption)] text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0 transition-colors whitespace-nowrap"
-            @click="goCategory(group.name)"
+            @click="goCategory(group.id || group.name)"
           >
             <span>{{ t('market.viewAll') }}</span>
             <ChevronRightIcon class="text-[length:var(--rc-fs-caption)]" />
@@ -837,8 +872,8 @@ onBeforeUnmount(() => {
             class="transition-all rounded-[var(--rc-radius-lg)]"
             :class="{ 'is-list-card-focused': !uiStore.isSearchInputActive && focusedCardIndex === previewFlatIndex(groupIndex, index) }"
             :data-nav-index="previewFlatIndex(groupIndex, index)"
-            :data-nav-group="group.name"
-            v-bind="cardProps(p)"
+            :data-nav-group="group.id || group.name"
+            v-bind="cardProps(p, previewFlatIndex(groupIndex, index))"
             @click="handleCardFocus(previewFlatIndex(groupIndex, index))"
             @focusin="handleCardFocus(previewFlatIndex(groupIndex, index))"
             @toggle-favorite="toggleFavorite"
@@ -851,16 +886,16 @@ onBeforeUnmount(() => {
       </div>
     </template>
 
-    <!-- 空状态：搜索无结果时引导去写一个插件 -->
+    <!-- 空结果提供直接返回完整目录的入口 -->
     <RcEmpty
-      v-else-if="categoriesReady && !loading && items.length === 0"
+      v-else-if="categoriesReady && !loading && !error && items.length === 0"
       :icon="SearchIcon"
       :title="route.query.q ? t('market.emptySearchTitle', { keyword: route.query.q }) : t('market.emptyTitle')"
       :description="route.query.q ? t('market.emptySearchDesc') : t('market.emptyDesc')"
     >
-      <template v-if="route.query.q" #action>
-        <div class="flex items-center gap-2">
-          <RcButton variant="secondary" size="sm" :icon="GithubLogo" @click="openExtensionsRepo">{{ t('market.pluginRepo') }}</RcButton>
+      <template v-if="emptySearch" #action>
+        <div class="flex flex-col items-center gap-2">
+          <RcButton variant="primary" size="md" @click="clearSearchAndBrowse">{{ t('market.clearSearchAndBrowse') }}</RcButton>
           <RcButton variant="ghost" size="sm" @click="openDevGuide">{{ t('market.devGuide') }}</RcButton>
         </div>
       </template>
@@ -875,7 +910,7 @@ onBeforeUnmount(() => {
         gap: 12px;
       "
     >
-      <div
+      <PluginCard3D
         v-for="(p, index) in items"
         :key="getPluginId(p)"
         class="transition-all rounded-[var(--rc-radius-lg)]"
@@ -884,16 +919,13 @@ onBeforeUnmount(() => {
         data-nav-group="flat"
         @click="handleCardFocus(index)"
         @focusin="handleCardFocus(index)"
-      >
-        <PluginCard3D
-          v-bind="cardProps(p)"
-          @toggle-favorite="toggleFavorite"
-          @open="goDetails"
-          @open-app="openApp"
-          @download="handleDownload"
-          @plugin-updated="onPluginUpdated"
-        />
-      </div>
+        v-bind="cardProps(p, index)"
+        @toggle-favorite="toggleFavorite"
+        @open="goDetails"
+        @open-app="openApp"
+        @download="handleDownload"
+        @plugin-updated="onPluginUpdated"
+      />
     </div>
     <div
       v-if="error"
@@ -931,6 +963,7 @@ onBeforeUnmount(() => {
 
     <!-- 底部：开源插件大仓直达 -->
     <RcBannerLink
+      v-if="!emptySearch"
       class="market-repo-banner"
       :title="t('market.repoBannerTitle')"
       :description="t('market.repoBannerDesc')"
@@ -978,6 +1011,14 @@ onBeforeUnmount(() => {
 .is-list-card-focused {
   border-radius: var(--rc-radius-lg);
   box-shadow: var(--rc-focus-ring);
+}
+
+.is-list-card-focused:focus-visible {
+  outline: none;
+}
+
+.is-list-card-focused:has(:focus-visible) {
+  box-shadow: none;
 }
 
 .is-list-card-focused :deep(.card-compact) {

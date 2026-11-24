@@ -972,7 +972,7 @@ contextBridge.exposeInMainWorld('_readFileArrayBufferChunk', (path: string, offs
 contextBridge.exposeInMainWorld('_writeFileArrayBuffer', (path: string, bytes: unknown) => {
   if (!Array.isArray(bytes) || bytes.length > 16 * 1024 * 1024 ||
       !bytes.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)) {
-    throw new Error('文件内容必须是字节数组，且不超过 16 MiB')
+    throw new Error('File content must be a byte array not exceeding 16 MiB')
   }
   return legacyFileCall('filesystem_write_file', {
     path, content: btoa(bytes.map(value => String.fromCharCode(value)).join('')), encoding: 'base64'

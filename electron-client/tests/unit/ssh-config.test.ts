@@ -124,19 +124,19 @@ test('配置损坏、断链、目录、循环与超限都显式失败，不返�
     await f.put('.ssh/config', content); await assert.rejects(f.read())
   }
   await f.put('.ssh/config', 'Include again\n'); await f.put('.ssh/again', 'Include config\n')
-  await assert.rejects(f.read(), /循环/)
+  await assert.rejects(f.read(), /Circular reference/)
   if (process.platform !== 'win32') {
     await fs.unlink(f.config); await fs.symlink(path.join(f.home, 'missing-target'), f.config)
-    await assert.rejects(f.read(), /链接或路径/)
+    await assert.rejects(f.read(), /symlink or path/)
   }
   await fs.unlink(f.config); await fs.mkdir(f.config)
-  await assert.rejects(f.read(), /普通文件/)
+  await assert.rejects(f.read(), /regular file/)
 })
 
 test('FIFO 不阻塞、有界读取、取消可重试，文件句柄关闭后仍能读取新配置', { skip: process.platform === 'win32' }, async t => {
   const f = await fixture(t), fifo = path.join(f.home, 'pipe')
   execFileSync('/usr/bin/mkfifo', [fifo])
-  const start = Date.now(); await assert.rejects(readSshConfigurationFile(fifo, signal()), /普通文件/); assert.ok(Date.now() - start < 2000)
+  const start = Date.now(); await assert.rejects(readSshConfigurationFile(fifo, signal()), /regular file/); assert.ok(Date.now() - start < 2000)
   await f.put('.ssh/config', 'Host alpha\n Port 22\n')
   const controller = new AbortController(); controller.abort()
   await assert.rejects(readSshDocuments(f.options, controller.signal))
@@ -151,7 +151,7 @@ test('别名拒绝选项、命令注入与控制字符；端口错误显式失�
   const f = await fixture(t)
   for (const port of ['0', '-1', '65536', 'oops']) {
     await f.put('.ssh/config', `Host alpha\n Port ${port}\n`)
-    const documents = await f.read(); assert.throws(() => sshProfiles(documents), /端口/)
+    const documents = await f.read(); assert.throws(() => sshProfiles(documents), /port/i)
   }
 })
 
@@ -164,7 +164,7 @@ test('病态通配符无指数回溯，模式长度与全扫描工作量有界',
   const long = await f.read(); assert.throws(() => sshProfiles(long), /1024/)
   const aliases = Array.from({ length: 1000 }, (_v, i) => `host${i}`)
   await f.put('.ssh/config', aliases.map(name => `Host ${name}\n User test\n`).join(''))
-  const many = await f.read(); assert.throws(() => sshProfiles(many), /工作量/)
+  const many = await f.read(); assert.throws(() => sshProfiles(many), /work budget/)
 })
 
 test('累积身份与转发配置逐项追加且有数量上限', async t => {
@@ -174,7 +174,7 @@ test('累积身份与转发配置逐项追加且有数量上限', async t => {
     const allowed = sshProfiles(await f.read()).hosts[0]!
     assert.equal(Math.max(allowed.identityFiles.length, allowed.localForwards.length), 256)
     await f.put('.ssh/config', 'Host alpha\n' + (directive + '\n').repeat(257))
-    const documents = await f.read(); assert.throws(() => sshProfiles(documents), /累积配置条目/)
+    const documents = await f.read(); assert.throws(() => sshProfiles(documents), /Accumulated SSH config entries/)
   }
 })
 
@@ -183,10 +183,10 @@ test('共享长字段与主机名展开有整轮容量上限，不生成巨型 I
   const aliases = Array.from({ length: 400 }, (_v, i) => `host${i}`).join(' ')
   await f.put('.ssh/config', `Host ${aliases}\n` + `IdentityFile ${'a'.repeat(900)}\n`.repeat(256))
   const shared = await f.read()
-  assert.throws(() => sshProfiles(shared), /预览容量/)
+  assert.throws(() => sshProfiles(shared), /preview capacity/)
   await f.put('.ssh/config', `Host ${'a'.repeat(255)}\n HostName ${'%h'.repeat(16000)}\n`)
   const expanded = await f.read()
-  assert.throws(() => sshProfiles(expanded), /预览容量/)
+  assert.throws(() => sshProfiles(expanded), /preview capacity/)
   await f.put('.ssh/config', 'Host alpha beta\n IdentityFile ~/.ssh/key\n HostName %h.example\n')
   const small = sshProfiles(await f.read())
   assert.deepEqual(small.hosts.map(h => h.hostName), ['alpha.example', 'beta.example'])

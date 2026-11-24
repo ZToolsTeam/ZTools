@@ -32,21 +32,21 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
  * 不合法时抛出错误，由调用方决定是中止构建还是降级为离线。
  */
 export function normalizeApiBase(value: unknown): string {
-  if (typeof value !== 'string') throw new TypeError('后台地址必须是字符串')
+  if (typeof value !== 'string') throw new TypeError('Backend API base URL must be a string')
   const trimmed = value.trim()
   if (trimmed === '') return ''
-  if (trimmed.length > MAX_API_BASE_LENGTH) throw new Error('后台地址过长')
+  if (trimmed.length > MAX_API_BASE_LENGTH) throw new Error('Backend API base URL is too long')
   let url: URL
   try {
     url = new URL(trimmed)
   } catch {
-    throw new Error(`后台地址不是有效的绝对地址: ${trimmed}`)
+    throw new Error(`Backend API base URL is not a valid absolute URL: ${trimmed}`)
   }
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname))) {
-    throw new Error(`后台地址只允许 https（本机调试可用 http://localhost）: ${trimmed}`)
+    throw new Error(`Backend API base URL must use https (http://localhost is allowed for local debugging): ${trimmed}`)
   }
-  if (url.username !== '' || url.password !== '') throw new Error('后台地址不能包含账号或密码')
-  if (url.search !== '' || url.hash !== '') throw new Error('后台地址不能包含查询参数或锚点')
+  if (url.username !== '' || url.password !== '') throw new Error('Backend API base URL must not contain credentials')
+  if (url.search !== '' || url.hash !== '') throw new Error('Backend API base URL must not contain query parameters or hash fragments')
   return `${url.origin}${url.pathname}`.replace(/\/+$/, '')
 }
 
@@ -119,9 +119,9 @@ export function readBuildConfig(file = path.join(__dirname, '..', BUILD_CONFIG_F
   }
   try {
     const value: unknown = JSON.parse(source.replace(/^﻿/, ''))
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('不是对象')
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('not an object')
     const record = value as Record<string, unknown>
-    if (record.schemaVersion !== BUILD_CONFIG_SCHEMA_VERSION) throw new Error('版本不受支持')
+    if (record.schemaVersion !== BUILD_CONFIG_SCHEMA_VERSION) throw new Error('unsupported schema version')
     return { apiBase: normalizeApiBase(record.apiBase ?? '') }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

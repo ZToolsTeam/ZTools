@@ -8,7 +8,7 @@ export interface PathSemanticsAdapter {
 }
 
 function invalidPath(): never {
-  throw new ZToolsError(errorCodes.invalidRequest, 'path 包含不允许的路径形式')
+  throw new ZToolsError(errorCodes.invalidRequest, 'path contains a disallowed path form')
 }
 
 function validateCommonInput(value: string): void {
@@ -57,6 +57,6 @@ export function createPathSemanticsAdapter(platform: NodeJS.Platform): PathSeman
     case 'linux':
       return new PosixPathSemanticsAdapter()
     default:
-      throw new ZToolsError(errorCodes.notSupported, `当前平台未配置路径语义适配器: ${platform}`)
+      throw new ZToolsError(errorCodes.notSupported, `No path semantics adapter configured for platform: ${platform}`)
   }
 }

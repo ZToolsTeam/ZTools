@@ -29,7 +29,7 @@ export class PowerSessionService {
    * 没有插件身份的调用仍按窗口区分。
    */
   #owner(caller: CallerIdentity): string {
-    if (caller.stalePluginSession) throw new Error('插件会话已失效，请重新打开插件')
+    if (caller.stalePluginSession) throw new Error('Plugin session has expired; please reopen the plugin')
     const pluginId = caller.attributedPlugin?.pluginId ?? caller.pluginId ?? null
     return pluginId ? JSON.stringify(['plugin', pluginId.toLowerCase()]) : JSON.stringify(['window', caller.webContentsId])
   }
@@ -72,12 +72,12 @@ export class PowerSessionService {
     else if (action === 'start') {
       const durationMinutes = params.durationMinutes ?? 0
       const mode = params.mode ?? 'display'
-      if (!Number.isInteger(durationMinutes) || durationMinutes < 0 || durationMinutes > 10080) throw new Error('防休眠时长必须为 0~10080 的整数分钟')
-      if (mode !== 'display' && mode !== 'system') throw new Error('防休眠模式无效')
+      if (!Number.isInteger(durationMinutes) || durationMinutes < 0 || durationMinutes > 10080) throw new Error('Power save duration must be an integer between 0 and 10080 minutes')
+      if (mode !== 'display' && mode !== 'system') throw new Error('Invalid power save mode')
       // 先结束旧会话，再建立新断言；失败时没有失去归属的第二个断言。
       this.#release(owner)
       const blockerId = this.adapter.startPreventSleep(mode)
-      if (!Number.isInteger(blockerId) || blockerId < 0) throw new Error('无法建立系统防休眠断言')
+      if (!Number.isInteger(blockerId) || blockerId < 0) throw new Error('Unable to create system power save blocker')
       const now = Date.now()
       const next: PowerSession = {
         windowId: caller.webContentsId, blockerId, mode, durationMinutes,
@@ -86,7 +86,7 @@ export class PowerSessionService {
       }
       this.#sessions.set(owner, next)
       if (next.expiresAtMs !== null) this.#schedule(owner, next, next.expiresAtMs - now)
-    } else if (action !== 'status') throw new Error('防休眠操作无效')
+    } else if (action !== 'status') throw new Error('Invalid power save action')
 
     const current = this.#sessions.get(owner)
     return {

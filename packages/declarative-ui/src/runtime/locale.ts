@@ -4,6 +4,8 @@ export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 export const DEFAULT_LOCALE: SupportedLocale = "en-US";
 
+export const SYSTEM_LOCALE = "system" as const;
+
 export type LocaleChangeListener = (locale: string) => void;
 
 export type TranslationParamValue = string | number | boolean | null | undefined;
@@ -18,45 +20,71 @@ export type Translator<K extends string = string> = (
   params?: TranslationParams
 ) => string;
 
-function matchSupportedLocale(raw?: string | null): SupportedLocale | null {
-  if (typeof raw !== "string") return null;
-  const normalized = raw.trim().replace(/_/g, "-").toLowerCase();
-  if (!normalized) return null;
+/**
+ * 清理语言标签：去首尾空白、剥离 POSIX `.UTF-8` / `@...` 后缀并将 `_` 转为 `-`。
+ * 与 `packages/ztools-plugins-spec/src/locale.js` 保持 100% 行为等价。
+ */
+export function stripLocaleSuffix(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const withoutPosix = trimmed.split(/[.@]/)[0] || "";
+  return withoutPosix.trim().replace(/_/g, "-");
+}
 
-  for (const supported of SUPPORTED_LOCALES) {
-    if (supported.toLowerCase() === normalized) {
-      return supported;
-    }
+/**
+ * 严格匹配受支持语言标签（zh-CN / en-US）。
+ * 遇到空值、`'system'`/`'auto'`/`'default'` 或第三语种（如 `ja-JP`/`fr-FR`）时返回 `null`。
+ */
+export function matchSupportedLocale(raw?: unknown): SupportedLocale | null {
+  const cleaned = stripLocaleSuffix(raw);
+  if (!cleaned) return null;
+  const lower = cleaned.toLowerCase();
+  if (lower === SYSTEM_LOCALE || lower === "auto" || lower === "default") {
+    return null;
   }
-
-  const primary = normalized.split("-")[0];
-  if (primary === "zh") return "zh-CN";
-  if (primary === "en") return "en-US";
+  if (lower === "zh" || lower.startsWith("zh-")) {
+    return "zh-CN";
+  }
+  if (lower === "en" || lower.startsWith("en-")) {
+    return "en-US";
+  }
   return null;
 }
 
 /**
- * 将任意原始语言标识归一化为受支持的 locale（当前支持 zh-CN / en-US）。
- * 无法识别时回退至 fallback，若 fallback 亦无效则回退至 DEFAULT_LOCALE ('en-US')。
+ * 将单个或一组原始语言候选归一化为受支持的 locale（当前支持 zh-CN / en-US）。
+ * 自动跳过空值、`'system'` 与第三语种；全部未命中时回退至 fallback，若 fallback 亦无效则回退至 DEFAULT_LOCALE ('en-US')。
  */
 export function resolveLocale(
-  raw?: string | null,
+  raw?: unknown | readonly unknown[],
   fallback: string = DEFAULT_LOCALE
 ): SupportedLocale {
-  return (
-    matchSupportedLocale(raw) ??
-    matchSupportedLocale(fallback) ??
-    DEFAULT_LOCALE
-  );
+  const list = Array.isArray(raw) ? raw : [raw];
+  for (const item of list) {
+    const matched = matchSupportedLocale(item);
+    if (matched) return matched;
+  }
+  return matchSupportedLocale(fallback) ?? DEFAULT_LOCALE;
 }
 
 function readInitialGlobalLocale(): SupportedLocale {
   const globalRecord = globalThis as Record<string, unknown>;
-  const raw =
+  const explicit =
     typeof globalRecord.__ztoolsLocale === "string"
       ? globalRecord.__ztoolsLocale
       : undefined;
-  return raw ? resolveLocale(raw, DEFAULT_LOCALE) : DEFAULT_LOCALE;
+  if (explicit) {
+    return resolveLocale(explicit, DEFAULT_LOCALE);
+  }
+  // 兼容旧版前端壳层或未注入 __ztoolsLocale 的独立渲染窗口：
+  // 仅在浏览器/Electron DOM 环境下读取 <html lang> 与 navigator.language，避免污染纯 Node 测试环境的确定性。
+  if (typeof document !== "undefined") {
+    const docLang = document.documentElement?.lang;
+    const navLang = typeof navigator !== "undefined" ? navigator.language : undefined;
+    return resolveLocale([docLang, navLang], DEFAULT_LOCALE);
+  }
+  return DEFAULT_LOCALE;
 }
 
 let currentLocale: SupportedLocale = readInitialGlobalLocale();
@@ -114,18 +142,113 @@ function lookupMessage(
   return value;
 }
 
-function interpolate(template: string, params?: TranslationParams): string {
-  if (!params) return template;
-  return template.replace(/\{([A-Za-z0-9_.-]+)\}/g, (match, token: string) => {
-    if (!Object.prototype.hasOwnProperty.call(params, token)) {
-      return match;
+const ESCAPED_PIPE_SENTINEL = "\uE000ZTOOLS_PIPE\uE001";
+const ESCAPED_BRACE_PREFIX = "\uE000ZTOOLS_LBRACE:";
+const ESCAPED_BRACE_SUFFIX = ":ZTOOLS_RBRACE\uE001";
+
+function selectPluralForm(forms: string[], count: number): string {
+  if (forms.length <= 1) {
+    return forms[0] ?? "";
+  }
+  if (forms.length === 2) {
+    return Math.abs(count) === 1 ? forms[0] : forms[1];
+  }
+  if (count === 0) {
+    return forms[0];
+  }
+  return Math.abs(count) === 1 ? forms[1] : forms[2];
+}
+
+/**
+ * 在排除 `[[...]]` 内联复数段之后，按顶层未转义 `|` 切分整串模板。
+ */
+function splitTopLevelPipeForms(template: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let inInlinePlural = false;
+
+  for (let i = 0; i < template.length; i += 1) {
+    if (!inInlinePlural && template[i] === "[" && template[i + 1] === "[") {
+      inInlinePlural = true;
+      current += "[[";
+      i += 1;
+      continue;
     }
-    const value = params[token];
-    if (value === undefined || value === null) {
-      return match;
+    if (inInlinePlural && template[i] === "]" && template[i + 1] === "]") {
+      inInlinePlural = false;
+      current += "]]";
+      i += 1;
+      continue;
     }
-    return String(value);
-  });
+    if (!inInlinePlural && template[i] === "|") {
+      parts.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += template[i];
+  }
+
+  parts.push(parts.length > 0 ? current.trim() : current);
+  return parts;
+}
+
+function formatTemplate(template: string, params?: TranslationParams): string {
+  // 1. 先保护字面量转义：`\|` 与 `{{var}}`，避免与复数切分和 `{var}` 插值冲突
+  let working = template
+    .replace(/\\\|/g, ESCAPED_PIPE_SENTINEL)
+    .replace(
+      /\{\{([A-Za-z0-9_.-]+)\}\}/g,
+      (_match, token: string) => `${ESCAPED_BRACE_PREFIX}${token}${ESCAPED_BRACE_SUFFIX}`
+    );
+
+  // 2. 整串 `|` 分段复数（当 params.count 为有限数字且存在顶层未转义 `|` 时生效）
+  const rawCount = params && Object.prototype.hasOwnProperty.call(params, "count") ? params.count : undefined;
+  if (typeof rawCount === "number" && Number.isFinite(rawCount) && working.includes("|")) {
+    const topForms = splitTopLevelPipeForms(working);
+    if (topForms.length > 1) {
+      working = selectPluralForm(topForms, rawCount);
+    }
+  }
+
+  // 3. 内联复数段 `[[param:singular|plural]]` 与 `[[param:zero|one|other]]`
+  if (params && working.includes("[[")) {
+    working = working.replace(
+      /\[\[([A-Za-z0-9_.-]+):([^\]]+)\]\]/g,
+      (match, token: string, body: string) => {
+        if (!Object.prototype.hasOwnProperty.call(params, token)) {
+          return match;
+        }
+        const value = params[token];
+        if (typeof value !== "number" || !Number.isFinite(value)) {
+          return match;
+        }
+        const forms = body.split("|");
+        return selectPluralForm(forms, value);
+      }
+    );
+  }
+
+  // 4. 常规 `{var}` 插值（安全支持 0 / false / ""，忽略 null / undefined 与缺省参数）
+  if (params) {
+    working = working.replace(/\{([A-Za-z0-9_.-]+)\}/g, (match, token: string) => {
+      if (!Object.prototype.hasOwnProperty.call(params, token)) {
+        return match;
+      }
+      const value = params[token];
+      if (value === undefined || value === null) {
+        return match;
+      }
+      return String(value);
+    });
+  }
+
+  // 5. 还原字面量转义：`{{var}}` -> `{var}`，`\|` -> `|`
+  return working
+    .replace(
+      new RegExp(`${ESCAPED_BRACE_PREFIX}([A-Za-z0-9_.-]+)${ESCAPED_BRACE_SUFFIX}`, "g"),
+      (_match, token: string) => `{${token}}`
+    )
+    .replace(new RegExp(ESCAPED_PIPE_SENTINEL, "g"), "|");
 }
 
 export type MessageCatalog<T extends Record<string, string>> = {
@@ -133,7 +256,7 @@ export type MessageCatalog<T extends Record<string, string>> = {
 };
 
 /**
- * 创建带 `{var}` 插值与自动逐级回退（当前 locale → 'en-US' → defaultLocale → Key）的翻译函数。
+ * 创建带 `{var}` 插值、内联/管道复数、`{{var}}` 字面量转义与自动逐级回退（当前 locale → 'en-US' → defaultLocale → Key）的翻译函数。
  */
 export function createTranslator<T extends Record<string, string> = Record<string, string>>(
   messages: Record<string, MessageCatalog<T>>,
@@ -169,6 +292,6 @@ export function createTranslator<T extends Record<string, string> = Record<strin
       }
     }
 
-    return interpolate(template ?? String(key), params);
+    return formatTemplate(template ?? String(key), params);
   };
 }

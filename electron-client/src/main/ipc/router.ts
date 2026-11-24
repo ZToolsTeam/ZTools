@@ -76,7 +76,8 @@ import {
   type AllowedMethod,
   type CallerIdentity
 } from '../../contracts/capabilities.js'
-import { errorCodes, toPublicError, ZToolsError } from '../../contracts/errors.js'
+import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import { toLocalizedPublicError } from './error-localizer.js'
 import type { ImageOcrRequest } from '../../contracts/image-ocr.js'
 import {
   RUNTIME_CAPABILITY_CONTRACT_VERSION,
@@ -295,6 +296,7 @@ import type { UpdateProgress } from '../services/update-service.js'
 import type { ResourceRoot } from '../protocol/ztools-protocol.js'
 import {
   getLocaleSetting,
+  getResolvedLocale,
   setLocale,
   t,
   type LocaleSetting,
@@ -421,9 +423,13 @@ export interface IpcRouterOptions {
     pluginRoot: string
   }
   toggleMainWindow(): void
+  /** 独立悬浮条快捷键回调（与 toggleMainWindow 完全分离） */
+  toggleLauncher?(): void
   forwardHotkeyToRecorder?(accelerator: string): Promise<boolean> | boolean
   /** 冷启动时若 triggers.json 尚未初始化，用于自动建立全局唤醒热键 */
   initialWakeHotkey?: string
+  /** 冷启动或升级后未显式关闭悬浮条热键时，用于自动建立独立悬浮条热键 */
+  initialLauncherHotkey?: string
   closeConfirmationResolved(): void
   screenClipboardAdapters: ScreenClipboardAdapters
   systemPlatformAdapter: SystemPlatformAdapter
@@ -436,12 +442,6 @@ export interface IpcRouterOptions {
   onDarkModeChanged?: (enabled: boolean) => void
   onAccentChanged?: (accent: 'ember' | 'glacier' | 'jade' | 'iris' | 'crimson' | 'mono') => void
   onLocaleChanged?: (locale: SupportedLocale) => void
-  workerPool?: {
-    broadcastLocale(locale: string): Promise<unknown> | void
-  }
-  extensionHost?: {
-    updateLocale(locale: string): Promise<unknown> | void
-  }
   onTrayStatePossiblyChanged?: () => void
   /** 宿主关键子进程 pid（Electron 子进程、侧车、Native Host），结束进程时受保护；缺省按 app.getAppMetrics 等组装 */
   protectedProcessPids?: () => Promise<Iterable<number>> | Iterable<number>
@@ -493,7 +493,7 @@ export function getIpcFailureLogIdentifierFields(
 function deferredCapability(capability: string, phase: 'M3' | 'M3/M4' | 'M4' | 'M5' | 'M6'): never {
   throw new ZToolsError(
     errorCodes.notSupported,
-    `${capability} 尚未启用，等待 ${phase} 安全链路完成`
+    `${capability} is not enabled yet; waiting for ${phase} security pipeline`
   )
 }
 
@@ -515,25 +515,25 @@ export function validateCallerWebContents(
     const parsed = new URL(senderUrl)
     if (caller.type === 'main') {
       if (parsed.protocol === 'ztools:' && parsed.hostname !== 'web') {
-        throw new ZToolsError(errorCodes.permissionDenied, '主程序 WebContents 来源无效')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Invalid main application WebContents origin')
       }
     } else if (caller.type === 'plugin' && caller.pluginId) {
       if (parsed.protocol !== 'ztools:') {
-        throw new ZToolsError(errorCodes.permissionDenied, '插件 WebContents 来源协议非法')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Invalid plugin WebContents origin protocol')
       }
       if (parsed.hostname === 'plugins') {
         const segments = parsed.pathname.split('/').filter(Boolean).map(decodeURIComponent)
         const targetPluginId = segments[0]
         if (targetPluginId && targetPluginId.toLowerCase() !== caller.pluginId.toLowerCase()) {
-          throw new ZToolsError(errorCodes.permissionDenied, 'WebContents 来源 URL 与注册插件身份不匹配')
+          throw new ZToolsError(errorCodes.permissionDenied, 'WebContents origin URL does not match registered plugin identity')
         }
       } else if (isInternalPlugin(caller.pluginId)) {
         // 内置插件若使用 ztools 协议，只允许 plugins 或 web（宿主面板融合模式）
         if (parsed.hostname !== 'web') {
-          throw new ZToolsError(errorCodes.permissionDenied, '内置插件来源 URL 协议非法')
+          throw new ZToolsError(errorCodes.permissionDenied, 'Invalid built-in plugin origin URL protocol')
         }
       } else {
-        throw new ZToolsError(errorCodes.permissionDenied, '第三方插件页面必须运行在 plugins 域')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Third-party plugin pages must run on the plugins origin')
       }
     }
   } catch (err) {
@@ -553,7 +553,7 @@ export function assertNoPluginIdSpoofing(caller: CallerIdentity, request: ZTools
     const raw = request.params as Record<string, unknown>
     if ('pluginId' in raw && typeof raw.pluginId === 'string' && caller.pluginId) {
       if (raw.pluginId.toLowerCase() !== caller.pluginId.toLowerCase()) {
-        throw new ZToolsError(errorCodes.permissionDenied, '调用方 pluginId 与注册身份不匹配')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Caller pluginId does not match registered identity')
       }
     }
   }
@@ -569,12 +569,12 @@ export function authorizeIpcRequest(
 ): asserts request is ZToolsRequest & { method: AllowedMethod } {
   // 1. 基础合法方法校验
   if (!isAllowedMethod(request.method)) {
-    throw new ZToolsError(errorCodes.methodNotFound, `未知方法: ${request.method}`)
+    throw new ZToolsError(errorCodes.methodNotFound, `Unknown method: ${request.method}`)
   }
 
   // 2. 基础调用角色 capability 校验
   if (!canCall(request.method, caller)) {
-    throw new ZToolsError(errorCodes.permissionDenied, `调用者无权访问: ${request.method}`)
+    throw new ZToolsError(errorCodes.permissionDenied, `Caller is not authorized to access: ${request.method}`)
   }
 
   // 3. WebContents 来源 URL 与会话安全隔离校验
@@ -588,7 +588,7 @@ export function authorizeIpcRequest(
     if (caller.type === 'plugin' && !isInternalPlugin(caller.pluginId)) {
       throw new ZToolsError(
         errorCodes.permissionDenied,
-        `第三方插件无权调用特权方法: ${request.method}`
+        `Third-party plugins are not authorized to call privileged method: ${request.method}`
       )
     }
   }
@@ -639,7 +639,7 @@ export function dispatchAuthorizedIpcRequest(
   } catch (error) {
     return {
       success: false,
-      error: toPublicError(error)
+      error: toLocalizedPublicError(error)
     }
   }
 }
@@ -723,6 +723,7 @@ export class IpcRouter {
   readonly #removeFileUnlockWindowListener: () => void
   readonly #dnsBenchmark: DnsBenchmarkService
   readonly #stopThemeEvents: () => void
+  readonly #stopLocaleSettingListener: () => void
   #referenceRuntime: ReferenceRuntimeAttachment | undefined
   #sdkLaneHandshakeListener: ((event: IpcMainEvent, ...args: unknown[]) => void) | undefined
   #registered = false
@@ -799,9 +800,17 @@ export class IpcRouter {
     this.#events.publishHost('system.AccentColorChange', { accent })
   }
 
-  publishLocaleChange(setting: LocaleSetting, locale: SupportedLocale): void {
+  publishLocaleChange(
+    setting: LocaleSetting,
+    locale: SupportedLocale,
+    previousLocale?: SupportedLocale
+  ): void {
     if (this.#stopping) return
-    this.#events.publishHost('system.LocaleChange', { setting, locale })
+    this.#events.publishHost('system.LocaleChange', {
+      setting,
+      locale,
+      ...(previousLocale ? { previousLocale } : {})
+    })
   }
 
   publishSuperPanelChanged(): void {
@@ -824,6 +833,10 @@ export class IpcRouter {
 
   getGlobalWakeHotkey(): { exists: boolean; enabled: boolean; key: string } {
     return this.#triggers.getGlobalWakeHotkey()
+  }
+
+  getGlobalLauncherHotkey(): { exists: boolean; enabled: boolean; key: string } {
+    return this.#triggers.getGlobalLauncherHotkey()
   }
 
   flushStartupHotkeyConflicts(): void {
@@ -909,7 +922,7 @@ export class IpcRouter {
     const files = this.#files
     const folderSync = this.#folderSync = constructionScope.own(new FolderSyncService(files, () => {
       const broker = resolvePathAccessBroker({ platform: process.platform, isPackaged: mainApp.isPackaged, appPath: mainApp.getAppPath(), resourcesPath: process.resourcesPath })
-      if (!broker.available) throw new Error('安全文件组件不可用，请重新构建或更新客户端')
+      if (!broker.available) throw new Error(t('ipc.error.secureFileBrokerUnavailable'))
       return new NativePathAccessAdapter(broker.executable, 30000)
     }, [services.runtimePaths.businessDataRoot, services.runtimePaths.browserProfileRoot, services.runtimePaths.installRoot]), service => service.stop())
     this.#removeFolderSyncListener = registry.onRemoved(id => { void folderSync.closeOwner(id).catch(error => console.error('目录同步关闭失败', error)) })
@@ -929,7 +942,7 @@ export class IpcRouter {
     constructionScope.ownCleanup(this.#removeDockerWindowListener)
     const environmentManager = this.#environmentManager = constructionScope.own(new EnvironmentManagerService(new SystemEnvironmentProvider(() => {
       const broker = resolvePathAccessBroker({ platform: process.platform, isPackaged: mainApp.isPackaged, appPath: mainApp.getAppPath(), resourcesPath: process.resourcesPath })
-      if (!broker.available) throw new Error('安全文件组件不可用，请重新构建或更新客户端')
+      if (!broker.available) throw new Error(t('ipc.error.secureFileBrokerUnavailable'))
       return new NativePathAccessAdapter(broker.executable, 30000)
     }), new EnvironmentBackupStore(path.join(services.dataRoot, 'environment-backups'))), service => service.stop())
     this.#removeEnvironmentWindowListener = registry.onRemoved(id => environmentManager.closeOwner(id))
@@ -950,7 +963,7 @@ export class IpcRouter {
     const monitorControl = this.#monitorControl = constructionScope.own(new MonitorControlService(monitorHelperPath(mainApp.isPackaged, process.resourcesPath)), service => service.stop())
     const sshProxy = this.#sshProxy = constructionScope.own(new SshProxyService(new ProxyConfigurationProvider(() => {
       const broker = resolvePathAccessBroker({ platform: process.platform, isPackaged: mainApp.isPackaged, appPath: mainApp.getAppPath(), resourcesPath: process.resourcesPath })
-      if (!broker.available) throw new Error('安全文件组件不可用，请重新构建或更新客户端')
+      if (!broker.available) throw new Error(t('ipc.error.secureFileBrokerUnavailable'))
       return new NativePathAccessAdapter(broker.executable, 30000)
     }), new EnvironmentBackupStore(path.join(services.dataRoot, 'proxy-backups'))), service => service.stop())
     this.#removeSshProxyListener = registry.onRemoved(id => sshProxy.closeOwner(id))
@@ -1000,7 +1013,7 @@ export class IpcRouter {
       return files.resolveAuthorizedPath(file, caller, access, false)
     }, () => {
       const broker = resolvePathAccessBroker({ platform: process.platform, isPackaged: mainApp.isPackaged, appPath: mainApp.getAppPath(), resourcesPath: process.resourcesPath })
-      if (!broker.available) throw new Error('安全文件组件不可用，请重新构建或更新客户端')
+      if (!broker.available) throw new Error(t('ipc.error.secureFileBrokerUnavailable'))
       return new NativePathAccessAdapter(broker.executable, 30000)
     }, processes, new MacFileLocks(undefined, protectedProcessPids), [options.systemPlatformAdapter.userDataPath,
       services.runtimePaths.businessDataRoot, services.runtimePaths.browserProfileRoot, services.runtimePaths.installRoot]), service => service.stop())
@@ -1090,15 +1103,15 @@ export class IpcRouter {
                   this.#builtinPluginHost?.supportsPlugin(caller.pluginId ?? '')))
             ) {
               if (rawPath.includes('\0')) {
-                throw new ZToolsError(errorCodes.invalidRequest, '路径包含非法空字节')
+                throw new ZToolsError(errorCodes.invalidRequest, 'Path contains an illegal null byte')
               }
               // 相对路径会按主进程工作目录解析，写入位置不可预期，直接拒绝
               if (!isFullyQualifiedPath(rawPath, process.platform)) {
-                throw new ZToolsError(errorCodes.invalidRequest, '路径必须是绝对路径')
+                throw new ZToolsError(errorCodes.invalidRequest, 'Path must be absolute')
               }
               const resolved = path.resolve(rawPath)
               if (access === 'write' && isProtectedSystemPath(resolved)) {
-                throw new ZToolsError(errorCodes.permissionDenied, '系统受保护核心路径禁止写入或移除')
+                throw new ZToolsError(errorCodes.permissionDenied, 'Writing to or removing protected system core paths is forbidden')
               }
               return resolved
             }
@@ -1198,7 +1211,9 @@ export class IpcRouter {
         ...(keyboardPort ? { keyboard: keyboardPort } : {}),
         ...(mousePort ? { mouse: mousePort } : {}),
         ...(options.initialWakeHotkey !== undefined ? { initialWakeHotkey: options.initialWakeHotkey } : {}),
+        ...(options.initialLauncherHotkey !== undefined ? { initialLauncherHotkey: options.initialLauncherHotkey } : {}),
         toggleMainWindow: options.toggleMainWindow,
+        ...(options.toggleLauncher ? { toggleLauncher: options.toggleLauncher } : {}),
         ...(options.forwardHotkeyToRecorder ? { forwardHotkeyToRecorder: options.forwardHotkeyToRecorder } : {})
       }),
       (triggers) => triggers.stop()
@@ -1230,20 +1245,20 @@ export class IpcRouter {
               sdkContractVersion: SDK_HOST_MAXIMUM_CONTRACT_VERSION, macNativeCatalogLookup
             })
             if (selected.nativeComponents.length === 0) return () => undefined
-            if (!services.nativeHost) throw new ZToolsError(errorCodes.nativeHostUnavailable, '可信 Mac Native Host 未配置')
-            if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '插件更新已取消')
+            if (!services.nativeHost) throw new ZToolsError(errorCodes.nativeHostUnavailable, 'Trusted macOS Native Host is not configured')
+            if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Plugin update was cancelled')
             const release = await services.nativeHost.acquirePluginMaintenance(manifest.id)
-            if (signal.aborted) { release(); throw new ZToolsError(errorCodes.callerDestroyed, '插件更新已取消') }
+            if (signal.aborted) { release(); throw new ZToolsError(errorCodes.callerDestroyed, 'Plugin update was cancelled') }
             return release
           }
           if (!manifest.dllloader) return () => undefined
           if (manifest.requireAdmin) {
-            throw new ZToolsError(errorCodes.notSupported, '管理员 DLL 更新需要认证 Service 卸载能力')
+            throw new ZToolsError(errorCodes.notSupported, 'Administrator DLL updates require authenticated Service unload capability')
           }
-          if (!services.nativeHost) throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 未配置')
+          if (!services.nativeHost) throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 is not configured')
           const release = await services.nativeHost.acquirePluginMaintenance(manifest.id)
           try {
-            if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '插件更新已取消')
+            if (signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, 'Plugin update was cancelled')
             const fileName = path.basename(manifest.dllloader.replaceAll('\\', '/'))
             const dllId = fileName.slice(0, -4)
             await services.nativeHost.unloadDll(manifest.id, dllId)
@@ -1464,15 +1479,61 @@ export class IpcRouter {
     const capabilityAuthorization = this.#capabilityAuthorization
     const diagnosticFailures = this.#diagnosticFailures
     const syncWakeHotkeyIfTarget = async (triggerId: string): Promise<void> => {
-      if (triggerId !== 'global_wake_hotkey') return
-      const wakeState = triggers.getGlobalWakeHotkey()
-      const nextWakeKey = wakeState.enabled ? wakeState.key : ''
-      try {
-        await services.config.set?.('user_settings.json', 'hotkey.global', nextWakeKey, true)
-      } catch (error) {
-        console.warn('同步全局唤醒快捷键设置失败:', error)
+      if (triggerId === 'global_wake_hotkey') {
+        const wakeState = triggers.getGlobalWakeHotkey()
+        const nextWakeKey = wakeState.enabled ? wakeState.key : ''
+        try {
+          await services.config.set?.('user_settings.json', 'hotkey.global', nextWakeKey, true)
+        } catch (error) {
+          console.warn('同步全局唤醒快捷键设置失败:', error)
+        }
+        options.onTrayStatePossiblyChanged?.()
+        return
       }
-      options.onTrayStatePossiblyChanged?.()
+      if (triggerId === 'global_launcher_hotkey') {
+        const launcherState = triggers.getGlobalLauncherHotkey()
+        const nextLauncherKey = launcherState.enabled ? launcherState.key : ''
+        try {
+          await services.config.set?.('user_settings.json', 'hotkey.launcher', nextLauncherKey, true)
+        } catch (error) {
+          console.warn('同步悬浮条快捷键设置失败:', error)
+        }
+      }
+    }
+    const handleLocaleSettingChanged = (rawLocale: unknown): void => {
+      const previousLocale = getResolvedLocale()
+      const systemLocale = typeof mainApp.getLocale === 'function' ? mainApp.getLocale() : undefined
+      const resolved = setLocale(rawLocale, systemLocale)
+      const setting = getLocaleSetting()
+      this.#dllPlugins.syncLocale(resolved)
+      this.publishLocaleChange(setting, resolved, previousLocale)
+      options.onLocaleChanged?.(resolved)
+      this.#windows.refreshLocale(resolved)
+      this.#pluginWindows.refreshLocale(resolved)
+    }
+    const hasConfigLocaleHook = typeof services.config.onLocaleSettingChanged === 'function'
+    this.#stopLocaleSettingListener = hasConfigLocaleHook
+      ? services.config.onLocaleSettingChanged(handleLocaleSettingChanged)
+      : () => undefined
+    const extractFallbackLocaleUpdate = (pathValue: string, rawValue: unknown): { changed: true; value: unknown } | undefined => {
+      if (pathValue === 'ui.locale') return { changed: true, value: rawValue }
+      if (pathValue === 'ui') {
+        let parsed: unknown = rawValue
+        if (typeof rawValue === 'string') {
+          try {
+            parsed = JSON.parse(rawValue)
+          } catch {
+            // 非 JSON 字符串在 ConfigService 中会整体覆盖 ui 为 { value: rawValue }，不再包含 ui.locale
+            return { changed: true, value: 'system' }
+          }
+        }
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.prototype.hasOwnProperty.call(parsed, 'locale')) {
+          return { changed: true, value: (parsed as Record<string, unknown>).locale }
+        }
+        // 清空或整体覆盖 ui 对象且不再包含 ui.locale 时，复位为跟随系统语言
+        return { changed: true, value: 'system' }
+      }
+      return undefined
     }
     this.#handlers = {
       async app_ready(params) {
@@ -1524,22 +1585,9 @@ export class IpcRouter {
           options.onAccentChanged?.(input.value)
           this.publishAccentColorChange(input.value)
         }
-        if (input.file === 'user_settings.json' && input.path === 'ui.locale') {
-          const systemLocale = typeof mainApp.getLocale === 'function' ? mainApp.getLocale() : undefined
-          const resolved = setLocale(input.value, systemLocale)
-          const setting = getLocaleSetting()
-          this.publishLocaleChange(setting, resolved)
-          options.onLocaleChanged?.(resolved)
-          if (options.workerPool) {
-            void Promise.resolve(options.workerPool.broadcastLocale(resolved)).catch((error: unknown) => {
-              console.warn('广播语言变更到 WorkerPool 失败:', error)
-            })
-          }
-          if (options.extensionHost) {
-            void Promise.resolve(options.extensionHost.updateLocale(resolved)).catch((error: unknown) => {
-              console.warn('广播语言变更到 ExtensionHost 失败:', error)
-            })
-          }
+        if (!hasConfigLocaleHook && input.file === 'user_settings.json') {
+          const localeUpdate = extractFallbackLocaleUpdate(input.path, input.value)
+          if (localeUpdate) handleLocaleSettingChanged(localeUpdate.value)
         }
         options.onTrayStatePossiblyChanged?.()
         return { success: true }
@@ -1552,6 +1600,10 @@ export class IpcRouter {
       async settings_set(params) {
         const input = params as SettingsSetParams
         const value = await config.setSetting(input.key, input.value)
+        if (!hasConfigLocaleHook) {
+          const localeUpdate = extractFallbackLocaleUpdate(input.key, input.value)
+          if (localeUpdate) handleLocaleSettingChanged(localeUpdate.value)
+        }
         options.onTrayStatePossiblyChanged?.()
         return { success: true, key: input.key, value }
       },
@@ -1574,7 +1626,7 @@ export class IpcRouter {
           const updated = await services.config.setFeatures(input.features)
           return { success: true, features: updated }
         }
-        throw new ZToolsError(errorCodes.invalidRequest, '未提供有效的 feature 更新参数')
+        throw new ZToolsError(errorCodes.invalidRequest, 'No valid feature update parameters provided')
       },
       async user_get_info(_params, caller) {
         // 登录凭据只给宿主自身：插件窗口与主窗口里已归属到插件的调用都拿不到 token / refresh_token
@@ -1634,7 +1686,7 @@ export class IpcRouter {
           (caller.pluginId?.toLowerCase() !== input.pluginId.toLowerCase() ||
             (input.instanceId !== undefined && input.instanceId !== caller.pluginInstanceId))
         ) {
-          throw new ZToolsError(errorCodes.permissionDenied, '插件只能关闭自己的窗口')
+          throw new ZToolsError(errorCodes.permissionDenied, 'Plugins can only close their own windows')
         }
         if (isHostCaller(caller) && input.instanceId === undefined) windows.closePlugin(input.pluginId)
         return pluginWindows.close(input.pluginId, input.instanceId)
@@ -1642,14 +1694,14 @@ export class IpcRouter {
       async plugin_create_shortcut(params, caller) {
         const input = params as PluginKeyParams
         if (caller.type === 'plugin' && caller.pluginId?.toLowerCase() !== input.pluginId.toLowerCase()) {
-          throw new ZToolsError(errorCodes.permissionDenied, '插件只能为自己创建快捷方式')
+          throw new ZToolsError(errorCodes.permissionDenied, 'Plugins can only create shortcuts for themselves')
         }
         return pluginShortcuts.create(input.pluginId)
       },
       async plugin_refresh_icon(params, caller) {
         const input = params as PluginIconRefreshParams
         if (caller.type === 'plugin' && caller.pluginId?.toLowerCase() !== input.pluginId.toLowerCase()) {
-          throw new ZToolsError(errorCodes.permissionDenied, '插件只能刷新自己的图标')
+          throw new ZToolsError(errorCodes.permissionDenied, 'Plugins can only refresh their own icons')
         }
         return pluginIcons.refresh(input.pluginId, input.iconUrl)
       },
@@ -1729,7 +1781,7 @@ export class IpcRouter {
                     })
                   })
                   .catch(async (error: unknown) => {
-                    const message = error instanceof Error ? error.message : 'Web 主界面健康检查失败'
+                    const message = error instanceof Error ? error.message : 'Web main interface health check failed'
                     await services.webResources?.rollback(operationId).catch((rollbackError: unknown) => {
                       console.error('Web 更新失败后的回滚失败', rollbackError)
                     })
@@ -1754,7 +1806,7 @@ export class IpcRouter {
             publishUpdateComplete({
               type: 'web',
               success: false,
-              message: error instanceof Error ? error.message : 'Web 更新失败'
+              message: error instanceof Error ? error.message : 'Web update failed'
             })
           }
           throw error
@@ -1764,19 +1816,19 @@ export class IpcRouter {
         return services.update.cancel()
       },
       async privileged_execute() {
-        return deferredCapability('特权命令执行', 'M3')
+        return deferredCapability('Privileged command execution', 'M3')
       },
       async builtin_reg_write() {
-        return deferredCapability('特权注册表写入', 'M3')
+        return deferredCapability('Privileged registry write', 'M3')
       },
       async builtin_reg_delete() {
-        return deferredCapability('特权注册表删除', 'M3')
+        return deferredCapability('Privileged registry delete', 'M3')
       },
       async builtin_file_write() {
-        return deferredCapability('特权文件写入', 'M3')
+        return deferredCapability('Privileged file write', 'M3')
       },
       async builtin_restart_explorer() {
-        return deferredCapability('特权 Explorer 重启', 'M3')
+        return deferredCapability('Privileged Explorer restart', 'M3')
       },
       async trigger_register(params, caller) {
         const result = await triggers.register(params as TriggerRegisterParams, caller)
@@ -1945,34 +1997,34 @@ export class IpcRouter {
         return system.managePowerSession(params as SystemPowerSessionParams, caller)
       },
       async system_simulate_key_press(params, _caller, signal) {
-        if (!inputInjection) return deferredCapability('按键注入', 'M5')
+        if (!inputInjection) return deferredCapability('Key injection', 'M5')
         await inputInjection.injectKeyPress((params as SystemKeyParams).key, signal)
         return { success: true }
       },
       async system_simulate_key_combo(params, _caller, signal) {
-        if (!inputInjection) return deferredCapability('组合键注入', 'M5')
+        if (!inputInjection) return deferredCapability('Key combination injection', 'M5')
         await inputInjection.injectKeyCombo((params as SystemKeyComboParams).keys, signal)
         return { success: true }
       },
       async system_simulate_text(params, _caller, signal) {
-        if (!inputInjection) return deferredCapability('文本输入注入', 'M5')
+        if (!inputInjection) return deferredCapability('Text input injection', 'M5')
         await inputInjection.injectText((params as SystemTextParams).text, signal)
         return { success: true }
       },
       async system_simulate_mouse_move(params, _caller, signal) {
-        if (!inputInjection) return deferredCapability('鼠标移动注入', 'M5')
+        if (!inputInjection) return deferredCapability('Mouse move injection', 'M5')
         const input = params as SystemMouseMoveParams
         await inputInjection.injectMouseMove(input.x, input.y, signal)
         return { success: true }
       },
       async system_simulate_mouse_click(params, _caller, signal) {
-        if (!inputInjection) return deferredCapability('鼠标点击注入', 'M5')
+        if (!inputInjection) return deferredCapability('Mouse click injection', 'M5')
         const input = params as SystemMouseClickParams
         await inputInjection.injectMouseClick(input.button, input.x, input.y, signal)
         return { success: true }
       },
       async system_simulate_mouse_wheel(params, _caller, signal) {
-        if (!inputInjection) return deferredCapability('鼠标滚轮注入', 'M5')
+        if (!inputInjection) return deferredCapability('Mouse scroll injection', 'M5')
         await inputInjection.injectMouseWheel((params as SystemMouseWheelParams).delta, signal)
         return { success: true }
       },
@@ -2011,7 +2063,7 @@ export class IpcRouter {
         if (builtinPluginHost.normalizePluginName(input.plugin) === 'SqlitePlugin' &&
             (input.func === 'inspectWorkspace' || input.func === 'executeQuery')) {
           if (!isBuiltinPluginFallbackAllowed(caller, input.plugin, name => builtinPluginHost.normalizePluginName(name))) {
-            throw new ZToolsError(errorCodes.permissionDenied, '插件只能访问自身对应的 SQLite 查看能力')
+            throw new ZToolsError(errorCodes.permissionDenied, 'Plugins can only access their own SQLite viewer capability')
           }
           await requirePluginPermission(caller, 'sqlite', plugins)
           await requirePluginPermission(caller, 'fs', plugins)
@@ -2020,7 +2072,7 @@ export class IpcRouter {
           if (Object.keys(values).some(key => !allowed.includes(key)) ||
               typeof values.dbPath !== 'string' || !values.dbPath.trim() ||
               (input.func === 'executeQuery' && (typeof values.tableName !== 'string' || !values.tableName))) {
-            throw new ZToolsError(errorCodes.invalidRequest, 'SQLite 查看器只接受数据库路径和表名')
+            throw new ZToolsError(errorCodes.invalidRequest, 'SQLite viewer only accepts database path and table name')
           }
           const result = await builtinPluginHost.handlePluginCall('SqlitePlugin', input.func,
             { ...values, ...(input.func === 'executeQuery' ? { limit: 50 } : {}) }, signal, caller)
@@ -2608,7 +2660,7 @@ export class IpcRouter {
         if (nativePlatform === 'win32') {
           const contents = registry.getWebContents(caller.webContentsId)
           const window = contents ? BrowserWindow.fromWebContents(contents) : null
-          if (!window || window.isDestroyed()) throw new ZToolsError(errorCodes.callerDestroyed, '调用窗口已销毁')
+          if (!window || window.isDestroyed()) throw new ZToolsError(errorCodes.callerDestroyed, 'Caller window has been destroyed')
           return services.windowManagement.applyToExternalWindow(input?.action, window, signal)
         }
         return services.windowManagement.applyAction(input?.action)
@@ -2988,7 +3040,7 @@ export class IpcRouter {
       async screenshots_paste_latest(_params, caller, signal) {
         return services.screenshots.pasteLatestScreenshot(async (filePath) => {
           const image = nativeImage.createFromPath(filePath)
-          if (image.isEmpty()) throw new ZToolsError(errorCodes.fileError, '无法读取截图图片')
+          if (image.isEmpty()) throw new ZToolsError(errorCodes.fileError, 'Failed to read captured screenshot image')
           const imageParams = { image: image.toPNG().toString('base64') }
           // 先写剪贴板（失败则整体失败）；再尝试回到前台应用粘贴，粘贴不可用时保留剪贴板内容让用户手动粘贴
           clipboard.copyImage(imageParams)
@@ -3104,7 +3156,7 @@ export class IpcRouter {
       async formula_ocr(params, caller, signal) {
         const input = params as FormulaOcrRequest
         const formula = formulaOcr
-        if (!formula) return { ok: false, success: false, error: '当前系统暂不支持公式识别' }
+        if (!formula) return { ok: false, success: false, error: t('ipc.error.formulaOcrUnsupported') }
         if (input.action === 'modelStatus') return { ok: true, success: true, model: FORMULA_MODEL.label, ...await formula.modelStatus() }
         if (input.action === 'downloadModel') return { ok: true, success: true, model: FORMULA_MODEL.label, ...await formula.downloadModel() }
         if (input.action === 'cancelDownload') return { ok: true, success: true, model: FORMULA_MODEL.label, ...await formula.cancelDownload() }
@@ -3343,14 +3395,14 @@ export class IpcRouter {
       try {
         return await this.#handleFileDrop(event, value, fileDrop)
       } catch (error) {
-        return { success: false, error: toPublicError(error) }
+        return { success: false, error: toLocalizedPublicError(error) }
       }
     })
     ipcMain.handle(FILE_PASTE_CHANNEL, async (event, value: unknown) => {
       try {
         return await this.#handleFilePaste(event, value, fileDrop)
       } catch (error) {
-        return { success: false, error: toPublicError(error) }
+        return { success: false, error: toLocalizedPublicError(error) }
       }
     })
     ipcMain.handle(REFERENCE_CANCEL_CHANNEL, (event, value) => this.#handleReferenceCancel(event, value))
@@ -3373,7 +3425,7 @@ export class IpcRouter {
   readonly #handleLegacyFile = (event: IpcMainEvent, value: unknown): void => {
     const method = typeof value === 'object' && value !== null && 'method' in value ? value.method : undefined
     if (!['filesystem_get_file_size', 'filesystem_read_file', 'filesystem_read_file_chunk', 'filesystem_write_file'].includes(method as string)) {
-      event.returnValue = { success: false, error: { code: errorCodes.methodNotFound, message: '不支持的同步文件方法' } }
+      event.returnValue = { success: false, error: { code: errorCodes.methodNotFound, message: t('ipc.error.unsupportedLegacyFileMethod') } }
       return
     }
     // Only the caller renderer waits; authorization, validation, timeout and async file I/O
@@ -3434,6 +3486,7 @@ export class IpcRouter {
       }
 
       await settle([
+        () => this.#stopLocaleSettingListener(),
         () => this.#dllPlugins.stop(),
         () => this.#pluginWindows.stop(),
         () => this.#plugins.stop(),
@@ -3485,7 +3538,7 @@ export class IpcRouter {
 
   async #handle(event: IpcMainInvokeEvent | IpcMainEvent, value: unknown): Promise<ZToolsResponse> {
     if (this.#stopping) {
-      return failedResponse(value, errorCodes.appStopping, '应用正在退出')
+      return failedResponse(value, errorCodes.appStopping, 'Application is exiting')
     }
     const dispatch = selectTrustedSdkLaneDispatch(this.registry, event, value, SDK_HOST_MAXIMUM_CONTRACT_VERSION)
     return dispatchTrustedSdkLaneCall({
@@ -3509,11 +3562,11 @@ export class IpcRouter {
       request = parseRequest(value)
       failureStage = 'identity'
       caller = this.registry.get(event.sender.id)
-      if (!caller) throw new ZToolsError(errorCodes.permissionDenied, '调用者未注册')
+      if (!caller) throw new ZToolsError(errorCodes.permissionDenied, 'Caller is not registered')
       if (ownerContext && (!isCurrentTrustedSdkLaneContext(ownerContext) ||
           caller.type !== ownerContext.caller.type || caller.pluginId !== ownerContext.caller.pluginId ||
           caller.pluginInstanceId !== ownerContext.caller.pluginInstanceId)) {
-        throw new ZToolsError(errorCodes.permissionDenied, '调用者身份或页面已失效')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Caller identity or page is no longer valid')
       }
       // 主窗口声明式插件的会话归属：只附加 attributedPlugin，type / pluginId 不变；失效令牌按未归属处理
       caller = this.#attribution.attributeCaller(caller, request)
@@ -3522,7 +3575,7 @@ export class IpcRouter {
       if (!isPlatformSupportedMethod(request.method)) {
         throw new ZToolsError(
           errorCodes.platformNotSupported,
-          `当前操作系统 (${process.platform}) 不支持方法: ${request.method}`
+          `Current platform (${process.platform}) does not support method: ${request.method}`
         )
       }
       failureStage = 'validation'
@@ -3545,7 +3598,7 @@ export class IpcRouter {
       if (!capabilityBoundary && !missingDatabaseKey) {
         console.error('[IPC ROUTER ERROR DETAILS]', request?.method, error)
       }
-      const publicError = toPublicError(error)
+      const publicError = toLocalizedPublicError(error)
       caller ??= this.registry.get(event.sender.id)
       if (request && caller) {
         const executionStage = failureStage === 'execute'
@@ -3598,10 +3651,10 @@ export class IpcRouter {
   async #handleReferenceCancel(event: IpcMainInvokeEvent, value: unknown): Promise<ZToolsResponse> {
     let messageId = requestMessageId(value)
     try {
-      if (this.#stopping) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+      if (this.#stopping) throw new ZToolsError(errorCodes.appStopping, 'Application is exiting')
       const context = getTrustedSdkLaneContext(this.registry, event)
       if (!context || context.lane !== 2) {
-        throw new ZToolsError(errorCodes.permissionDenied, '调用者身份或页面无效')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Invalid caller identity or page')
       }
       const cancellation = parseReferenceCancellation(value)
       messageId = cancellation.messageId
@@ -3609,40 +3662,40 @@ export class IpcRouter {
         method: cancellation.method
       }, SDK_HOST_MAXIMUM_CONTRACT_VERSION)
       if (route.kind !== 'reference') {
-        throw new ZToolsError(errorCodes.notSupported, '此 SDK lane 未启用引用式取消')
+        throw new ZToolsError(errorCodes.notSupported, 'Reference cancellation is not enabled for this SDK lane')
       }
       if (!this.#referenceRuntime) {
-        throw new ZToolsError(errorCodes.notSupported, '文件引用运行时尚未接线')
+        throw new ZToolsError(errorCodes.notSupported, 'File reference runtime is not wired')
       }
       if (!isCurrentTrustedSdkLaneContext(context) || !isCurrentTrustedSdkLaneContext(route.context)) {
-        throw new ZToolsError(errorCodes.permissionDenied, '调用者身份或页面已失效')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Caller identity or page is no longer valid')
       }
       return await this.#referenceRuntime.endpoint.cancel(event, value)
     } catch (error) {
-      return { messageId, success: false, error: toPublicError(error) }
+      return { messageId, success: false, error: toLocalizedPublicError(error) }
     }
   }
 
   async #handleRuntimeCapabilityRequestCancel(event: IpcMainInvokeEvent, value: unknown): Promise<ZToolsResponse> {
     let messageId = requestMessageId(value)
     try {
-      if (this.#stopping) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+      if (this.#stopping) throw new ZToolsError(errorCodes.appStopping, 'Application is exiting')
       const context = getTrustedSdkLaneContext(this.registry, event)
       if (!context || context.caller.type !== 'plugin') {
-        throw new ZToolsError(errorCodes.permissionDenied, '屏幕权限申请取消调用者无效')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Invalid caller for screen capture permission cancellation')
       }
       const request = parseRuntimeCapabilityRequestCancellation(value)
       messageId = request.messageId
       if (!isCurrentTrustedSdkLaneContext(context)) {
-        throw new ZToolsError(errorCodes.permissionDenied, '屏幕权限申请取消调用者已失效')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Caller for screen capture permission cancellation is no longer valid')
       }
       const data = this.#capabilityRequestCancellations.cancel(context.caller, request.messageId, request.reason)
       if (!isCurrentTrustedSdkLaneContext(context)) {
-        throw new ZToolsError(errorCodes.permissionDenied, '屏幕权限申请取消调用者已失效')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Caller for screen capture permission cancellation is no longer valid')
       }
       return { messageId, success: true, data }
     } catch (error) {
-      return { messageId, success: false, error: toPublicError(error) }
+      return { messageId, success: false, error: toLocalizedPublicError(error) }
     }
   }
 
@@ -3655,30 +3708,30 @@ export class IpcRouter {
     value: unknown,
     legacyDrop: FileDropService
   ): Promise<unknown> {
-    if (this.#stopping) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#stopping) throw new ZToolsError(errorCodes.appStopping, 'Application is exiting')
     const caller = this.registry.get(event.sender.id)
     if (!caller) return legacyDrop.accept(event.sender.id, value)
     let lane: number | undefined
     try { lane = this.registry.getSdkApiLane(caller) }
-    catch { throw new ZToolsError(errorCodes.notSupported, 'SDK API lane 无效') }
+    catch { throw new ZToolsError(errorCodes.notSupported, 'Invalid SDK API lane') }
     if (lane === 1) return legacyDrop.accept(event.sender.id, value)
-    if (lane !== 2) throw new ZToolsError(errorCodes.notSupported, 'SDK API lane 无效')
+    if (lane !== 2) throw new ZToolsError(errorCodes.notSupported, 'Invalid SDK API lane')
 
     const context = getTrustedSdkLaneContext(this.registry, event)
     if (!context || context.lane !== 2) {
-      throw new ZToolsError(errorCodes.permissionDenied, '调用者身份或页面无效')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Invalid caller identity or page')
     }
     const route = selectTrustedSdkLaneDispatch(this.registry, event, {
       method: 'filesystem_read_file'
     }, SDK_HOST_MAXIMUM_CONTRACT_VERSION)
     if (route.kind !== 'reference') {
-      throw new ZToolsError(errorCodes.notSupported, '当前 host 尚未启用引用式文件拖放')
+      throw new ZToolsError(errorCodes.notSupported, 'Reference file drop is not enabled on this host')
     }
     if (!this.#referenceRuntime) {
-      throw new ZToolsError(errorCodes.notSupported, '文件引用运行时尚未接线')
+      throw new ZToolsError(errorCodes.notSupported, 'File reference runtime is not wired')
     }
     if (!isCurrentTrustedSdkLaneContext(context)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '调用者身份或页面已失效')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Caller identity or page is no longer valid')
     }
     const rawDropValue = typeof value === 'object' && value !== null && !Array.isArray(value) && 'paths' in value
       ? (value as { paths: unknown }).paths
@@ -3691,7 +3744,7 @@ export class IpcRouter {
     value: unknown,
     legacyDrop: FileDropService
   ): Promise<unknown> {
-    if (this.#stopping) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    if (this.#stopping) throw new ZToolsError(errorCodes.appStopping, 'Application is exiting')
     return legacyDrop.acceptPaste(event.sender.id, value)
   }
 
@@ -3703,11 +3756,11 @@ export class IpcRouter {
     ownerIsCurrent?: () => boolean
   ): Promise<unknown> {
     if (ownerIsCurrent && !ownerIsCurrent()) {
-      throw new ZToolsError(errorCodes.callerDestroyed, '调用页面已失效')
+      throw new ZToolsError(errorCodes.callerDestroyed, 'Caller page is no longer valid')
     }
     const senderCalls = this.#pending.get(event.sender.id) ?? new Map<string, PendingLegacyCall>()
     if (senderCalls.has(request.messageId)) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'messageId 正在使用')
+      throw new ZToolsError(errorCodes.invalidRequest, 'messageId is already in use')
     }
     this.#pending.set(event.sender.id, senderCalls)
     const controller = new AbortController()
@@ -3763,13 +3816,13 @@ export class IpcRouter {
       if (request.method === 'network_http_request') {
         if (controller.signal.aborted) {
           const code = controller.signal.reason
-          if (code === errorCodes.requestTimeout) throw new ZToolsError(errorCodes.requestTimeout, '调用超时')
-          if (code === errorCodes.appStopping) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
-          throw new ZToolsError(errorCodes.callerDestroyed, '调用者已销毁')
+          if (code === errorCodes.requestTimeout) throw new ZToolsError(errorCodes.requestTimeout, 'Request timed out')
+          if (code === errorCodes.appStopping) throw new ZToolsError(errorCodes.appStopping, 'Application is exiting')
+          throw new ZToolsError(errorCodes.callerDestroyed, 'Caller has been destroyed')
         }
         const result = await handler(request.params, caller, controller.signal)
         if (ownerIsCurrent && !ownerIsCurrent()) {
-          throw new ZToolsError(errorCodes.callerDestroyed, '调用页面已失效，结果未交付')
+          throw new ZToolsError(errorCodes.callerDestroyed, 'Caller page is no longer valid; result was not delivered')
         }
         return result
       }
@@ -3777,11 +3830,11 @@ export class IpcRouter {
         onAbort = () => {
             const code = controller.signal.reason
             if (code === errorCodes.requestTimeout) {
-              reject(new ZToolsError(errorCodes.requestTimeout, '调用超时'))
+              reject(new ZToolsError(errorCodes.requestTimeout, 'Request timed out'))
             } else if (code === errorCodes.appStopping) {
-              reject(new ZToolsError(errorCodes.appStopping, '应用正在退出'))
+              reject(new ZToolsError(errorCodes.appStopping, 'Application is exiting'))
             } else {
-              reject(new ZToolsError(errorCodes.callerDestroyed, '调用者已销毁'))
+              reject(new ZToolsError(errorCodes.callerDestroyed, 'Caller has been destroyed'))
             }
         }
         if (controller.signal.aborted) onAbort()
@@ -3790,7 +3843,7 @@ export class IpcRouter {
       if (controller.signal.aborted) await abortPromise
       const result = await Promise.race([handler(request.params, caller, controller.signal), abortPromise])
       if (ownerIsCurrent && !ownerIsCurrent()) {
-        throw new ZToolsError(errorCodes.callerDestroyed, '调用页面已失效，结果未交付')
+        throw new ZToolsError(errorCodes.callerDestroyed, 'Caller page is no longer valid; result was not delivered')
       }
       return result
     } finally {
@@ -3829,6 +3882,6 @@ function failedResponse(
   return {
     messageId: requestMessageId(value),
     success: false,
-    error: toPublicError(new ZToolsError(code, message))
+    error: toLocalizedPublicError(new ZToolsError(code, message))
   }
 }

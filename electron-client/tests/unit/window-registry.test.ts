@@ -59,7 +59,7 @@ test('the same WebContents cannot be registered with a second identity', () => {
   registry.registerMain(asWebContents(contents))
   assert.throws(
     () => registry.registerPlugin(asWebContents(contents), 'todo', 'todo-instance-2'),
-    /WebContents 已注册/u
+    /WebContents is already registered/u
   )
 })
 

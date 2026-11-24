@@ -1,22 +1,25 @@
 <script setup>
 import { SpinnerIcon } from '@/utils/appIcons'
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
 
 /**
  * 统一加载态：转圈 + 文案。block（默认）用于页面或区块居中占位；inline 用于行内（按钮旁、角落提示）。
  */
 defineProps({
-  text: { type: String, default: '加载中…' },
+  text: { type: String, default: '' },
   inline: { type: Boolean, default: false }
 })
 </script>
 
 <template>
   <span v-if="inline" class="rc-loading is-inline" role="status">
-    <SpinnerIcon aria-hidden="true" /><span>{{ text }}</span>
+    <SpinnerIcon aria-hidden="true" /><span>{{ text || t('common.loading') }}</span>
   </span>
   <div v-else class="rc-loading" role="status">
     <SpinnerIcon class="rc-loading-icon" aria-hidden="true" />
-    <span>{{ text }}</span>
+    <span>{{ text || t('common.loading') }}</span>
   </div>
 </template>
 

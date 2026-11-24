@@ -1,11 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 const id = 'a'.repeat(43), ref = { grantId: id, kind: 'file', operations: ['read'], displayName: 'ocr.png' }
 function fixture(version = 2) {
   const methods = { ocr_recognize_reference() {}, ocr_local_languages() {} }, calls: { method: string; params: unknown; options: unknown }[] = []
-  const source = ['fs-reference', 'ocr-reference', 'ocr'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join('\n')
+  const source = loadCefIpcSources(['api/fs-reference', 'api/ocr-reference', 'api/ocr'])
   const Constructor = vm.runInNewContext(source + '\nOCRAPI', { window: { __ztoolsElectron: { contractVersion: version, transport: { methods, cancellations: methods } } }, TextEncoder }) as new (transport: unknown) => { recognizeLocal(file: unknown, options?: unknown): Promise<any>; getLocalLanguages(options?: unknown): Promise<any> }
   let response: unknown = { success: true, provider: 'apple-vision-local', revision: 3, width: 1, height: 1, text: 'OCR', lines: [{ text: 'OCR', confidence: 0.9, box: [0, 0, 1, 1] }] }
   const api = new Constructor({ supportsAbortSignal: true, call: async (method: string, params: unknown, options: unknown) => { calls.push({ method, params, options }); return response } })

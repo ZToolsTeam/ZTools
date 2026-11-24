@@ -13,6 +13,7 @@ import SearchResultRow from '@/components/SearchResultRow.vue'
 import { currentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
 import { executeDeclarativeNoViewCommand } from '@/utils/declarativePluginLoader'
 import { useAppI18n } from '@/i18n'
+import { resolveErrorMessage, resolveResponseMessage } from '@/utils/errorMessage'
 
 
 const props = defineProps({
@@ -178,7 +179,7 @@ async function handleToggleCandidatePin(item) {
         : t('search.unpinSuccess', { name })
     )
   } else if (res?.error) {
-    toastError?.(res.error)
+    toastError?.(resolveErrorMessage(res, 'launcher.pinnedErrors.togglePinFailed'))
   }
 }
 
@@ -209,24 +210,24 @@ async function executeCandidate(item) {
       if (!target) throw new Error(t('launcher.appListUnavailable'))
       const res = await bridge.openPath(target.path)
       if (res !== true && res?.success !== true) {
-        throw new Error(res?.error?.message || res?.error || t('launcher.openFileFailed'))
+        throw new Error(resolveErrorMessage(res, 'launcher.openFileFailed'))
       }
     } else if (item.mode === 'no-view' && item.pluginId) {
       // 无界面命令直接执行并提示结果；打开页面视图只会得到一个空白的“未识别视图”页
       await pluginsStore.markRecent?.(item.pluginId)
       const res = await executeDeclarativeNoViewCommand(item.pluginId, { featureCode: item.featureCode || '', query: searchQuery.value })
-      toastSuccess?.(res?.message || t('launcher.commandExecuted', { name: item.name || item.title }))
+      toastSuccess?.(resolveResponseMessage(res, 'launcher.commandExecuted', { name: item.name || item.title }))
     } else if (item.pluginId) {
       const result = await pluginsStore.openPlugin(item.pluginId, { featureCode: item.featureCode })
       if (result?.cancelled) return
-      if (result?.success === false) throw new Error(result.error?.message || result.error || result.message || t('launcher.launchPluginFailed'))
+      if (result?.success === false) throw new Error(resolveErrorMessage(result, 'launcher.launchPluginFailed'))
       if (result?.isDeclarative) uiStore.focusDeclarative()
       else uiStore.focusGrid()
     } else if (typeof item.action === 'function') {
       await item.action()
     }
   } catch (error) {
-    toastError?.(error?.message || t('search.executeFailed'))
+    toastError?.(resolveErrorMessage(error, 'search.executeFailed'))
   }
 }
 
@@ -326,9 +327,6 @@ defineExpose({ focusInput })
     >
       <template #prefix>
         <SearchIcon class="w-4 h-4 mr-1 text-[var(--rc-text-muted)]" aria-hidden="true" />
-      </template>
-      <template #suffix>
-        <ShortcutKeys class="hidden sm:inline-flex" combo="Ctrl+F" />
       </template>
       <template #clearIcon><CircleXIcon class="input-clear-icon" aria-hidden="true" /></template>
     </a-input>

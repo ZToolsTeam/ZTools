@@ -31,13 +31,13 @@ async function inspectPath(root: string, segments: string[]): Promise<{ target: 
     if (segment) current = path.join(current, segment)
     const stat = await fs.lstat(current)
     if (!stat.isDirectory() || stat.isSymbolicLink() || !samePath(current, await fs.realpath(current))) {
-      invalid('Windows 原生文件目录必须是无链接普通目录')
+      invalid('Windows native file directory must be a regular directory without symlinks')
     }
   }
   const target = path.join(current, segments.at(-1)!)
   const stat = await fs.lstat(target)
   if (!stat.isFile() || stat.isSymbolicLink() || !samePath(target, await fs.realpath(target))) {
-    invalid('Windows 原生文件必须是无链接普通文件')
+    invalid('Windows native file must be a regular file without symlinks')
   }
   return { target, stat }
 }
@@ -47,7 +47,7 @@ async function readAt(handle: FileHandle, offset: number, length: number): Promi
   let total = 0
   while (total < length) {
     const { bytesRead } = await handle.read(buffer, total, length - total, offset + total)
-    if (bytesRead === 0) invalid('PE 文件头被截断')
+    if (bytesRead === 0) invalid('Truncated PE header')
     total += bytesRead
   }
   return buffer
@@ -57,33 +57,33 @@ async function verifyFormat(handle: FileHandle, file: PluginNativeIntegrityFile,
   if (!file.format) return
   const magic = await readAt(handle, 0, Math.min(size, 2))
   if (file.format === 'data') {
-    if (magic.toString('ascii') === 'MZ') invalid(`data 文件不能包含 PE magic：${file.entry}`)
+    if (magic.toString('ascii') === 'MZ') invalid(`Data file must not contain PE magic: ${file.entry}`)
     return
   }
-  if (size < 64 || magic.toString('ascii') !== 'MZ') invalid(`PE DOS 文件头无效：${file.entry}`)
+  if (size < 64 || magic.toString('ascii') !== 'MZ') invalid(`Invalid PE DOS header: ${file.entry}`)
   const dos = await readAt(handle, 0, 64)
   const peOffset = dos.readUInt32LE(0x3c)
-  if (peOffset < 64 || peOffset > 16 * 1024 * 1024 || peOffset > size - 24) invalid(`PE 文件头偏移越界：${file.entry}`)
+  if (peOffset < 64 || peOffset > 16 * 1024 * 1024 || peOffset > size - 24) invalid(`PE header offset out of bounds: ${file.entry}`)
   const coff = await readAt(handle, peOffset, 24)
   const machine = coff.readUInt16LE(4)
   const expectedMachine = file.arch === 'ia32' ? 0x14c : file.arch === 'x64' ? 0x8664 : undefined
   if (coff.readUInt32LE(0) !== 0x4550 || expectedMachine === undefined || machine !== expectedMachine) {
-    invalid(`PE machine 与声明架构不一致：${file.entry}`)
+    invalid(`PE machine does not match declared architecture: ${file.entry}`)
   }
   const flags = coff.readUInt16LE(22)
   const isDll = (flags & 0x2000) !== 0
-  if (!(flags & 2) || isDll !== file.entry.toLowerCase().endsWith('.dll')) invalid(`PE DLL/EXE 分类无效：${file.entry}`)
+  if (!(flags & 2) || isDll !== file.entry.toLowerCase().endsWith('.dll')) invalid(`Invalid PE DLL/EXE classification: ${file.entry}`)
   const sections = coff.readUInt16LE(6), optionalBytes = coff.readUInt16LE(20)
   const minimumOptionalBytes = machine === 0x14c ? 96 : 112
   if (sections < 1 || sections > 96 || optionalBytes < minimumOptionalBytes ||
-      peOffset + 24 + optionalBytes + sections * 40 > size) invalid(`PE 可选头或节表越界：${file.entry}`)
+      peOffset + 24 + optionalBytes + sections * 40 > size) invalid(`PE optional header or section table out of bounds: ${file.entry}`)
   const optional = await readAt(handle, peOffset + 24, 2)
-  if (optional.readUInt16LE(0) !== (machine === 0x14c ? 0x10b : 0x20b)) invalid(`PE 可选头架构无效：${file.entry}`)
+  if (optional.readUInt16LE(0) !== (machine === 0x14c ? 0x10b : 0x20b)) invalid(`Invalid PE optional header architecture: ${file.entry}`)
   const sectionTable = await readAt(handle, peOffset + 24 + optionalBytes, sections * 40)
   for (let index = 0; index < sections; index++) {
     const bytes = sectionTable.readUInt32LE(index * 40 + 16), offset = sectionTable.readUInt32LE(index * 40 + 20)
     if (bytes > 0 && (offset < peOffset + 24 + optionalBytes + sections * 40 || offset + bytes > size)) {
-      invalid(`PE 节数据越界：${file.entry}`)
+      invalid(`PE section data out of bounds: ${file.entry}`)
     }
   }
 }
@@ -95,29 +95,29 @@ async function verifyExactLibrary(root: string, files: readonly PluginNativeInte
   const visit = async (relative: string): Promise<void> => {
     checkActive()
     const directory = path.join(root, relative), stat = await fs.lstat(directory)
-    if (!stat.isDirectory() || stat.isSymbolicLink() || !samePath(directory, await fs.realpath(directory))) invalid('原生 lib 目录包含链接')
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !samePath(directory, await fs.realpath(directory))) invalid('Native lib directory contains a symbolic link')
     const children = await fs.opendir(directory)
     for await (const child of children) {
       checkActive()
-      if (++entries > 20_000) invalid('原生 lib 文件集合超过安装条目上限')
+      if (++entries > 20_000) invalid('Native lib file set exceeds installation entry limit')
       const childRelative = `${relative}/${child.name}`, target = path.join(root, childRelative)
       const childStat = await fs.lstat(target)
-      if (childStat.isSymbolicLink()) invalid('原生 lib 文件集合包含链接')
+      if (childStat.isSymbolicLink()) invalid('Native lib file set contains a symbolic link')
       if (childStat.isDirectory()) await visit(childRelative)
       else if (childStat.isFile()) {
         const key = childRelative.toLowerCase()
-        if (!expected.has(key) || found.has(key)) invalid(`原生 lib 文件未声明或大小写重复：${childRelative}`)
+        if (!expected.has(key) || found.has(key)) invalid(`Undeclared or case-duplicate native lib file: ${childRelative}`)
         found.add(key)
-      } else invalid('原生 lib 文件集合包含非普通文件')
+      } else invalid('Native lib file set contains a non-regular file')
     }
   }
   try {
     await visit('lib')
-    if (found.size !== expected.size) invalid('原生 lib 文件集合与所选 target 声明不一致')
+    if (found.size !== expected.size) invalid('Native lib file set does not match selected target declarations')
   } catch (error) {
     checkActive()
     if (error instanceof ZToolsError) throw error
-    invalid('原生 lib 文件集合无法安全读取')
+    invalid('Native lib file set could not be safely read')
   }
 }
 
@@ -133,13 +133,13 @@ export async function verifyWindowsPluginNativeFiles(
     const normalized = file.entry.replaceAll('\\', '/')
     const segments = normalized.split('/')
     if (path.isAbsolute(normalized) || segments.some(segment => !segment || segment === '.' || segment === '..' || /[:\u0000-\u001f\u007f]/.test(segment))) {
-      invalid('Windows 原生文件路径无效')
+      invalid('Invalid Windows native file path')
     }
     try {
       const before = await inspectPath(root, segments)
       if (options.verifyContents === false) {
         aggregateBytes += before.stat.size
-        if (before.stat.size < 1 || aggregateBytes > options.maxBytes) invalid('Windows 原生文件为空或超过安装上限')
+        if (before.stat.size < 1 || aggregateBytes > options.maxBytes) invalid('Windows native file is empty or exceeds installation size limit')
         continue
       }
       const handle = await fs.open(before.target, constants.O_RDONLY | constants.O_NOFOLLOW)
@@ -147,7 +147,7 @@ export async function verifyWindowsPluginNativeFiles(
         const opened = await handle.stat()
         aggregateBytes += opened.size
         if (!unchanged(before.stat, opened) || !Number.isSafeInteger(opened.size) || opened.size < 1 ||
-            aggregateBytes > options.maxBytes) invalid('Windows 原生文件对象变化、为空或超过安装上限')
+            aggregateBytes > options.maxBytes) invalid('Windows native file changed, is empty, or exceeds installation size limit')
         options.checkActive()
         await verifyFormat(handle, file, opened.size)
         const hash = createHash('sha256'), buffer = Buffer.alloc(64 * 1024)
@@ -157,20 +157,20 @@ export async function verifyWindowsPluginNativeFiles(
           const { bytesRead } = await handle.read(buffer, 0, buffer.length, total)
           if (bytesRead === 0) break
           total += bytesRead
-          if (total > opened.size) throw new ZToolsError(errorCodes.pluginIntegrity, '原生文件读取期间大小发生变化')
+          if (total > opened.size) throw new ZToolsError(errorCodes.pluginIntegrity, 'Native file size changed while reading')
           hash.update(buffer.subarray(0, bytesRead))
         }
         options.checkActive()
         const after = await handle.stat(), namedAfter = await inspectPath(root, segments)
         if (total !== opened.size || !unchanged(opened, after) || !unchanged(opened, namedAfter.stat) ||
             (file.sha256 !== undefined && hash.digest('hex') !== file.sha256)) {
-          throw new ZToolsError(errorCodes.pluginIntegrity, `原生文件对象或 SHA-256 与声明不一致：${file.entry}`)
+          throw new ZToolsError(errorCodes.pluginIntegrity, `Native file object or SHA-256 does not match declaration: ${file.entry}`)
         }
       } finally { await handle.close() }
     } catch (error) {
       options.checkActive()
       if (error instanceof ZToolsError) throw error
-      invalid(`native component 文件不存在或无法安全读取：${file.entry}`)
+      invalid(`Native component file does not exist or cannot be safely read: ${file.entry}`)
     }
   }
   if (options.verifyContents !== false && options.exactLibrary === true) await verifyExactLibrary(root, files, options.checkActive)

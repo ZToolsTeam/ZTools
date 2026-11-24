@@ -176,8 +176,8 @@ test('E2eeSyncEngine: core state machine (upsertRecord, deleteRecord, getRecord,
   assert.equal(engine.listRecords({ includeDeleted: true }).length, 2)
 
   // 非法空 ID 异常断言
-  assert.throws(() => engine.upsertRecord('', { a: 1 }), /同步记录 ID 必须为非空字符串/)
-  assert.throws(() => engine.deleteRecord(''), /同步记录 ID 必须为非空字符串/)
+  assert.throws(() => engine.upsertRecord('', { a: 1 }), /Sync record ID must be a non-empty string/)
+  assert.throws(() => engine.deleteRecord(''), /Sync record ID must be a non-empty string/)
 })
 
 test('E2eeSyncEngine: multi-device sync(), LWW timestamp tie-breaking, and Tombstone anti-resurrection', async () => {
@@ -244,7 +244,7 @@ test('E2eeSyncEngine: multi-device sync(), LWW timestamp tie-breaking, and Tombs
     },
     (err) => {
       assert.ok(err instanceof SyncConflictError)
-      assert.match(err.message, /pull\(\) 或 sync\(\)/)
+      assert.match(err.message, /pull\(\) or sync\(\)/)
       return true
     }
   )

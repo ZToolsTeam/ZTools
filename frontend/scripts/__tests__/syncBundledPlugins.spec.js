@@ -274,7 +274,7 @@ describe('sync-bundled-plugins.mjs', () => {
     write(ws.plugins, 'demo/screenshots/01.png', 'GIF89a')
     const bad = sync(ws.frontend)
     expect(bad.status).not.toBe(0)
-    expect(bad.stderr).toContain('不是有效的 PNG')
+    expect(bad.stderr).toMatch(/not a valid PNG|不是有效的 PNG/i)
   })
 
   it('不含 ../plugins 的开源客户端仓库：--check 只读校验本地副本，--ensure 从本地副本生成两个索引文件；缺失入口时报错', () => {

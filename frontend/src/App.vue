@@ -29,6 +29,7 @@ import {
   normalizeEventKeyCombo
 } from '@/utils/keymap'
 import { dispatchSyntheticRecorderHotkey } from '@/utils/hotkeyRecorder'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 import {
   windowModeState,
   WINDOW_MODES,
@@ -36,6 +37,7 @@ import {
   switchWindowMode
 } from '@/utils/windowMode'
 import { useAppI18n } from '@/i18n'
+import { getLocalizedPluginName } from '@/utils/pluginI18n'
 
 const { t } = useAppI18n()
 
@@ -78,15 +80,16 @@ const hotkeyConflictRef = ref(null)
 const transformConflicts = (rawConflicts) => {
   if (!Array.isArray(rawConflicts)) return []
   const result = []
-  // 构建 pluginId -> name 映射
+  // 构建 pluginId -> name 映射（按当前界面语言本地化显示）
   const nameMap = {}
   for (const p of pluginsStore.installedPlugins || []) {
-    nameMap[String(p.pluginId)] = p.name || p.pluginId
+    nameMap[String(p.pluginId)] = getLocalizedPluginName(p) || p.pluginId
   }
   const getTargetName = (id, triggerId = '') => {
     const tid = String(triggerId || '').trim()
     const pid = String(id || '').trim()
     if (tid === 'global_wake_hotkey') return t('modals.hotkeyConflict.globalWake')
+    if (tid === 'global_launcher_hotkey') return t('modals.hotkeyConflict.globalLauncher')
     if (tid === 'mouse_wake_hook') return t('modals.hotkeyConflict.mouseWake')
     if (pid.toLowerCase() === 'system') return t('modals.hotkeyConflict.systemHotkey')
     const featureItem = tid ? getPluginFeatureHotkeyItemByTriggerId(tid) : null
@@ -287,7 +290,7 @@ onMounted(async () => {
             // Web 更新静默执行，不弹通知
             silentWebUpdate(result.web).catch((error) => {
               console.error('启动时 Web 更新失败:', error)
-              window.__ztoolsToast?.('error', t('app.webUpdateFailedWithReason', { reason: error.message || t('common.unknownError') }))
+              window.__ztoolsToast?.('error', t('app.webUpdateFailedWithReason', { reason: resolveErrorMessage(error, 'common.unknownError') }))
             })
           }
         }

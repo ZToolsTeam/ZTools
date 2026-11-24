@@ -1,5 +1,5 @@
 <script setup>
-import { ArrowUpIcon, BanIcon, CirclePlayIcon, DownloadIcon, EllipsisIcon, ExternalLinkIcon, KeyboardIcon, MessageSquareIcon, RotateCcwIcon, RotateCwIcon, StarIcon, Trash2Icon } from '@lucide/vue'
+import { ArrowUpIcon, BanIcon, CirclePlayIcon, DownloadIcon, EllipsisIcon, ExternalLinkIcon, KeyboardIcon, MessageSquareIcon, RotateCcwIcon, RotateCwIcon, SettingsIcon, StarIcon, Trash2Icon } from '@lucide/vue'
 import { computed } from 'vue'
 import { SpinnerIcon, StarFilledIcon } from '@/utils/appIcons'
 import { RcButton, RcMenu } from '@/components/base'
@@ -78,7 +78,12 @@ const moreItems = computed(() => {
     })
   }
   if (props.canUninstall) {
-    items.push({ type: 'separator' }, { key: 'uninstall', label: t('common.uninstall'), icon: Trash2Icon, danger: true })
+    items.push({ type: 'separator' }, {
+      key: 'uninstall',
+      label: props.isBundled ? t('myPage.manageBundledTitle') : t('common.uninstall'),
+      icon: props.isBundled ? SettingsIcon : Trash2Icon,
+      danger: !props.isBundled
+    })
   }
   return items
 })

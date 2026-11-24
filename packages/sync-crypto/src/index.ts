@@ -1,3 +1,4 @@
+export * from './i18n.js'
 export * from './crypto/argon2id.js'
 export * from './crypto/aes-gcm.js'
 export * from './crypto/sync-payload.js'

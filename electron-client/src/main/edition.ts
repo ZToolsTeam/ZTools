@@ -48,7 +48,7 @@ export function loadMainEdition(io: EditionLoaderIo = defaultIo, entry = EDITION
     ? (loaded as { mainEdition?: unknown }).mainEdition
     : undefined
   if (!isMainEdition(edition)) {
-    throw new Error(`主进程版本入口 ${entry} 导出无效`)
+    throw new Error(`Invalid main process edition entry export: ${entry}`)
   }
   return edition
 }

@@ -2,9 +2,13 @@
 import { ChevronDownIcon, ChevronUpIcon } from '@lucide/vue'
 import { confirmDialog } from '@/utils/confirmDialog'
 import { RcAlert, RcButton, RcCard, RcSegmented, RcSelect } from '@/components/base'
-import { ref, onMounted, onBeforeUnmount, nextTick, reactive, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, onDeactivated, nextTick, reactive, computed } from 'vue'
 import { message as antMessage } from 'ant-design-vue'
 import { useDiagnosticsApi } from '@/composables/useDiagnosticsApi'
+import { useAppI18n, getCurrentLocale } from '@/i18n'
+import { resolveErrorMessage } from '@/utils/errorMessage'
+
+const { t } = useAppI18n()
 
 const {
   isNative,
@@ -22,15 +26,8 @@ const {
   storageGet,
   storageSet,
   storageDelete,
-  getLocalPlugins,
-  openPlugin,
   getDllPluginList,
   callDllPlugin,
-  installPluginNative,
-  uninstallPluginNative,
-  getMarketPlugins,
-  getPluginDetails,
-  getDownloadSign,
   readProtocolText
 } = useDiagnosticsApi()
 
@@ -45,7 +42,7 @@ const clearLog = () => {
 }
 
 const log = (msg, type = 'info', duration = null) => {
-  const time = new Date().toLocaleTimeString()
+  const time = new Date().toLocaleTimeString(getCurrentLocale())
   let content = ''
   if (typeof msg === 'string') {
     content = msg
@@ -78,7 +75,24 @@ const failCount = ref(0)
 const skipCount = ref(0)
 const totalCount = ref(0)
 const isTesting = ref(false)
-const batchPlatformStatus = ref('')
+let batchGeneration = 0
+// 记录批量体检最近一次识别出的平台状态，用于随语言热切换实时渲染
+const batchPlatformMeta = ref(null)
+const batchPlatformStatus = computed(() => {
+  const meta = batchPlatformMeta.value
+  if (!meta) return ''
+  if (meta.kind === 'known') {
+    const runtimeLabel = meta.runtime === 'electron' ? 'Electron' : t('diagnostics.batch.runtimeUnknown')
+    return t('diagnostics.batch.platformDetected', {
+      platform: meta.platform === 'windows' ? 'Windows' : 'macOS',
+      runtime: runtimeLabel
+    })
+  }
+  if (meta.kind === 'read-failed') {
+    return t('diagnostics.batch.platformReadFailed')
+  }
+  return t('diagnostics.batch.platformUnsupported', { platform: meta.platformLabel })
+})
 const diagnosticPlatform = ref('unknown')
 const diagnosticPlatformReadFailed = ref(false)
 const diagnosticRuntime = ref('unknown')
@@ -86,21 +100,21 @@ const isWindowsDiagnosticsAvailable = computed(() => diagnosticPlatform.value ==
 const isInputSimulationAvailable = computed(() => false)
 const windowsOnlyDiagnosticsMessage = computed(() => {
   if (diagnosticPlatformReadFailed.value) {
-    return '无法确认宿主平台；为避免误读或修改文件、系统注册表，Windows 专用手动诊断已关闭。'
+    return t('diagnostics.platformHints.windowsReadFailed')
   }
   if (diagnosticPlatform.value === 'macos') {
-    return '此组操作使用 Windows 路径、注册表或 ZToolsService；macOS 不适用。文件访问诊断需待授权文件契约完成后提供。'
+    return t('diagnostics.platformHints.windowsOnMacos')
   }
-  return '无法确认宿主平台；Windows 专用手动诊断已关闭。'
+  return t('diagnostics.platformHints.windowsUnknown')
 })
 const inputSimulationUnavailableMessage = computed(() => {
   if (diagnosticPlatform.value === 'macos') {
-    return 'macOS 输入注入尚未接入；按键模拟已关闭。'
+    return t('diagnostics.platformHints.inputMacos')
   }
   if (diagnosticPlatform.value === 'windows' && diagnosticRuntime.value === 'electron') {
-    return '当前 Electron 宿主尚未接入按键注入 provider；按键模拟已关闭。'
+    return t('diagnostics.platformHints.inputWindowsElectron')
   }
-  return '当前宿主未启用按键注入 provider；按键模拟已关闭。'
+  return t('diagnostics.platformHints.inputUnavailable')
 })
 
 const detectDiagnosticRuntime = () => {
@@ -118,7 +132,7 @@ const loadDiagnosticHost = async () => {
   diagnosticRuntime.value = detectDiagnosticRuntime()
   try {
     const getInfo = window.ztools?.sys?.getInfo
-    if (typeof getInfo !== 'function') throw new Error('系统信息接口不可用')
+    if (typeof getInfo !== 'function') throw new Error(t('diagnostics.platformHints.sysInfoUnavailable'))
     const info = await getInfo.call(window.ztools.sys)
     if (info?.platform === 'windows' || info?.platform === 'macos') {
       diagnosticPlatform.value = info.platform
@@ -135,403 +149,85 @@ const loadDiagnosticHost = async () => {
 
 const canRunWindowsOnlyDiagnostic = (name) => {
   if (isWindowsDiagnosticsAvailable.value) return true
-  log(`${name}未执行：${windowsOnlyDiagnosticsMessage.value}`, 'warn')
+  log(t('diagnostics.platformHints.windowsOnlyNotExecuted', { name, reason: windowsOnlyDiagnosticsMessage.value }), 'warn')
   return false
 }
 
-// 定义安全的批量测试项（覆盖所有主要API，排除敏感操作）
+// 一键体检只读取本机状态。写入性检查由使用临时数据目录的集成测试覆盖。
+const hasText = value => typeof value === 'string' && value.trim().length > 0
 const batchTestList = [
-  // ========== 系统基础 ==========
   {
-    id: 'sys.getInfo',
-    name: '系统信息 (sys.getInfo)',
-    run: async () => await window.ztools.sys.getInfo()
+    nameKey: 'diagnostics.batchTests.sysGetInfo',
+    read: () => window.ztools.sys.getInfo(),
+    valid: info => hasText(info?.platform)
   },
   {
-    id: 'sys.getNativeId',
-    name: 'Native ID (sys.getNativeId)',
-    run: async () => await window.ztools.sys.getNativeId()
+    nameKey: 'diagnostics.batchTests.sysResource',
+    read: () => Promise.all([window.ztools.sys.getCPUUsage(), window.ztools.sys.getMemoryUsage()]),
+    valid: ([cpu, memory]) => cpu?.success === true && memory?.success === true &&
+      Number.isFinite(cpu.data?.total) && Number.isFinite(memory.data?.total)
+  },
+  ...[
+    ['desktop', 'diagnostics.batchTests.sysPathDesktop'],
+    ['documents', 'diagnostics.batchTests.sysPathDocuments'],
+    ['temp', 'diagnostics.batchTests.sysPathTemp']
+  ].map(([pathName, nameKey]) => ({
+    nameKey,
+    read: () => window.ztools.sys.getPath(pathName),
+    valid: hasText
+  })),
+  {
+    nameKey: 'diagnostics.batchTests.fsCwd',
+    read: () => window.ztools.fs.getCurrentDirectory(),
+    valid: hasText
   },
   {
-    id: 'sys.resource',
-    name: '资源监控 (CPU/Mem)',
-    run: async () => ({
-      cpu: await window.ztools.sys.getCPUUsage(),
-      mem: await window.ztools.sys.getMemoryUsage()
-    })
+    nameKey: 'diagnostics.batchTests.winBounds',
+    read: () => window.ztools.win.getBounds(),
+    valid: bounds => Number.isFinite(bounds?.width) && bounds.width > 0 &&
+      Number.isFinite(bounds.height) && bounds.height > 0
   },
   {
-    id: 'sys.path.desktop',
-    name: '系统路径-桌面 (sys.getPath)',
-    run: async () => await window.ztools.sys.getPath('desktop')
+    nameKey: 'diagnostics.batchTests.screenDisplays',
+    read: () => window.ztools.screen.getAllDisplays(),
+    valid: Array.isArray
   },
   {
-    id: 'sys.path.documents',
-    name: '系统路径-文档 (sys.getPath)',
-    run: async () => await window.ztools.sys.getPath('documents')
+    nameKey: 'diagnostics.batchTests.screenCursor',
+    read: () => window.ztools.screen.getCursorScreenPoint(),
+    valid: point => Number.isFinite(point?.x) && Number.isFinite(point?.y)
   },
   {
-    id: 'sys.path.temp',
-    name: '系统路径-临时 (sys.getPath)',
-    run: async () => await window.ztools.sys.getPath('temp')
-  },
-
-  // ========== 文件系统 ==========
-  {
-    id: 'fs.cwd',
-    name: '当前目录 (fs.getCurrentDirectory)',
-    run: async () => await window.ztools.fs.getCurrentDirectory()
+    nameKey: 'diagnostics.batchTests.processList',
+    read: () => window.ztools.process.list(),
+    valid: Array.isArray
   },
   {
-    id: 'fs.fileExists',
-    name: '文件存在性 (fs.fileExists)',
+    nameKey: 'diagnostics.batchTests.pluginList',
+    read: () => window.ztools.plugin.getList(),
+    valid: response => response?.success === true && Array.isArray(response.data)
+  },
+  {
+    nameKey: 'diagnostics.batchTests.dllList',
     platforms: ['windows'],
-    run: async () =>
-      await window.ztools.fs.fileExists('C:\\Windows\\System32\\notepad.exe')
+    read: () => window.ztools.dllplugin.list(),
+    valid: Array.isArray
   },
   {
-    id: 'fs.readFile',
-    name: '读取文件 (fs.readFile)',
-    platforms: ['windows'],
-    run: async () => {
-      const content = await window.ztools.fs.readFile(
-        'C:\\Windows\\System32\\drivers\\etc\\hosts'
-      )
-      return content ? `读取成功 (${content.length} bytes)` : '文件为空'
-    }
-  },
-  {
-    id: 'fs.writeRead',
-    name: '写入并读取 (fs.writeFile + readFile)',
-    run: async () => {
-      const testPath = 'ztools_diag_test.txt'
-      const testContent = 'ZTools Diagnostics Test ' + Date.now()
-      await window.ztools.fs.writeFile(testPath, testContent)
-      const read = await window.ztools.fs.readFile(testPath)
-      await window.ztools.fs.deleteFile(testPath)
-      if (read !== testContent) throw new Error('内容不匹配')
-      return '写入读取验证成功'
-    }
-  },
-  {
-    id: 'fs.directory',
-    name: '目录操作 (fs.createDirectory)',
-    run: async () => {
-      const dir = 'ztools_diag_test_dir'
-      await window.ztools.fs.createDirectory(dir)
-      const list = await window.ztools.fs.getDirectoryContents(
-        await window.ztools.fs.getCurrentDirectory()
-      )
-      return `目录内容: ${list?.length || 0} 项`
-    }
-  },
-
-  // ========== 数据库 ==========
-  {
-    id: 'db.setGet',
-    name: '数据库读写 (db.set + get)',
-    run: async () => {
-      await window.ztools.db.setPluginId('diagnostics')
-      const key = 'diag_test_' + Date.now()
-      const val = { test: true, time: Date.now() }
-      await window.ztools.db.put({ _id: key, ...val })
-      const result = await window.ztools.db.get(key)
-      await window.ztools.db.remove(key)
-      return result ? '读写成功' : '读取为空'
-    }
-  },
-  {
-    id: 'db.allDocs',
-    name: '数据库列表 (db.allDocs)',
-    run: async () => {
-      await window.ztools.db.setPluginId('diagnostics')
-      const docs = await window.ztools.db.allDocs()
-      return `文档数: ${docs?.length || 0}`
-    }
-  },
-  {
-    id: 'db.secure',
-    name: '加密存储 (db.putSecure + getSecure)',
-    run: async () => {
-      await window.ztools.db.setPluginId('diagnostics')
-      const key = 'secure_test_' + Date.now()
-      const val = 'SecretValue_' + Date.now()
-      await window.ztools.db.putSecure(key, val)
-      const result = await window.ztools.db.getSecure(key)
-      return result === val ? '加密读写成功' : '数据不匹配'
-    }
-  },
-
-  // ========== 窗口控制 ==========
-  {
-    id: 'win.bounds',
-    name: '获取窗口边界 (win.getBounds)',
-    run: async () => await window.ztools.win.getBounds()
-  },
-  {
-    id: 'win.opacity',
-    name: '窗口透明度 (win.setOpacity)',
-    run: async () => {
-      await window.ztools.win.setOpacity(0.95)
-      await new Promise((r) => setTimeout(r, 200))
-      await window.ztools.win.setOpacity(1)
-      return '透明度测试完成'
-    }
-  },
-
-  // ========== 剪贴板 ==========
-  {
-    id: 'clipboard.text',
-    name: '剪贴板文本 (clipboard.writeText + readText)',
-    run: async () => {
-      const testText = 'ZTools Clipboard Test ' + Date.now()
-      await window.ztools.clipboard.writeText(testText)
-      const read = await window.ztools.clipboard.readText()
-      return read?.includes('ZTools') ? '剪贴板读写成功' : '读取结果: ' + read
-    }
-  },
-
-  // ========== Shell ==========
-  {
-    id: 'shell.beep',
-    name: '系统蜂鸣 (shell.beep)',
-    run: async () => {
-      await window.ztools.shell.beep()
-      return 'Beep 执行成功'
-    }
-  },
-  {
-    id: 'shell.exec',
-    name: 'Shell 执行 (shell.exec)',
-    run: async () => {
-      const result = await window.ztools.shell.exec('echo test')
-      return result ? 'Shell 执行成功' : 'Shell 执行无返回'
-    }
-  },
-
-  // ========== 屏幕 ==========
-  {
-    id: 'screen.displays',
-    name: '获取显示器 (screen.getAllDisplays)',
-    run: async () => {
-      const displays = await window.ztools.screen.getAllDisplays()
-      return `显示器数量: ${displays?.length || 0}`
-    }
-  },
-  {
-    id: 'screen.cursor',
-    name: '鼠标位置 (screen.getCursorScreenPoint)',
-    run: async () => {
-      const pos = await window.ztools.screen.getCursorScreenPoint()
-      return `位置: (${pos?.x || 0}, ${pos?.y || 0})`
-    }
-  },
-  {
-    id: 'screen.capture',
-    name: '屏幕截图 (screen.captureFullScreen)',
-    run: async () => {
-      const base64 = await window.ztools.screen.captureFullScreen()
-      return `截图成功 (${base64?.length || 0} bytes)`
-    }
-  },
-
-  // ========== 网络 ==========
-  {
-    id: 'network.get',
-    name: 'HTTP请求 (network.get)',
-    run: async () => {
-      const res = await window.ztools.network.get('https://www.baidu.com')
-      return `HTTP 请求成功 (statusCode: ${res?.statusCode || 'unknown'})`
-    }
-  },
-
-  // ========== 进程 ==========
-  {
-    id: 'process.list',
-    name: '进程列表 (process.list)',
-    run: async () => {
-      const list = await window.ztools.process.list()
-      return `进程数量: ${list?.length || 0}`
-    }
-  },
-  // ========== 插件 ==========
-  {
-    id: 'plugin.list',
-    name: '获取本地插件 (plugin.getList)',
-    run: async () => {
-      const result = await window.ztools.plugin.getList()
-      const list = result?.data || []
-      return `插件数量: ${list.length}`
-    }
-  },
-  {
-    id: 'dll.list',
-    name: '获取DLL插件 (dllplugin.list)',
-    run: async () => {
-      const list = await window.ztools.dllplugin.list()
-      return `DLL插件数量: ${list?.length || 0}`
-    }
-  },
-
-  // ========== 插件市场 ==========
-  {
-    id: 'plugin.market',
-    name: '市场插件列表 (getMarketPlugins)',
-    run: async () => {
-      const result = await getMarketPlugins({ per_page: 5 })
-      return `获取成功: ${result.list?.length || 0}个插件, 共${result.total}个`
-    }
-  },
-  {
-    id: 'plugin.details',
-    name: '插件详情 (getPluginDetails)',
-    run: async () => {
-      const market = await getMarketPlugins({ per_page: 1 })
-      if (!market.list?.length) return '市场无可用插件'
-      const pluginId = market.list[0].pluginId
-      const details = await getPluginDetails(pluginId)
-      return `获取成功: ${details.name} v${details.version}`
-    }
-  },
-  {
-    id: 'plugin.downloadSign',
-    name: '下载签名 (getDownloadSign)',
-    run: async () => {
-      const market = await getMarketPlugins({ per_page: 1 })
-      if (!market.list?.length) return '市场无可用插件'
-      const pluginId = market.list[0].pluginId
-      const sign = await getDownloadSign(pluginId)
-      return sign?.downloadUrl ? '签名获取成功' : '无下载地址'
-    }
-  },
-  {
-    id: 'plugin.install',
-    name: '插件安装 (installPluginNative)',
-    run: async () => {
-      const market = await getMarketPlugins({ per_page: 1 })
-      if (!market.list?.length) return '市场无可用插件'
-      const pluginId = market.list[0].pluginId
-      const sign = await getDownloadSign(pluginId)
-      if (!sign?.downloadUrl) return '无法获取下载地址'
-
-      const res = await installPluginNative(pluginId, sign)
-      return !!res?.success
-        ? '安装请求已发送'
-        : `安装失败: ${res?.error || '未知错误'}`
-    }
-  },
-  {
-    id: 'plugin.uninstall',
-    name: '插件卸载 (uninstallPluginNative)',
-    run: async () => {
-      const localPlugins = await window.ztools.plugin.getList()
-      const list = localPlugins?.data || []
-      if (!list.length) return '无已安装插件可卸载'
-
-      // 选择第一个非内置插件进行卸载测试
-      const testPlugin = list.find((p) => !p.builtin) || list[0]
-      const pluginId = testPlugin.pluginId
-
-      const res = await uninstallPluginNative(pluginId)
-      return !!res?.success
-        ? `已卸载: ${pluginId}`
-        : `卸载失败: ${res?.error || '未知错误'}`
-    }
-  },
-
-  // ========== 触发器/热键 ==========
-  {
-    id: 'hotkey.register',
-    name: '热键注册测试 (trigger.register)',
-    run: async () => {
-      // 注册一个测试热键然后立即注销
-      await window.ztools.trigger.register({
-        id: 'diag_test_hotkey',
-        pluginId: 'system',
-        type: 'hotkey',
-        enabled: true,
-        config: { key: 'Ctrl+Alt+F12' },
-        actionMode: 'builtin',
-        actionTarget: 'toggle_main_window',
-        actionParams: {}
-      })
-      await window.ztools.trigger.unregister('diag_test_hotkey')
-      return '热键注册/注销成功'
-    }
-  },
-  // ========== 协议 ==========
-  {
-    id: 'protocol.url',
-    name: '协议URL生成 (protocol.getUrl)',
-    platforms: ['windows'],
-    run: async () => {
-      const url = `ztools://file/C:/Windows/System32/drivers/etc/hosts`
-      return url?.startsWith('ztools://') ? 'URL生成成功' : 'URL格式错误'
-    }
-  },
-  {
-    id: 'protocol.read',
-    name: '协议读取 (protocol.readText)',
-    platforms: ['windows'],
-    run: async () => {
-      const url = `ztools://file/C:/Windows/System32/drivers/etc/hosts`
-      const text = await readProtocolText(url)
-      return text ? `协议读取成功 (${text.length} bytes)` : '读取为空'
-    }
-  },
-
-  // ========== 特权服务 ==========
-  {
-    id: 'privileged.exec',
-    name: '特权服务 (sys.privilegedExecute)',
-    platforms: ['windows'],
-    run: async () => {
-      // 通过 ZToolsService 执行提权命令
-      const res = await window.ztools.sys.privilegedExecute('system_action', {
-        action: 'ping'
-      })
-      return res ? '特权服务可用' : '特权服务响应空'
-    }
-  },
-  // ========== 事件系统 ==========
-  {
-    id: 'events.basic',
-    name: '事件系统 (events.emit + on)',
-    run: async () => {
-      let received = false
-      const handler = () => {
-        received = true
-      }
-      await window.ztools.events.on('diag_test_event', handler)
-      await window.ztools.events.emit('diag_test_event', { test: true })
-      await new Promise((r) => setTimeout(r, 100))
-      await window.ztools.events.off('diag_test_event', handler)
-
-      return received ? '事件系统正常' : '未收到事件'
-    }
-  },
-
-  // ========== 模拟输入 ==========
-  {
-    id: 'simulate.key',
-    name: '按键模拟 (simulate.keyPress)',
-    platforms: ['windows'],
-    runtimes: ['native-input'],
-    run: async () => {
-      // 模拟一个常见的按键（Esc）
-      await window.ztools.sys.simulateKeyPress('Esc')
-      return '按键模拟执行成功'
-    }
+    nameKey: 'diagnostics.batchTests.protocolRead',
+    read: () => readProtocolText('ztools://web/index.html'),
+    valid: hasText
   }
 ]
 
 const runBatchTest = async () => {
   if (isTesting.value) return
-  if (!isNative) return log('非原生环境，无法执行体检', 'error')
+  if (!isNative) return log(t('diagnostics.batch.nonNativeError'), 'error')
 
+  const generation = ++batchGeneration
   isTesting.value = true
   clearLog()
-  log('开始一键批量体检...', 'info')
+  log(t('diagnostics.batch.started'), 'info')
 
   passCount.value = 0
   failCount.value = 0
@@ -545,41 +241,36 @@ const runBatchTest = async () => {
     const sysApi = window.ztools?.sys
     const getInfo = sysApi?.getInfo
     if (typeof getInfo !== 'function') {
-      throw new Error('宿主平台信息接口不可用')
+      throw new Error(t('diagnostics.platformHints.hostPlatformApiUnavailable'))
     }
     const info = await getInfo.call(sysApi)
     platform = info?.platform || ''
   } catch {
     platformReadFailed = true
   }
+  if (generation !== batchGeneration) return
 
   const isKnownPlatform = platform === 'windows' || platform === 'macos'
   const platformLabel = platform || 'unknown'
   if (isKnownPlatform) {
-    const runtimeLabel = runtime === 'electron' ? 'Electron' : '宿主未知'
-    batchPlatformStatus.value = `检测平台：${platform === 'windows' ? 'Windows' : 'macOS'}（${runtimeLabel}）`
+    batchPlatformMeta.value = { kind: 'known', platform, runtime }
   } else if (platformReadFailed) {
-    batchPlatformStatus.value =
-      '无法读取宿主平台；Windows 专用测试已跳过，不计入成功或失败。'
+    batchPlatformMeta.value = { kind: 'read-failed' }
   } else {
-    batchPlatformStatus.value =
-      `宿主平台“${platformLabel}”没有对应的专用测试；Windows 专用测试已跳过，不计入成功或失败。`
+    batchPlatformMeta.value = { kind: 'unsupported', platformLabel }
   }
 
   if (!isKnownPlatform) {
     log(batchPlatformStatus.value, 'warn')
   } else if (platform === 'macos') {
-    log('Windows 专用测试在 macOS 上不适用，将跳过且不计入失败。', 'warn')
+    log(t('diagnostics.batch.macosSkipNotice'), 'warn')
   }
 
   const getSkipReason = (item) => {
     if (item.platforms && !item.platforms.includes(platform)) {
       return platformReadFailed
-        ? '无法确认宿主平台，已跳过'
-        : `当前平台为 ${platformLabel}，不适用`
-    }
-    if (item.runtimes && !item.runtimes.includes(runtime)) {
-      return `当前宿主环境为 ${runtime}，不支持此测试`
+        ? t('diagnostics.batch.skipReasonPlatformReadFailed')
+        : t('diagnostics.batch.skipReasonPlatformMismatch', { platform: platformLabel })
     }
     return ''
   }
@@ -588,29 +279,35 @@ const runBatchTest = async () => {
 
   for (let i = 0; i < batchTestList.length; i++) {
     const item = batchTestList[i]
+    const itemName = t(item.nameKey)
 
     const skipReason = getSkipReason(item)
     if (skipReason) {
       skipCount.value++
-      log(`[SKIP] ${item.name}: ${skipReason}`, 'warn')
+      log(`[SKIP] ${itemName}: ${skipReason}`, 'warn')
       testProgress.value = Math.round(((i + 1) / batchTestList.length) * 100)
       continue
     }
 
-    log(`正在测试: ${item.name}...`, 'info')
+    log(t('diagnostics.batch.testingItem', { name: itemName }), 'info')
     const start = Date.now()
     try {
-      const res = await item.run()
+      const result = await item.read()
+      if (generation !== batchGeneration) return
+      if (result?.success === false) {
+        throw new Error(resolveErrorMessage(result, 'diagnostics.batch.invalidResponse'))
+      }
+      if (!item.valid(result)) throw new Error(t('diagnostics.batch.invalidResponse'))
       const elapsed = Date.now() - start
-      log(`[PASS] ${item.name}`, 'success', elapsed)
+      log(`[PASS] ${itemName}`, 'success', elapsed)
       passCount.value++
     } catch (e) {
+      if (generation !== batchGeneration) return
       const elapsed = Date.now() - start
-      log(`[FAIL] ${item.name}: ${e.message || e}`, 'error', elapsed)
+      log(`[FAIL] ${itemName}: ${resolveErrorMessage(e, 'diagnostics.batch.invalidResponse')}`, 'error', elapsed)
       failCount.value++
     }
     testProgress.value = Math.round(((i + 1) / batchTestList.length) * 100)
-    await new Promise((r) => setTimeout(r, 50))
   }
 
   const score =
@@ -619,8 +316,13 @@ const runBatchTest = async () => {
       : null
   const summary =
     score === null
-      ? `体检完成：无适用项，已跳过 ${skipCount.value} 项。`
-      : `体检完成：适用项成功率 ${score}%，成功 ${passCount.value}，失败 ${failCount.value}，已跳过 ${skipCount.value}。`
+      ? t('diagnostics.batch.summaryNoApplicable', { skipped: skipCount.value })
+      : t('diagnostics.batch.summaryResult', {
+          score,
+          passed: passCount.value,
+          failed: failCount.value,
+          skipped: skipCount.value
+        })
   log(summary, failCount.value === 0 && skipCount.value === 0 ? 'success' : 'warn')
   isTesting.value = false
 }
@@ -633,7 +335,7 @@ const getSysInfo = async () => {
   try {
     const res = await sys.getInfo()
     sysInfoResult.value = JSON.stringify(res, null, 2)
-    log('获取系统信息成功', 'success')
+    log(t('diagnostics.system.getInfoSuccess'), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -645,7 +347,7 @@ const getSysPath = async () => {
   try {
     const res = await sys.getPath(sysPathType.value)
     sysPathResult.value = res
-    log(`获取路径 (${sysPathType.value}): ${res}`, 'success')
+    log(t('diagnostics.system.getPathSuccess', { type: sysPathType.value, path: res }), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -653,8 +355,8 @@ const getSysPath = async () => {
 
 const sendNotify = async () => {
   try {
-    await sys.notify('测试通知', '这是一条来自诊断中心的测试通知')
-    log('通知已发送', 'success')
+    await sys.notify(t('diagnostics.system.testNotifyTitle'), t('diagnostics.system.testNotifyBody'))
+    log(t('diagnostics.system.notifySent'), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -669,7 +371,7 @@ const getCpuMem = async () => {
     const memUsage =
       typeof memRes === 'object' ? (memRes.percent ?? '0') : memRes
 
-    log(`CPU: ${cpuUsage}%, 内存: ${memUsage}%`, 'success')
+    log(t('diagnostics.system.cpuMemLog', { cpu: cpuUsage, mem: memUsage }), 'success')
     log({ cpu: cpuRes, memory: memRes }, 'info') // 同时记录详细数据
   } catch (e) {
     log(e, 'error')
@@ -683,18 +385,18 @@ const powerAction = async (action) => {
   const dangerActions = ['hibernate', 'logout', 'restart', 'shutdown']
   if (dangerActions.includes(action)) {
     confirmDialog({
-      title: '危险操作确认',
-      content: `确定要执行 ${action} 吗？这可能导致数据丢失！`,
-      okText: '确定',
+      title: t('diagnostics.power.dangerConfirmTitle'),
+      content: t('diagnostics.power.dangerConfirmContent', { action }),
+      okText: t('common.ok'),
       okType: 'danger',
-      cancelText: '取消',
+      cancelText: t('common.cancel'),
       onOk: async () => {
         try {
           if (action === 'hibernate') await window.ztools?.sys?.hibernate?.()
           if (action === 'logout') await window.ztools?.sys?.logout?.()
           if (action === 'restart') await window.ztools?.sys?.restart?.()
           if (action === 'shutdown') await window.ztools?.sys?.shutdown?.()
-          log(`${action} 命令已发送`, 'success')
+          log(t('diagnostics.power.commandSent', { action }), 'success')
         } catch (e) {
           log(e, 'error')
         }
@@ -704,7 +406,7 @@ const powerAction = async (action) => {
     try {
       if (action === 'lock') await sys.lock()
       if (action === 'sleep') await sys.sleep()
-      log(`${action} 命令已发送`, 'success')
+      log(t('diagnostics.power.commandSent', { action }), 'success')
     } catch (e) {
       log(e, 'error')
     }
@@ -719,49 +421,51 @@ const fsContent = ref('')
 const fsWriteContent = ref('Hello ZTools!')
 
 const fsRead = async () => {
-  if (!canRunWindowsOnlyDiagnostic('文件读取')) return
+  if (!canRunWindowsOnlyDiagnostic(t('diagnostics.fs.opRead'))) return
   try {
     const txt = await fs.readFile(fsPath.value)
     fsContent.value = txt
       ? txt.length > 500
         ? txt.slice(0, 500) + '...'
         : txt
-      : '(空)'
-    log(`读取文件成功 (${txt?.length} bytes)`, 'success')
+      : t('diagnostics.fs.emptyContent')
+    log(t('diagnostics.fs.readSuccess', { bytes: txt?.length ?? 0 }, txt?.length ?? 0), 'success')
   } catch (e) {
     log(e, 'error')
   }
 }
 
 const fsWrite = async () => {
-  if (!canRunWindowsOnlyDiagnostic('文件写入')) return
+  if (!canRunWindowsOnlyDiagnostic(t('diagnostics.fs.opWrite'))) return
   try {
     await fs.writeFile(fsPath.value, fsWriteContent.value)
-    log(`写入文件成功: ${fsPath.value}`, 'success')
+    log(t('diagnostics.fs.writeSuccess', { path: fsPath.value }), 'success')
   } catch (e) {
     log(e, 'error')
   }
 }
 
 const fsCheckExists = async () => {
-  if (!canRunWindowsOnlyDiagnostic('文件存在性检查')) return
+  if (!canRunWindowsOnlyDiagnostic(t('diagnostics.fs.opCheckExists'))) return
   try {
     const exists = await fs.exists(fsPath.value)
-    log(`文件存在性: ${exists}`, 'success')
+    log(t('diagnostics.fs.existsResult', { exists }), 'success')
   } catch (e) {
     log(e, 'error')
   }
 }
 
 const fsDeleteFile = async () => {
-  if (!canRunWindowsOnlyDiagnostic('文件删除')) return
+  if (!canRunWindowsOnlyDiagnostic(t('diagnostics.fs.opDelete'))) return
   confirmDialog({
-    title: '确认删除',
-    content: `确定要删除文件 ${fsPath.value} 吗？`,
+    title: t('diagnostics.fs.deleteConfirmTitle'),
+    content: t('diagnostics.fs.deleteConfirmContent', { path: fsPath.value }),
+    okText: t('common.ok'),
+    cancelText: t('common.cancel'),
     onOk: async () => {
       try {
         await fs.deleteFile(fsPath.value)
-        log(`删除文件成功: ${fsPath.value}`, 'success')
+        log(t('diagnostics.fs.deleteSuccess', { path: fsPath.value }), 'success')
       } catch (e) {
         log(e, 'error')
       }
@@ -771,22 +475,22 @@ const fsDeleteFile = async () => {
 
 const fsDirList = ref([])
 const fsListDir = async () => {
-  if (!canRunWindowsOnlyDiagnostic('目录枚举')) return
+  if (!canRunWindowsOnlyDiagnostic(t('diagnostics.fs.opListDir'))) return
   try {
     const dir = await fs.getCurrentDirectory()
     const list = await fs.getDirectoryContents(dir)
     fsDirList.value = list || []
-    log(`列出目录: ${dir} (${list?.length || 0}项)`, 'success')
+    log(t('diagnostics.fs.listDirSuccess', { dir, count: list?.length || 0 }, list?.length || 0), 'success')
   } catch (e) {
     log(e, 'error')
   }
 }
 
 const fsMkDir = async () => {
-  if (!canRunWindowsOnlyDiagnostic('创建测试目录')) return
+  if (!canRunWindowsOnlyDiagnostic(t('diagnostics.fs.opMkDir'))) return
   try {
     await fs.createDirectory('test_diag_dir')
-    log('创建目录成功: test_diag_dir', 'success')
+    log(t('diagnostics.fs.mkDirSuccess', { dir: 'test_diag_dir' }), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -810,7 +514,7 @@ const dbOps = async (op) => {
       res = await db.putSecure('diag', dbKey.value, dbVal.value)
     if (op === 'secure_get') res = await db.getSecure('diag', dbKey.value)
     dbResult.value = JSON.stringify(res, null, 2)
-    log(`数据库操作 ${op} 成功`, 'success')
+    log(t('diagnostics.db.opSuccess', { op }), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -835,10 +539,10 @@ const winTest = async (action) => {
     if (action === 'setOpacity') await win.setOpacity(winOpacity.value)
     if (action === 'getBounds') {
       const bounds = await win.getBounds()
-      log(`窗口边界: ${JSON.stringify(bounds)}`, 'success')
+      log(t('diagnostics.win.boundsLog', { bounds: JSON.stringify(bounds) }), 'success')
       return
     }
-    log(`执行窗口操作: ${action}`, 'success')
+    log(t('diagnostics.win.actionLog', { action }), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -849,29 +553,29 @@ const winOpenDialog = async (type) => {
     let res
     if (type === 'open') {
       res = await win.showOpenDialog({
-        title: '选择文件',
-        filters: [{ name: '所有文件', extensions: ['*'] }]
+        title: t('diagnostics.win.dialogOpenTitle'),
+        filters: [{ name: t('diagnostics.win.dialogAllFiles'), extensions: ['*'] }]
       })
     }
     if (type === 'openMulti') {
       res = await win.showOpenDialog({
-        title: '选择多个文件',
+        title: t('diagnostics.win.dialogOpenMultiTitle'),
         multiSelections: true
       })
     }
     if (type === 'save') {
       res = await win.showSaveDialog({
-        title: '保存文件',
+        title: t('diagnostics.win.dialogSaveTitle'),
         defaultPath: 'test.txt'
       })
     }
     if (type === 'folder') {
       res = await win.showOpenDialog({
-        title: '选择文件夹',
+        title: t('diagnostics.win.dialogFolderTitle'),
         openDirectory: true
       })
     }
-    log(`对话框结果: ${JSON.stringify(res)}`, 'success')
+    log(t('diagnostics.win.dialogResultLog', { result: JSON.stringify(res) }), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -885,27 +589,32 @@ const clipboardText = ref('Hello ZTools Clipboard!')
 const clipboardOps = async (op) => {
   try {
     const clipboard = window.ztools?.clipboard
-    if (!clipboard) throw new Error('Clipboard API 不可用')
+    if (!clipboard) throw new Error(t('diagnostics.clipboard.apiUnavailable'))
 
     let res
     if (op === 'writeText') res = await clipboard.writeText(clipboardText.value)
     if (op === 'readText') {
       res = await clipboard.readText()
-      log(`剪贴板文本: ${res}`, 'success')
+      log(t('diagnostics.clipboard.textLog', { text: res }), 'success')
       return
     }
     if (op === 'readImage') {
       res = await clipboard.readImage()
-      log(`剪贴板图片: ${res ? '有图片数据' : '无图片'}`, 'success')
+      log(
+        t('diagnostics.clipboard.imageLog', {
+          status: res ? t('diagnostics.clipboard.hasImage') : t('diagnostics.clipboard.noImage')
+        }),
+        'success'
+      )
       return
     }
     if (op === 'readFiles') {
       res = await clipboard.readFiles()
-      log(`剪贴板文件: ${JSON.stringify(res)}`, 'success')
+      log(t('diagnostics.clipboard.filesLog', { files: JSON.stringify(res) }), 'success')
       return
     }
     if (op === 'clear') res = await clipboard.clear()
-    log(`剪贴板操作 ${op} 成功`, 'success')
+    log(t('diagnostics.clipboard.opSuccess', { op }), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -919,17 +628,17 @@ const shellOps = async (op) => {
     const shell = window.ztools?.shell
     if (op === 'openExternal') {
       await sys.openExternal(externalUrl.value)
-      log(`已打开外部链接: ${externalUrl.value}`, 'success')
+      log(t('diagnostics.shell.externalOpened', { url: externalUrl.value }), 'success')
       return
     }
-    if (!shell) throw new Error('Shell API 不可用')
+    if (!shell) throw new Error(t('diagnostics.shell.apiUnavailable'))
     if (op === 'beep') {
       await shell.beep()
       log('Beep!', 'success')
     }
     if (op === 'exec') {
       const res = await shell.exec(shellCmd.value)
-      log(`执行命令结果: ${JSON.stringify(res)}`, 'success')
+      log(t('diagnostics.shell.execResult', { result: JSON.stringify(res) }), 'success')
     }
   } catch (e) {
     log(e, 'error')
@@ -946,25 +655,25 @@ let eventListener = null
 const eventsOps = async (op) => {
   try {
     const events = window.ztools?.events
-    if (!events) throw new Error('Events API 不可用')
+    if (!events) throw new Error(t('diagnostics.events.apiUnavailable'))
 
     if (op === 'emit') {
       await events.emit(eventName.value, JSON.parse(eventData.value))
-      log(`事件已发送: ${eventName.value}`, 'success')
+      log(t('diagnostics.events.emitted', { name: eventName.value }), 'success')
     }
     if (op === 'on') {
       eventListener = (data) => {
-        log(`收到事件 ${eventName.value}: ${JSON.stringify(data)}`, 'info')
+        log(t('diagnostics.events.received', { name: eventName.value, data: JSON.stringify(data) }), 'info')
       }
       await events.on(eventName.value, eventListener)
-      log(`已开始监听事件: ${eventName.value}`, 'success')
+      log(t('diagnostics.events.listening', { name: eventName.value }), 'success')
     }
     if (op === 'off') {
       if (eventListener) {
         await events.off(eventName.value, eventListener)
         eventListener = null
       }
-      log(`已停止监听事件: ${eventName.value}`, 'success')
+      log(t('diagnostics.events.stopped', { name: eventName.value }), 'success')
     }
   } catch (e) {
     log(e, 'error')
@@ -976,19 +685,19 @@ let fileDropListener = null
 const startFileDrop = () => {
   try {
     const events = window.ztools?.events
-    if (!events) throw new Error('Events API 不可用')
+    if (!events) throw new Error(t('diagnostics.events.apiUnavailable'))
 
     fileDropListener = (files) => {
-      log(`文件拖放: ${JSON.stringify(files)}`, 'info')
+      log(t('diagnostics.events.fileDropped', { files: JSON.stringify(files) }), 'info')
     }
     events.on('plugin_files_dropped', fileDropListener)
-    log('已开启文件拖放监听 (10秒后自动关闭)', 'success')
+    log(t('diagnostics.events.fileDropStarted'), 'success')
 
     setTimeout(() => {
       if (fileDropListener) {
         events.off('plugin_files_dropped', fileDropListener)
         fileDropListener = null
-        log('文件拖放监听已关闭', 'info')
+        log(t('diagnostics.events.fileDropClosed'), 'info')
       }
     }, 10000)
   } catch (e) {
@@ -1005,13 +714,16 @@ const triggerOps = async (op) => {
       const existingList = await trigger.list()
       const listArray = Array.isArray(existingList) ? existingList : []
       const existingTestTrigger = listArray.find(
-        (t) =>
-          t.pluginId === 'diagnostics' && t.config?.key === hotkeyConfig.value
+        (item) =>
+          item.pluginId === 'diagnostics' && item.config?.key === hotkeyConfig.value
       )
 
       if (existingTestTrigger) {
         log(
-          `热键 ${hotkeyConfig.value} 已注册 (ID: ${existingTestTrigger.id})，无需重复注册`,
+          t('diagnostics.trigger.alreadyRegistered', {
+            hotkey: hotkeyConfig.value,
+            id: existingTestTrigger.id
+          }),
           'warn'
         )
         return
@@ -1034,20 +746,20 @@ const triggerOps = async (op) => {
         enabled: true
       }
       const res = await trigger.register(config)
-      log(`热键注册成功: ${JSON.stringify(res)}`, 'success')
+      log(t('diagnostics.trigger.registered', { result: JSON.stringify(res) }), 'success')
     }
     if (op === 'list') {
       const res = await trigger.list()
       const count = Array.isArray(res) ? res.length : 0
-      log(`触发器列表 (${count} 个): ${JSON.stringify(res)}`, 'success')
+      log(t('diagnostics.trigger.listLog', { count, list: JSON.stringify(res) }), 'success')
     }
     if (op === 'clear') {
       const list = await trigger.list()
       const listArray = Array.isArray(list) ? list : []
-      for (const t of listArray) {
-        await trigger.unregister(t.id)
+      for (const item of listArray) {
+        await trigger.unregister(item.id)
       }
-      log('已清空所有触发器', 'success')
+      log(t('diagnostics.trigger.cleared'), 'success')
     }
   } catch (e) {
     log(e, 'error')
@@ -1062,21 +774,21 @@ const protoPath = ref('C:\\Windows\\System32\\drivers\\etc\\hosts')
 const protoImgPath = ref('')
 
 const testProtocol = async (type) => {
-  if (!canRunWindowsOnlyDiagnostic('本地文件协议测试')) return
+  if (!canRunWindowsOnlyDiagnostic(t('diagnostics.protocol.opName'))) return
   try {
     if (type === 'url') {
       const url = await protocol.getUrl(protoPath.value)
-      log(`生成的协议 URL: ${url}`, 'success')
+      log(t('diagnostics.protocol.urlLog', { url }), 'success')
     }
     if (type === 'readText') {
       const url = await protocol.getUrl(protoPath.value)
       const text = await protocol.readText(url)
-      log(`协议读取文本成功: ${text.slice(0, 200)}...`, 'success')
+      log(t('diagnostics.protocol.readTextLog', { preview: text.slice(0, 200) }), 'success')
     }
     if (type === 'readBlob') {
       const url = await protocol.getUrl(protoPath.value)
       const blob = await protocol.readBlob(url)
-      log(`协议读取Blob成功: ${blob.size} bytes, type: ${blob.type}`, 'success')
+      log(t('diagnostics.protocol.readBlobLog', { size: blob.size, type: blob.type }, blob.size), 'success')
     }
   } catch (e) {
     log(e, 'error')
@@ -1090,7 +802,7 @@ const privRegVal = ref('123456')
 const privFileTarget = ref('C:\\ZTools_Privileged_Test.txt')
 
 const testPrivileged = async (action) => {
-  if (!canRunWindowsOnlyDiagnostic('特权服务测试')) return
+  if (!canRunWindowsOnlyDiagnostic(t('diagnostics.privileged.opName'))) return
   try {
     let res
     if (action === 'regWrite64')
@@ -1118,16 +830,18 @@ const testPrivileged = async (action) => {
       )
     if (action === 'restartExplorer') {
       confirmDialog({
-        title: '警告',
-        content: '确定要重启资源管理器吗？这会导致任务栏闪烁。',
+        title: t('diagnostics.privileged.restartConfirmTitle'),
+        content: t('diagnostics.privileged.restartConfirmContent'),
+        okText: t('common.ok'),
+        cancelText: t('common.cancel'),
         onOk: async () => {
           await privileged.restartExplorer()
-          log('已发送重启资源管理器指令', 'success')
+          log(t('diagnostics.privileged.restartSent'), 'success')
         }
       })
       return
     }
-    log(`特权操作 ${action} 结果: ${JSON.stringify(res)}`, 'success')
+    log(t('diagnostics.privileged.actionResult', { action, result: JSON.stringify(res) }), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -1138,15 +852,15 @@ const screenOps = async (op) => {
   try {
     if (op === 'capture') {
       const base64 = await screen.capture({})
-      log(`截图成功 (Base64 length: ${base64?.length || 0})`, 'success')
+      log(t('diagnostics.screen.captureLog', { length: base64?.length || 0 }), 'success')
     }
     if (op === 'displays') {
       const displays = await screen.getAllDisplays()
-      log(`显示器列表: ${JSON.stringify(displays)}`, 'success')
+      log(t('diagnostics.screen.displaysLog', { displays: JSON.stringify(displays) }), 'success')
     }
     if (op === 'cursor') {
       const pos = await screen.getCursorPos()
-      log(`鼠标位置: ${JSON.stringify(pos)}`, 'success')
+      log(t('diagnostics.screen.cursorLog', { pos: JSON.stringify(pos) }), 'success')
     }
   } catch (e) {
     log(e, 'error')
@@ -1162,7 +876,7 @@ const simulateKey = async () => {
   }
   try {
     await simulate.keyPress(simKey.value)
-    log(`模拟按键: ${simKey.value}`, 'success')
+    log(t('diagnostics.screen.simulateKeyLog', { key: simKey.value }), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -1175,7 +889,7 @@ const sendHttp = async () => {
   try {
     const res = await network.httpRequest({ method: 'GET', url: httpUrl.value })
     httpResult.value = `Status: ${res.status}\nBody: ${res.body?.slice(0, 100)}...`
-    log(`HTTP请求成功: ${res.status}`, 'success')
+    log(t('diagnostics.network.httpSuccess', { status: res.status }), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -1186,7 +900,7 @@ const getProcesses = async () => {
   try {
     const list = await process.getList()
     procList.value = list?.slice(0, 10) || []
-    log(`获取进程列表: ${list?.length || 0}个`, 'success')
+    log(t('diagnostics.network.processListLog', { count: list?.length || 0 }), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -1207,7 +921,7 @@ const testDllPlugin = async () => {
       params
     )
     dllResult.value = JSON.stringify(res, null, 2)
-    log('DLL插件调用成功', 'success')
+    log(t('diagnostics.dll.callSuccess'), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -1216,7 +930,7 @@ const testDllPlugin = async () => {
 const getDllList = async () => {
   try {
     const list = await getDllPluginList()
-    log(`DLL插件列表: ${JSON.stringify(list)}`, 'success')
+    log(t('diagnostics.dll.listLog', { list: JSON.stringify(list) }), 'success')
   } catch (e) {
     log(e, 'error')
   }
@@ -1225,16 +939,16 @@ const getDllList = async () => {
 // 初始化
 const activeTab = ref('1')
 // 左侧诊断分类（值沿用原标签页的 key，测试按 key 切换）
-const tabOptions = [
-  { label: '系统基础', value: '1' },
-  { label: '电源管理', value: '2' },
-  { label: '文件系统', value: '3' },
-  { label: '数据库', value: '4' },
-  { label: '窗口控制', value: '5' },
-  { label: '剪贴板 / Shell', value: '6' },
-  { label: '事件 / 触发器', value: '7' },
-  { label: '高级功能', value: '8' }
-]
+const tabOptions = computed(() => [
+  { label: t('diagnostics.tabs.system'), value: '1' },
+  { label: t('diagnostics.tabs.power'), value: '2' },
+  { label: t('diagnostics.tabs.filesystem'), value: '3' },
+  { label: t('diagnostics.tabs.database'), value: '4' },
+  { label: t('diagnostics.tabs.window'), value: '5' },
+  { label: t('diagnostics.tabs.clipboardShell'), value: '6' },
+  { label: t('diagnostics.tabs.eventsTrigger'), value: '7' },
+  { label: t('diagnostics.tabs.advanced'), value: '8' }
+])
 const sysPathOptions = ['desktop', 'documents', 'downloads', 'temp', 'appData'].map((value) => ({
   label: value,
   value
@@ -1244,15 +958,21 @@ let globalHotkeyListener = null
 
 onMounted(() => {
   void loadDiagnosticHost()
-  log('诊断中心已就绪。请选择左侧功能或运行一键体检。')
-  if (!isNative) log('警告：当前不在宿主环境中，API 均不可用', 'warn')
+  log(t('diagnostics.logs.ready'))
+  if (!isNative) log(t('diagnostics.logs.nonNativeWarn'), 'warn')
 
   // 监听全局热键触发事件
   const events = window.ztools?.events
   if (events) {
     globalHotkeyListener = (envelope) => {
       const payload = envelope.payload || envelope
-      log(`[Global] 热键触发: ${payload.id} (${payload.keys || ''})`, 'success')
+      log(
+        t('diagnostics.logs.globalHotkeyTriggered', {
+          id: payload.id,
+          keys: payload.keys || ''
+        }),
+        'success'
+      )
     }
     events.on('hotkey_triggered', globalHotkeyListener)
   }
@@ -1265,7 +985,14 @@ onMounted(() => {
   })
 })
 
+function cancelBatch() {
+  batchGeneration++
+  isTesting.value = false
+}
+
+onDeactivated(cancelBatch)
 onBeforeUnmount(() => {
+  cancelBatch()
   // 清理事件监听
   if (eventListener) {
     window.ztools?.events?.off(eventName.value, eventListener)
@@ -1284,12 +1011,12 @@ onBeforeUnmount(() => {
     <!-- 页面标题 -->
     <header class="page-header diag-header">
       <div>
-        <h1 class="page-title">API 诊断中心</h1>
-        <p class="page-subtitle">逐项调用宿主接口，或运行一键批量体检，结果写入右侧日志</p>
+        <h1 class="page-title">{{ t('diagnostics.title') }}</h1>
+        <p class="page-subtitle">{{ t('diagnostics.subtitle') }}</p>
       </div>
       <span class="diag-mode" :class="{ 'is-native': isNative }">
         <span class="diag-mode-dot" aria-hidden="true"></span>
-        {{ isNative ? '宿主环境' : '浏览器环境' }}
+        {{ isNative ? t('diagnostics.modeNative') : t('diagnostics.modeBrowser') }}
       </span>
     </header>
 
@@ -1300,30 +1027,30 @@ onBeforeUnmount(() => {
         <RcSegmented
           v-model="activeTab"
           :options="tabOptions"
-          aria-label="诊断分类"
+          :aria-label="t('diagnostics.tabs.ariaLabel')"
           class="diag-tabs"
         />
 
         <div class="diag-pane">
           <!-- 分类 1: 系统与基础 -->
           <div v-if="activeTab === '1'" class="diag-stack">
-            <RcCard title="系统信息 (sys)">
+            <RcCard :title="t('diagnostics.system.infoCardTitle')">
               <div class="diag-actions">
-                <RcButton variant="secondary" @click="getSysInfo">获取系统信息</RcButton>
-                <RcButton variant="secondary" @click="sendNotify">发送通知</RcButton>
-                <RcButton variant="secondary" @click="getCpuMem">CPU / 内存</RcButton>
+                <RcButton variant="secondary" @click="getSysInfo">{{ t('diagnostics.system.getInfoBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="sendNotify">{{ t('diagnostics.system.sendNotifyBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="getCpuMem">{{ t('diagnostics.system.cpuMemBtn') }}</RcButton>
               </div>
               <pre class="diag-output">{{ sysInfoResult }}</pre>
             </RcCard>
 
-            <RcCard title="系统路径 (sys.getPath)">
+            <RcCard :title="t('diagnostics.system.pathCardTitle')">
               <div class="diag-actions items-center">
                 <RcSelect
                   v-model:value="sysPathType"
                   :options="sysPathOptions"
                   class="w-36"
                 />
-                <RcButton variant="secondary" @click="getSysPath">获取路径</RcButton>
+                <RcButton variant="secondary" @click="getSysPath">{{ t('diagnostics.system.getPathBtn') }}</RcButton>
               </div>
               <div class="diag-output">{{ sysPathResult }}</div>
             </RcCard>
@@ -1332,24 +1059,24 @@ onBeforeUnmount(() => {
           <!-- 分类 2: 电源管理 -->
           <div v-else-if="activeTab === '2'" class="diag-stack">
             <RcAlert
-              message="部分操作会立即执行，请谨慎测试"
+              :message="t('diagnostics.power.warningAlert')"
               type="warning"
               show-icon
             />
 
-            <RcCard title="安全操作">
+            <RcCard :title="t('diagnostics.power.safeCardTitle')">
               <div class="diag-actions mb-0">
-                <RcButton variant="secondary" @click="powerAction('lock')">锁定屏幕</RcButton>
-                <RcButton variant="secondary" @click="powerAction('sleep')">系统睡眠</RcButton>
+                <RcButton variant="secondary" @click="powerAction('lock')">{{ t('diagnostics.power.lockBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="powerAction('sleep')">{{ t('diagnostics.power.sleepBtn') }}</RcButton>
               </div>
             </RcCard>
 
-            <RcCard title="危险操作（需确认）">
+            <RcCard :title="t('diagnostics.power.dangerCardTitle')">
               <div class="diag-actions mb-0">
-                <RcButton variant="danger" @click="powerAction('hibernate')">休眠</RcButton>
-                <RcButton variant="danger" @click="powerAction('logout')">注销</RcButton>
-                <RcButton variant="danger" @click="powerAction('restart')">重启</RcButton>
-                <RcButton variant="danger" @click="powerAction('shutdown')">关机</RcButton>
+                <RcButton variant="danger" @click="powerAction('hibernate')">{{ t('diagnostics.power.hibernateBtn') }}</RcButton>
+                <RcButton variant="danger" @click="powerAction('logout')">{{ t('diagnostics.power.logoutBtn') }}</RcButton>
+                <RcButton variant="danger" @click="powerAction('restart')">{{ t('diagnostics.power.restartBtn') }}</RcButton>
+                <RcButton variant="danger" @click="powerAction('shutdown')">{{ t('diagnostics.power.shutdownBtn') }}</RcButton>
               </div>
             </RcCard>
           </div>
@@ -1368,25 +1095,25 @@ onBeforeUnmount(() => {
               data-test="windows-filesystem-diagnostics"
               class="diag-stack"
             >
-              <RcCard title="文件操作 (fs)">
-                <a-input v-model:value="fsPath" addon-before="路径" class="mb-3" />
+              <RcCard :title="t('diagnostics.fs.cardTitle')">
+                <a-input v-model:value="fsPath" :addon-before="t('diagnostics.fs.pathAddon')" class="mb-3" />
                 <div class="diag-actions">
-                  <RcButton variant="secondary" @click="fsRead">读取</RcButton>
-                  <RcButton variant="secondary" @click="fsCheckExists">检查存在</RcButton>
-                  <RcButton variant="danger" @click="fsDeleteFile">删除</RcButton>
+                  <RcButton variant="secondary" @click="fsRead">{{ t('diagnostics.fs.readBtn') }}</RcButton>
+                  <RcButton variant="secondary" @click="fsCheckExists">{{ t('diagnostics.fs.checkExistsBtn') }}</RcButton>
+                  <RcButton variant="danger" @click="fsDeleteFile">{{ t('diagnostics.fs.deleteBtn') }}</RcButton>
                 </div>
                 <div class="diag-output">{{ fsContent }}</div>
               </RcCard>
 
-              <RcCard title="写入文件">
+              <RcCard :title="t('diagnostics.fs.writeCardTitle')">
                 <a-textarea v-model:value="fsWriteContent" :rows="2" class="mb-3" />
-                <RcButton variant="secondary" @click="fsWrite">写入到上方路径</RcButton>
+                <RcButton variant="secondary" @click="fsWrite">{{ t('diagnostics.fs.writeBtn') }}</RcButton>
               </RcCard>
 
-              <RcCard title="目录操作">
+              <RcCard :title="t('diagnostics.fs.dirCardTitle')">
                 <div class="diag-actions">
-                  <RcButton variant="secondary" @click="fsListDir">列出当前目录</RcButton>
-                  <RcButton variant="secondary" @click="fsMkDir">创建测试目录</RcButton>
+                  <RcButton variant="secondary" @click="fsListDir">{{ t('diagnostics.fs.listDirBtn') }}</RcButton>
+                  <RcButton variant="secondary" @click="fsMkDir">{{ t('diagnostics.fs.mkDirBtn') }}</RcButton>
                 </div>
                 <ul class="diag-list max-h-32">
                   <li v-for="(item, idx) in fsDirList" :key="idx">{{ item }}</li>
@@ -1397,18 +1124,18 @@ onBeforeUnmount(() => {
 
           <!-- 分类 4: 数据库 -->
           <div v-else-if="activeTab === '4'" class="diag-stack">
-            <RcCard title="存储测试 (db)">
+            <RcCard :title="t('diagnostics.db.cardTitle')">
               <div class="grid grid-cols-2 gap-2 mb-3">
-                <a-input v-model:value="dbKey" addon-before="键" />
-                <a-input v-model:value="dbVal" addon-before="值" />
+                <a-input v-model:value="dbKey" :addon-before="t('diagnostics.db.keyAddon')" />
+                <a-input v-model:value="dbVal" :addon-before="t('diagnostics.db.valueAddon')" />
               </div>
               <div class="diag-actions">
-                <RcButton variant="secondary" @click="dbOps('set')">写入</RcButton>
-                <RcButton variant="secondary" @click="dbOps('get')">读取</RcButton>
-                <RcButton variant="secondary" @click="dbOps('delete')">删除</RcButton>
-                <RcButton variant="secondary" @click="dbOps('all')">全部文档</RcButton>
-                <RcButton variant="secondary" @click="dbOps('secure_set')">加密写入</RcButton>
-                <RcButton variant="secondary" @click="dbOps('secure_get')">加密读取</RcButton>
+                <RcButton variant="secondary" @click="dbOps('set')">{{ t('diagnostics.db.setBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="dbOps('get')">{{ t('diagnostics.db.getBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="dbOps('delete')">{{ t('diagnostics.db.deleteBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="dbOps('all')">{{ t('diagnostics.db.allBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="dbOps('secure_set')">{{ t('diagnostics.db.secureSetBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="dbOps('secure_get')">{{ t('diagnostics.db.secureGetBtn') }}</RcButton>
               </div>
               <pre class="diag-output">{{ dbResult }}</pre>
             </RcCard>
@@ -1416,31 +1143,31 @@ onBeforeUnmount(() => {
 
           <!-- 分类 5: 窗口控制 -->
           <div v-else-if="activeTab === '5'" class="diag-stack">
-            <RcCard title="窗口操作 (win)">
+            <RcCard :title="t('diagnostics.win.cardTitle')">
               <div class="diag-actions mb-4">
-                <RcButton variant="secondary" @click="winTest('min')">最小化</RcButton>
-                <RcButton variant="secondary" @click="winTest('max')">最大化</RcButton>
-                <RcButton variant="secondary" @click="winTest('restore')">还原</RcButton>
-                <RcButton variant="secondary" @click="winTest('top')">置顶</RcButton>
-                <RcButton variant="secondary" @click="winTest('untop')">取消置顶</RcButton>
-                <RcButton variant="secondary" @click="winTest('devtools')">开发者工具</RcButton>
-                <RcButton variant="secondary" @click="winTest('getBounds')">获取边界</RcButton>
+                <RcButton variant="secondary" @click="winTest('min')">{{ t('diagnostics.win.minBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="winTest('max')">{{ t('diagnostics.win.maxBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="winTest('restore')">{{ t('diagnostics.win.restoreBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="winTest('top')">{{ t('diagnostics.win.topBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="winTest('untop')">{{ t('diagnostics.win.untopBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="winTest('devtools')">{{ t('diagnostics.win.devtoolsBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="winTest('getBounds')">{{ t('diagnostics.win.getBoundsBtn') }}</RcButton>
               </div>
 
               <div class="grid grid-cols-3 gap-2 mb-3 items-center">
-                <a-input-number v-model:value="winWidth" addon-before="宽" class="w-full">
+                <a-input-number v-model:value="winWidth" :addon-before="t('diagnostics.win.widthAddon')" class="w-full">
                   <template #upIcon><ChevronUpIcon aria-hidden="true" /></template>
                   <template #downIcon><ChevronDownIcon aria-hidden="true" /></template>
                 </a-input-number>
-                <a-input-number v-model:value="winHeight" addon-before="高" class="w-full">
+                <a-input-number v-model:value="winHeight" :addon-before="t('diagnostics.win.heightAddon')" class="w-full">
                   <template #upIcon><ChevronUpIcon aria-hidden="true" /></template>
                   <template #downIcon><ChevronDownIcon aria-hidden="true" /></template>
                 </a-input-number>
-                <RcButton variant="secondary" @click="winTest('setSize')">设置尺寸</RcButton>
+                <RcButton variant="secondary" @click="winTest('setSize')">{{ t('diagnostics.win.setSizeBtn') }}</RcButton>
               </div>
 
               <div class="flex gap-3 items-center">
-                <span class="diag-label">透明度</span>
+                <span class="diag-label">{{ t('diagnostics.win.opacityLabel') }}</span>
                 <a-slider
                   v-model:value="winOpacity"
                   :min="0"
@@ -1448,79 +1175,79 @@ onBeforeUnmount(() => {
                   :step="0.1"
                   class="flex-1"
                 />
-                <RcButton variant="secondary" size="xs" @click="winTest('setOpacity')">应用</RcButton>
+                <RcButton variant="secondary" size="xs" @click="winTest('setOpacity')">{{ t('diagnostics.win.applyBtn') }}</RcButton>
               </div>
             </RcCard>
 
-            <RcCard title="对话框 (dialog)">
+            <RcCard :title="t('diagnostics.win.dialogCardTitle')">
               <div class="diag-actions mb-0">
-                <RcButton variant="secondary" @click="winOpenDialog('open')">打开文件</RcButton>
-                <RcButton variant="secondary" @click="winOpenDialog('openMulti')">多选文件</RcButton>
-                <RcButton variant="secondary" @click="winOpenDialog('save')">保存文件</RcButton>
-                <RcButton variant="secondary" @click="winOpenDialog('folder')">选择文件夹</RcButton>
+                <RcButton variant="secondary" @click="winOpenDialog('open')">{{ t('diagnostics.win.openFileBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="winOpenDialog('openMulti')">{{ t('diagnostics.win.openMultiBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="winOpenDialog('save')">{{ t('diagnostics.win.saveFileBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="winOpenDialog('folder')">{{ t('diagnostics.win.selectFolderBtn') }}</RcButton>
               </div>
             </RcCard>
           </div>
 
           <!-- 分类 6: 剪贴板与 Shell -->
           <div v-else-if="activeTab === '6'" class="diag-stack">
-            <RcCard title="剪贴板 (clipboard)">
+            <RcCard :title="t('diagnostics.clipboard.cardTitle')">
               <a-textarea
                 v-model:value="clipboardText"
                 :rows="2"
                 class="mb-3"
-                placeholder="要写入剪贴板的文本"
+                :placeholder="t('diagnostics.clipboard.placeholder')"
               />
               <div class="diag-actions mb-0">
-                <RcButton variant="secondary" @click="clipboardOps('writeText')">写入文本</RcButton>
-                <RcButton variant="secondary" @click="clipboardOps('readText')">读取文本</RcButton>
-                <RcButton variant="secondary" @click="clipboardOps('readImage')">读取图片</RcButton>
-                <RcButton variant="secondary" @click="clipboardOps('readFiles')">读取文件</RcButton>
-                <RcButton variant="danger" @click="clipboardOps('clear')">清空</RcButton>
+                <RcButton variant="secondary" @click="clipboardOps('writeText')">{{ t('diagnostics.clipboard.writeTextBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="clipboardOps('readText')">{{ t('diagnostics.clipboard.readTextBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="clipboardOps('readImage')">{{ t('diagnostics.clipboard.readImageBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="clipboardOps('readFiles')">{{ t('diagnostics.clipboard.readFilesBtn') }}</RcButton>
+                <RcButton variant="danger" @click="clipboardOps('clear')">{{ t('diagnostics.clipboard.clearBtn') }}</RcButton>
               </div>
             </RcCard>
 
-            <RcCard title="Shell 操作 (shell)">
-              <a-input v-model:value="externalUrl" addon-before="URL" class="mb-2" />
-              <RcButton variant="secondary" class="mb-4" @click="shellOps('openExternal')">打开外部链接</RcButton>
+            <RcCard :title="t('diagnostics.shell.cardTitle')">
+              <a-input v-model:value="externalUrl" :addon-before="t('diagnostics.shell.urlAddon')" class="mb-2" />
+              <RcButton variant="secondary" class="mb-4" @click="shellOps('openExternal')">{{ t('diagnostics.shell.openExternalBtn') }}</RcButton>
 
-              <a-input v-model:value="shellCmd" addon-before="命令" class="mb-2" />
+              <a-input v-model:value="shellCmd" :addon-before="t('diagnostics.shell.cmdAddon')" class="mb-2" />
               <div class="diag-actions mb-0">
-                <RcButton variant="secondary" @click="shellOps('exec')">执行命令</RcButton>
-                <RcButton variant="secondary" @click="shellOps('beep')">提示音</RcButton>
+                <RcButton variant="secondary" @click="shellOps('exec')">{{ t('diagnostics.shell.execBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="shellOps('beep')">{{ t('diagnostics.shell.beepBtn') }}</RcButton>
               </div>
             </RcCard>
           </div>
 
           <!-- 分类 7: 事件与触发器 -->
           <div v-else-if="activeTab === '7'" class="diag-stack">
-            <RcCard title="事件系统 (events)">
-              <a-input v-model:value="eventName" addon-before="事件名" class="mb-2" />
+            <RcCard :title="t('diagnostics.events.cardTitle')">
+              <a-input v-model:value="eventName" :addon-before="t('diagnostics.events.nameAddon')" class="mb-2" />
               <a-textarea
                 v-model:value="eventData"
                 :rows="2"
                 class="mb-3"
-                placeholder="事件数据 (JSON)"
+                :placeholder="t('diagnostics.events.dataPlaceholder')"
               />
               <div class="diag-actions">
-                <RcButton variant="secondary" @click="eventsOps('emit')">发送事件</RcButton>
-                <RcButton variant="secondary" @click="eventsOps('on')">开始监听</RcButton>
-                <RcButton variant="secondary" @click="eventsOps('off')">停止监听</RcButton>
+                <RcButton variant="secondary" @click="eventsOps('emit')">{{ t('diagnostics.events.emitBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="eventsOps('on')">{{ t('diagnostics.events.onBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="eventsOps('off')">{{ t('diagnostics.events.offBtn') }}</RcButton>
               </div>
-              <RcButton variant="secondary" @click="startFileDrop">启动文件拖放监听（10 秒）</RcButton>
+              <RcButton variant="secondary" @click="startFileDrop">{{ t('diagnostics.events.fileDropBtn') }}</RcButton>
             </RcCard>
 
-            <RcCard title="触发器系统 (trigger)">
+            <RcCard :title="t('diagnostics.trigger.cardTitle')">
               <a-input
                 v-model:value="hotkeyConfig"
-                addon-before="热键"
+                :addon-before="t('diagnostics.trigger.hotkeyAddon')"
                 class="mb-3"
-                placeholder="例如: Ctrl+Alt+T"
+                :placeholder="t('diagnostics.trigger.hotkeyPlaceholder')"
               />
               <div class="diag-actions mb-0">
-                <RcButton variant="secondary" @click="triggerOps('register')">注册热键</RcButton>
-                <RcButton variant="secondary" @click="triggerOps('list')">列出触发器</RcButton>
-                <RcButton variant="danger" @click="triggerOps('clear')">清空所有</RcButton>
+                <RcButton variant="secondary" @click="triggerOps('register')">{{ t('diagnostics.trigger.registerBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="triggerOps('list')">{{ t('diagnostics.trigger.listBtn') }}</RcButton>
+                <RcButton variant="danger" @click="triggerOps('clear')">{{ t('diagnostics.trigger.clearBtn') }}</RcButton>
               </div>
             </RcCard>
           </div>
@@ -1539,52 +1266,52 @@ onBeforeUnmount(() => {
               data-test="windows-advanced-diagnostics"
               class="diag-stack"
             >
-              <RcCard title="协议读取 (ztools://)">
-                <a-input v-model:value="protoPath" addon-before="路径" class="mb-3" />
+              <RcCard :title="t('diagnostics.protocol.cardTitle')">
+                <a-input v-model:value="protoPath" :addon-before="t('diagnostics.protocol.pathAddon')" class="mb-3" />
                 <div class="diag-actions mb-0">
-                  <RcButton variant="secondary" @click="testProtocol('url')">生成 URL</RcButton>
-                  <RcButton variant="secondary" @click="testProtocol('readText')">读取文本</RcButton>
-                  <RcButton variant="secondary" @click="testProtocol('readBlob')">读取 Blob</RcButton>
+                  <RcButton variant="secondary" @click="testProtocol('url')">{{ t('diagnostics.protocol.urlBtn') }}</RcButton>
+                  <RcButton variant="secondary" @click="testProtocol('readText')">{{ t('diagnostics.protocol.readTextBtn') }}</RcButton>
+                  <RcButton variant="secondary" @click="testProtocol('readBlob')">{{ t('diagnostics.protocol.readBlobBtn') }}</RcButton>
                 </div>
               </RcCard>
 
-              <RcCard title="特权服务 (privileged)">
+              <RcCard :title="t('diagnostics.privileged.cardTitle')">
                 <RcAlert
-                  message="通过 ZToolsService（System 权限）执行"
+                  :message="t('diagnostics.privileged.systemAlert')"
                   type="info"
                   show-icon
                   class="mb-3"
                 />
                 <div class="space-y-2">
-                  <a-input v-model:value="privRegPath" addon-before="注册表路径" />
+                  <a-input v-model:value="privRegPath" :addon-before="t('diagnostics.privileged.regPathAddon')" />
                   <div class="grid grid-cols-2 gap-2">
-                    <a-input v-model:value="privRegName" addon-before="名称" />
-                    <a-input v-model:value="privRegVal" addon-before="值" />
+                    <a-input v-model:value="privRegName" :addon-before="t('diagnostics.privileged.regNameAddon')" />
+                    <a-input v-model:value="privRegVal" :addon-before="t('diagnostics.privileged.regValAddon')" />
                   </div>
                   <div class="diag-actions">
-                    <RcButton variant="secondary" @click="testPrivileged('regWrite64')">写入 64 位</RcButton>
-                    <RcButton variant="secondary" @click="testPrivileged('regWrite32')">写入 32 位</RcButton>
-                    <RcButton variant="secondary" @click="testPrivileged('regDelete64')">删除 64 位</RcButton>
-                    <RcButton variant="secondary" @click="testPrivileged('regDelete32')">删除 32 位</RcButton>
+                    <RcButton variant="secondary" @click="testPrivileged('regWrite64')">{{ t('diagnostics.privileged.regWrite64Btn') }}</RcButton>
+                    <RcButton variant="secondary" @click="testPrivileged('regWrite32')">{{ t('diagnostics.privileged.regWrite32Btn') }}</RcButton>
+                    <RcButton variant="secondary" @click="testPrivileged('regDelete64')">{{ t('diagnostics.privileged.regDelete64Btn') }}</RcButton>
+                    <RcButton variant="secondary" @click="testPrivileged('regDelete32')">{{ t('diagnostics.privileged.regDelete32Btn') }}</RcButton>
                   </div>
-                  <a-input v-model:value="privFileTarget" addon-before="文件" />
+                  <a-input v-model:value="privFileTarget" :addon-before="t('diagnostics.privileged.fileAddon')" />
                   <div class="diag-actions mb-0">
-                    <RcButton variant="secondary" @click="testPrivileged('fileWrite')">提权写入</RcButton>
-                    <RcButton variant="danger" @click="testPrivileged('restartExplorer')">重启 Explorer</RcButton>
+                    <RcButton variant="secondary" @click="testPrivileged('fileWrite')">{{ t('diagnostics.privileged.fileWriteBtn') }}</RcButton>
+                    <RcButton variant="danger" @click="testPrivileged('restartExplorer')">{{ t('diagnostics.privileged.restartExplorerBtn') }}</RcButton>
                   </div>
                 </div>
               </RcCard>
             </div>
 
-            <RcCard title="屏幕与模拟 (screen)">
+            <RcCard :title="t('diagnostics.screen.cardTitle')">
               <div class="diag-actions">
-                <RcButton variant="secondary" @click="screenOps('capture')">截图</RcButton>
-                <RcButton variant="secondary" @click="screenOps('displays')">显示器列表</RcButton>
-                <RcButton variant="secondary" @click="screenOps('cursor')">鼠标位置</RcButton>
+                <RcButton variant="secondary" @click="screenOps('capture')">{{ t('diagnostics.screen.captureBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="screenOps('displays')">{{ t('diagnostics.screen.displaysBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="screenOps('cursor')">{{ t('diagnostics.screen.cursorBtn') }}</RcButton>
               </div>
               <div v-if="isInputSimulationAvailable" class="flex gap-2 items-center">
-                <a-input v-model:value="simKey" class="w-20" placeholder="按键" />
-                <RcButton variant="secondary" @click="simulateKey">模拟按键</RcButton>
+                <a-input v-model:value="simKey" class="w-20" :placeholder="t('diagnostics.screen.keyPlaceholder')" />
+                <RcButton variant="secondary" @click="simulateKey">{{ t('diagnostics.screen.simulateKeyBtn') }}</RcButton>
               </div>
               <RcAlert
                 v-else
@@ -1595,31 +1322,31 @@ onBeforeUnmount(() => {
               />
             </RcCard>
 
-            <RcCard title="网络与进程 (network / process)">
-              <a-input v-model:value="httpUrl" addon-before="URL" class="mb-2" />
-              <RcButton variant="secondary" class="mb-2" @click="sendHttp">发送 HTTP 请求</RcButton>
+            <RcCard :title="t('diagnostics.network.cardTitle')">
+              <a-input v-model:value="httpUrl" :addon-before="t('diagnostics.network.urlAddon')" class="mb-2" />
+              <RcButton variant="secondary" class="mb-2" @click="sendHttp">{{ t('diagnostics.network.sendHttpBtn') }}</RcButton>
               <div class="diag-output mb-3">{{ httpResult }}</div>
 
-              <RcButton variant="secondary" @click="getProcesses">获取进程列表</RcButton>
+              <RcButton variant="secondary" @click="getProcesses">{{ t('diagnostics.network.getProcessesBtn') }}</RcButton>
               <ul class="diag-list max-h-24 mt-2">
                 <li v-for="(p, i) in procList" :key="i">{{ p.name || p }}</li>
               </ul>
             </RcCard>
 
-            <RcCard title="DLL 插件调用 (dllplugin)">
+            <RcCard :title="t('diagnostics.dll.cardTitle')">
               <div class="grid grid-cols-2 gap-2 mb-2">
-                <a-input v-model:value="dllPluginName" addon-before="插件名" />
-                <a-input v-model:value="dllFuncName" addon-before="函数名" />
+                <a-input v-model:value="dllPluginName" :addon-before="t('diagnostics.dll.pluginAddon')" />
+                <a-input v-model:value="dllFuncName" :addon-before="t('diagnostics.dll.funcAddon')" />
               </div>
               <a-textarea
                 v-model:value="dllParams"
                 :rows="2"
                 class="mb-3"
-                placeholder="参数 (JSON)"
+                :placeholder="t('diagnostics.dll.paramsPlaceholder')"
               />
               <div class="diag-actions">
-                <RcButton variant="secondary" @click="testDllPlugin">调用 DLL 函数</RcButton>
-                <RcButton variant="secondary" @click="getDllList">获取 DLL 列表</RcButton>
+                <RcButton variant="secondary" @click="testDllPlugin">{{ t('diagnostics.dll.callBtn') }}</RcButton>
+                <RcButton variant="secondary" @click="getDllList">{{ t('diagnostics.dll.listBtn') }}</RcButton>
               </div>
               <pre class="diag-output">{{ dllResult }}</pre>
             </RcCard>
@@ -1631,7 +1358,7 @@ onBeforeUnmount(() => {
       <aside class="diag-side">
         <!-- 一键体检面板 -->
         <div class="diag-batch">
-          <h2 class="diag-section-title">批量体检</h2>
+          <h2 class="diag-section-title">{{ t('diagnostics.batch.title') }}</h2>
           <RcButton
             variant="primary"
             size="md"
@@ -1639,7 +1366,7 @@ onBeforeUnmount(() => {
             :loading="isTesting"
             @click="runBatchTest"
           >
-            {{ isTesting ? '正在体检中...' : '开始一键批量体检' }}
+            {{ isTesting ? t('diagnostics.batch.running') : t('diagnostics.batch.start') }}
           </RcButton>
 
           <p
@@ -1652,7 +1379,7 @@ onBeforeUnmount(() => {
 
           <div class="diag-batch-stats">
             <div class="diag-stat-row">
-              <span>进度</span>
+              <span>{{ t('diagnostics.batch.progress') }}</span>
               <span class="tabular-nums">{{ Math.round((passCount / totalCount) * 100) || 0 }}%</span>
             </div>
             <div
@@ -1665,24 +1392,24 @@ onBeforeUnmount(() => {
               <div class="diag-progress-fill" :style="{ width: `${testProgress}%` }"></div>
             </div>
             <div class="diag-stat-row">
-              <span data-test="batch-pass-count" class="is-success">成功: {{ passCount }}</span>
-              <span data-test="batch-fail-count" class="is-error">失败: {{ failCount }}</span>
+              <span data-test="batch-pass-count" class="is-success">{{ t('diagnostics.batch.passCount', { count: passCount }) }}</span>
+              <span data-test="batch-fail-count" class="is-error">{{ t('diagnostics.batch.failCount', { count: failCount }) }}</span>
             </div>
             <div class="diag-stat-row">
-              <span>适用项: {{ totalCount }}</span>
-              <span data-test="batch-skip-count" class="is-warn">已跳过: {{ skipCount }}</span>
+              <span>{{ t('diagnostics.batch.applicableCount', { count: totalCount }) }}</span>
+              <span data-test="batch-skip-count" class="is-warn">{{ t('diagnostics.batch.skipCount', { count: skipCount }) }}</span>
             </div>
           </div>
         </div>
 
         <!-- 日志列表 -->
         <div class="diag-log-header">
-          <span class="diag-section-title">实时日志</span>
-          <RcButton variant="ghost" size="xs" @click="clearLog">清空</RcButton>
+          <span class="diag-section-title">{{ t('diagnostics.logs.title') }}</span>
+          <RcButton variant="ghost" size="xs" @click="clearLog">{{ t('diagnostics.logs.clear') }}</RcButton>
         </div>
 
         <div ref="logRef" class="diag-log">
-          <div v-if="logs.length === 0" class="diag-log-empty">暂无日志</div>
+          <div v-if="logs.length === 0" class="diag-log-empty">{{ t('diagnostics.logs.empty') }}</div>
           <div
             v-for="(l, i) in logs"
             :key="i"

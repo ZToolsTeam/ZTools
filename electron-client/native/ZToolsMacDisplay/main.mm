@@ -135,11 +135,11 @@ struct Ddc {
   }
 };
 struct Display {
-  CGDirectDisplayID id; NSString* uid; NSString* name; bool apple = false; std::unique_ptr<Ddc> ddc;
-  explicit Display(CGDirectDisplayID value): id(value), uid(identifier(value)), name([NSString stringWithFormat:@"显示器 %u", value]) {
+  CGDirectDisplayID id; NSString* uid; NSString* name; bool apple = false; bool fallbackName = true; std::unique_ptr<Ddc> ddc;
+  explicit Display(CGDirectDisplayID value): id(value), uid(identifier(value)), name([NSString stringWithFormat:@"Display %u", value]) {
     float level = 0; apple = api.getBrightness && api.setBrightness && api.getBrightness(id, &level) == 0 && std::isfinite(level) && level >= 0 && level <= 1;
     if (!apple) ddc = std::make_unique<Ddc>(id);
-    for (NSScreen* screen in NSScreen.screens) if ([screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue] == id && screen.localizedName.length > 0) name = screen.localizedName;
+    for (NSScreen* screen in NSScreen.screens) if ([screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue] == id && screen.localizedName.length > 0) { name = screen.localizedName; fallbackName = false; }
   }
   void connected() { require(CGDisplayIsOnline(id) && [identifier(id) isEqual:uid], "DISPLAY_DISCONNECTED"); }
   std::optional<display_ddc::Value> raw(uint8_t code) {
@@ -165,11 +165,21 @@ struct Display {
     const size_t width = CGDisplayModeGetPixelWidth(mode), height = CGDisplayModeGetPixelHeight(mode); CGDisplayModeRelease(mode);
     const bool mirror = CGDisplayIsInMirrorSet(id);
     NSMutableDictionary* result = [@{@"id":uid,@"name":name,@"isPrimary":@(id == CGMainDisplayID()),@"builtIn":@(CGDisplayIsBuiltin(id) != 0),@"width":@(width),@"height":@(height),@"protocol":apple?@"apple":(brightness || contrast)?@"ddcci":@"unsupported",@"canBrightness":@(brightness.has_value() && !mirror),@"canContrast":@(contrast.has_value() && !mirror)} mutableCopy];
+    if (fallbackName) result[@"fallbackDisplayIndex"] = @(id);
     if (brightness) result[@"brightness"] = @(apple ? read(0x10) : 100.0 * brightness->current / brightness->maximum);
     if (contrast) result[@"contrast"] = @(100.0 * contrast->current / contrast->maximum);
-    if (!brightness) result[@"reason"] = @"未能读取硬件亮度；设备、转接线或当前显示模式可能不支持控制";
-    if (mirror) result[@"reason"] = @"镜像模式下无法确认独立控制目标，请退出镜像后重新扫描";
-    if (ddc && ddc->ambiguous) result[@"reason"] = @"无法唯一确认显示器硬件控制通道，已停止调节";
+    if (!brightness) {
+      result[@"reasonCode"] = @"BRIGHTNESS_UNREADABLE";
+      result[@"reason"] = @"Unable to read hardware brightness; the display, adapter cable, or current display mode may not support control";
+    }
+    if (mirror) {
+      result[@"reasonCode"] = @"MIRROR_UNSUPPORTED";
+      result[@"reason"] = @"Cannot confirm an independent control target in mirror mode. Exit mirror mode and scan again";
+    }
+    if (ddc && ddc->ambiguous) {
+      result[@"reasonCode"] = @"CONTROL_CHANNEL_AMBIGUOUS";
+      result[@"reason"] = @"Unable to uniquely identify the display hardware control channel; adjustment stopped";
+    }
     return result;
   }
 };

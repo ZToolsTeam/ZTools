@@ -1,6 +1,7 @@
 /** 主题偏好（跟随系统/浅色/深色）与 6 款固定主题色分开保存，跟随系统时不固定深浅色。 */
 import { defineStore } from 'pinia'
 import { ACCENT_THEMES, DEFAULT_ACCENT, THEME_MODES, normalizeAccent } from '@/constants/themes'
+import { t } from '@/i18n'
 
 function systemPrefersDark() {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
@@ -109,14 +110,14 @@ export const useThemeStore = defineStore('theme', {
 
     /** @param {'system' | 'light' | 'dark'} mode */
     async setTheme(mode) {
-      if (!THEME_MODES.includes(mode)) throw new Error('不支持的主题模式')
+      if (!THEME_MODES.includes(mode)) throw new Error(t('themeStore.unsupportedMode'))
       const revision = ++this._revision
       if (window.ztools?.config?.set) {
         const saved = await window.ztools.config.set('ui.theme', mode, true, 'user_settings.json')
-        if (!saved) throw new Error('主题设置未保存')
+        if (!saved) throw new Error(t('themeStore.themeNotSaved'))
       } else if (mode !== 'system' && window.ztools?.sys?.setDarkMode) {
         const saved = await window.ztools.sys.setDarkMode(mode === 'dark')
-        if (!saved) throw new Error('主题设置未保存')
+        if (!saved) throw new Error(t('themeStore.themeNotSaved'))
       }
       if (revision !== this._revision) return
       this.mode = mode
@@ -142,11 +143,11 @@ export const useThemeStore = defineStore('theme', {
 
     /** @param {'ember' | 'glacier' | 'jade' | 'iris' | 'crimson' | 'mono'} accent */
     async setAccent(accent) {
-      if (!ACCENT_THEMES.includes(accent)) throw new Error('不支持的主题色')
+      if (!ACCENT_THEMES.includes(accent)) throw new Error(t('themeStore.unsupportedAccent'))
       const accentRevision = ++this._accentRevision
       if (window.ztools?.config?.set) {
         const saved = await window.ztools.config.set('ui.accent', accent, true, 'user_settings.json')
-        if (!saved) throw new Error('主题色设置未保存')
+        if (!saved) throw new Error(t('themeStore.accentNotSaved'))
       }
       if (accentRevision !== this._accentRevision) return
       try {

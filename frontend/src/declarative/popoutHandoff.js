@@ -11,6 +11,7 @@
  *   { "v": 1, "entries": { key: value }, "rejected": [key...], "oversized": boolean }
  */
 import { callHostMethod } from './hostMethods.js'
+import { t } from '@/i18n'
 
 export const POPOUT_STATE_MAX_BYTES = 256 * 1024
 export const POPOUT_STATE_MAX_DEPTH = 32
@@ -186,8 +187,8 @@ export function parsePopoutState(text) {
 
 /** 弹出前的提示文案（新窗口里展示；旧窗口马上会离开插件页） */
 export function describeHandoffLoss({ rejected = [], oversized = false } = {}) {
-  if (oversized) return '内容过大，独立窗口将重新开始'
-  if (rejected.length > 0) return '部分内容无法带到独立窗口'
+  if (oversized) return t('declarativePage.handoffOversized')
+  if (rejected.length > 0) return t('declarativePage.handoffPartialLoss')
   return ''
 }
 

@@ -17,14 +17,14 @@ const fail = (message: string): never => { throw new Error(message) }
 function xmlText(bytes: Buffer): string {
   const encoding = bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf-16le' : bytes[0] === 0xfe && bytes[1] === 0xff ? 'utf-16be' : 'utf-8'
   const text = new TextDecoder(encoding, { fatal: true }).decode(bytes)
-  if (/<!DOCTYPE|<!ENTITY/i.test(text)) fail('不支持含 DTD 或实体定义的文档')
+  if (/<!DOCTYPE|<!ENTITY/i.test(text)) fail('Documents with DTD or entity declarations are not supported')
   return text
 }
 function xml(bytes: Buffer): Document {
-  if (bytes.length > 8 * 1024 * 1024) fail('文档 XML 超过处理上限')
+  if (bytes.length > 8 * 1024 * 1024) fail('Document XML exceeds processing size limit')
   const text = xmlText(bytes)
-  const document = new DOMParser({ onError: (_level, message) => { throw new Error(`文档 XML 无效：${message}`) } }).parseFromString(text, 'application/xml')
-  if (!document.documentElement) fail('文档 XML 为空')
+  const document = new DOMParser({ onError: (_level, message) => { throw new Error(`Invalid document XML: ${message}`) } }).parseFromString(text, 'application/xml')
+  if (!document.documentElement) fail('Document XML is empty')
   return document
 }
 function elements(document: Document): Element[] { return Array.from(document.getElementsByTagName('*')) }
@@ -35,16 +35,16 @@ function serialize(document: Document): Buffer {
 function relationshipSource(name: string): string {
   if (name === '_rels/.rels') return ''
   const match = /^(.*\/)?_rels\/([^/]+)\.rels$/.exec(name)
-  if (!match) fail('文档关系文件路径无效')
+  if (!match) fail('Invalid document relationship file path')
   return (match![1] ?? '') + match![2]
 }
 function targetPart(source: string, target: string): string {
   let decoded: string
-  try { decoded = decodeURIComponent(target.split('#')[0] ?? '') } catch { return fail('文档关系路径编码无效') }
+  try { decoded = decodeURIComponent(target.split('#')[0] ?? '') } catch { return fail('Invalid document relationship path encoding') }
   if (!decoded) return source
-  if (/[:\\\0]/.test(decoded)) fail('文档内部关系路径无效')
+  if (/[:\\\0]/.test(decoded)) fail('Invalid internal document relationship path')
   const name = decoded.startsWith('/') ? path.posix.normalize(decoded.slice(1)) : path.posix.join(path.posix.dirname(source), decoded)
-  if (name.startsWith('../') || name === '..') fail('文档关系越出压缩包')
+  if (name.startsWith('../') || name === '..') fail('Document relationship escapes archive root')
   return name
 }
 
@@ -62,13 +62,13 @@ function metadataParts(entries: ZipContentEntry[]) {
 
 export function inspectOffice(entries: ZipContentEntry[]) {
   const files = new Map(entries.filter(e => !e.isDirectory).map(e => [e.name, e.data]))
-  if ([...files.keys()].some(name => /^_xmlsignatures\//i.test(name))) fail('带数字签名的文档不能改写，请先另存无签名副本')
+  if ([...files.keys()].some(name => /^_xmlsignatures\//i.test(name))) fail('Digitally signed documents cannot be modified; save an unsigned copy first')
   const types = files.get('[Content_Types].xml'), root = files.get('_rels/.rels')
-  if (!types || !root) fail('不是完整的 Office OOXML 文档；不支持旧版或加密格式')
+  if (!types || !root) fail('Incomplete Office OOXML document; legacy or encrypted formats are not supported')
   const typeXml = xml(types!)
-  if (typeXml.documentElement?.namespaceURI !== contentNamespace) fail('Office 内容类型声明无效')
+  if (typeXml.documentElement?.namespaceURI !== contentNamespace) fail('Invalid Office content types declaration')
   const mainParts = ['word/document.xml', 'ppt/presentation.xml', 'xl/workbook.xml'].filter(name => files.has(name))
-  if (mainParts.length !== 1) fail('Office 主文档缺失或类型不明确')
+  if (mainParts.length !== 1) fail('Office main document part is missing or ambiguous')
   const metadata = metadataParts(entries)
   let hasAuthor = false, hasComments = false
   for (const [name, data] of files) {
@@ -85,16 +85,16 @@ export function inspectOffice(entries: ZipContentEntry[]) {
       for (const relation of Array.from(document.getElementsByTagNameNS(relNamespace, 'Relationship'))) {
         if (relation.getAttribute('TargetMode') === 'External') continue
         const target = targetPart(relationshipSource(name), relation.getAttribute('Target') ?? '')
-        if (!files.has(target)) fail(`Office 内部关系缺少文件：${target}`)
+        if (!files.has(target)) fail(`Office internal relationship missing target file: ${target}`)
       }
     }
   }
   const main = mainParts[0]!
   const expectedType = main.startsWith('word/') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml' : main.startsWith('ppt/') ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'
   const declared = Array.from(typeXml.getElementsByTagNameNS(contentNamespace, 'Override')).filter(node => node.getAttribute('PartName') === '/' + main)
-  if (declared.length !== 1 || declared[0]?.getAttribute('ContentType') !== expectedType) fail('仅支持普通 DOCX、PPTX、XLSX；不支持宏文档或模板')
+  if (declared.length !== 1 || declared[0]?.getAttribute('ContentType') !== expectedType) fail('Only standard DOCX, PPTX, and XLSX documents are supported; macro-enabled or template files are not supported')
   const rootRelations = xml(root!).getElementsByTagNameNS(relNamespace, 'Relationship')
-  if (!Array.from(rootRelations).some(e => /\/officeDocument$/.test(e.getAttribute('Type') ?? '') && targetPart('', e.getAttribute('Target') ?? '') === main)) fail('Office 主文档关系无效')
+  if (!Array.from(rootRelations).some(e => /\/officeDocument$/.test(e.getAttribute('Type') ?? '') && targetPart('', e.getAttribute('Target') ?? '') === main)) fail('Invalid Office main document relationship')
   return { type: main.startsWith('word/') ? 'docx' : main.startsWith('ppt/') ? 'pptx' : 'xlsx', hasAuthor, hasComments,
     images: [...files].filter(([name]) => imagePart.test(name)).map(([name, data]) => ({ name, size: data.length })) }
 }
@@ -140,13 +140,13 @@ export function cleanOfficeMetadata(entries: ZipContentEntry[]): ZipContentEntry
     if (new XMLSerializer().serializeToString(document) !== before) entry.data = serialize(document)
   }
   const inspected = inspectOffice(result)
-  if (inspected.hasAuthor || inspected.hasComments) fail('作者或批注清理校验失败')
+  if (inspected.hasAuthor || inspected.hasComments) fail('Author or comment metadata cleanup verification failed')
   return result
 }
 
 export function officeImages(entries: ZipContentEntry[]): ZipContentEntry[] {
   const images = entries.filter(e => !e.isDirectory && imagePart.test(e.name))
-  if (!images.length) fail('文档中没有可导出的原图')
+  if (!images.length) fail('Document contains no extractable original images')
   return images.map((entry, i) => ({ ...entry, name: `${i + 1}-${path.posix.basename(entry.name).replace(/[<>:"|?*\\\x00-\x1f]/g, '_')}` }))
 }
 
@@ -168,26 +168,26 @@ export async function encodeVerifiedOfficeArchive(entries: ZipContentEntry[], si
     else chunks.length = 0
   }
   signal.throwIfAborted()
-  if (size > maxOutput) fail('处理后的压缩包超过 16 MiB 上限')
+  if (size > maxOutput) fail('Processed archive exceeds the 16 MiB limit')
   const bytes = Buffer.concat(chunks, size), reader = await fromBufferPromise(bytes, { autoClose: false })
   try {
     const expected = new Map(entries.map(entry => [entry.name, entry.data]))
     for await (const entry of reader.eachEntry()) {
       signal.throwIfAborted()
       const original = expected.get(entry.fileName)
-      if (!original) fail('输出压缩包存在未知或重复条目')
+      if (!original) fail('Output archive contains unexpected or duplicate entry')
       const input = await reader.openReadStreamPromise(entry), parts: Buffer[] = []
-      const abort = () => input.destroy(new Error('文档校验已取消'))
+      const abort = () => input.destroy(new Error('Document verification cancelled'))
       signal.addEventListener('abort', abort, { once: true })
       try {
         signal.throwIfAborted()
         for await (const chunk of input) { signal.throwIfAborted(); parts.push(Buffer.from(chunk)) }
       } finally { signal.removeEventListener('abort', abort); input.destroy() }
       const data = Buffer.concat(parts)
-      if (!data.equals(original!) || crc32(data) !== entry.crc32) fail('输出压缩包字节校验失败')
+      if (!data.equals(original!) || crc32(data) !== entry.crc32) fail('Output archive byte verification failed')
       expected.delete(entry.fileName)
     }
-    if (expected.size) fail('输出压缩包缺少条目')
+    if (expected.size) fail('Output archive is missing expected entries')
   } finally { reader.close() }
   return bytes
 }

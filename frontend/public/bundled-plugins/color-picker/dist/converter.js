@@ -550,7 +550,7 @@ export async function saveColorToPalette(name, hex) {
         id: `color_${globalThis.crypto.randomUUID()}`,
         name: name || hex,
         hex: paletteHex(hex),
-        savedAt: new Date().toLocaleString()
+        savedAt: new Date().toLocaleString(getLocale())
     };
     return changePalette(current => {
         const rest = current.filter(c => c.hex !== newItem.hex);

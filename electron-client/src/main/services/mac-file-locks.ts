@@ -11,8 +11,8 @@ export const runLockCommand: LockCommand = (file, args, signal, allowEmpty = fal
   return new Promise((resolve, reject) => {
     const child = execFile(file, args, { encoding: 'utf8', timeout: 20000, killSignal: 'SIGKILL', maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LANG: 'C', LC_ALL: 'C' } }, (error, stdout, stderr) => {
       signal.removeEventListener('abort', cancel)
-      if (signal.aborted) reject(new Error('文件占用检测已取消'))
-      else if (stderr.trim() || (error && !(allowEmpty && error.code === 1 && !error.killed && !error.signal))) reject(new Error(`系统占用检测未完成：${stderr.trim().slice(0, 300) || error?.message || '未知错误'}`))
+      if (signal.aborted) reject(new Error('File lock inspection cancelled'))
+      else if (stderr.trim() || (error && !(allowEmpty && error.code === 1 && !error.killed && !error.signal))) reject(new Error(`System file lock inspection failed: ${stderr.trim().slice(0, 300) || error?.message || 'unknown error'}`))
       else resolve({ stdout, code: error ? 1 : 0 })
     })
     const cancel = () => { child.kill('SIGKILL') }
@@ -32,9 +32,9 @@ export function parseLsofRecords(text: string): LsofProcess[] {
   let current: LsofProcess | undefined, file: { descriptor: string; type?: string; name?: string } | undefined
   const endFile = () => {
     if (!file) return
-    if (!current || !file.descriptor || !file.type || !file.name) throw new Error('占用检测文件记录不完整')
+    if (!current || !file.descriptor || !file.type || !file.name) throw new Error('Incomplete file record in lock inspection output')
     if (!current.paths.includes(file.name)) current.paths.push(file.name)
-    if (current.paths.length > 4096) throw new Error('占用条目过多，停止检测')
+    if (current.paths.length > 4096) throw new Error('Too many open file lock entries; inspection aborted')
     file = undefined
   }
   for (const raw of text.split('\0')) {
@@ -44,18 +44,18 @@ export function parseLsofRecords(text: string): LsofProcess[] {
     if (key === 'p') {
       endFile()
       const pid = Number(value)
-      if (!/^\d+$/.test(value) || !Number.isSafeInteger(pid) || pid < 1 || pids.has(pid) || rows.length >= 1024) throw new Error('占用检测进程记录无效')
+      if (!/^\d+$/.test(value) || !Number.isSafeInteger(pid) || pid < 1 || pids.has(pid) || rows.length >= 1024) throw new Error('Invalid process record in lock inspection output')
       current = { pid, name: '', uid: -1, paths: [] }; pids.add(pid); rows.push(current)
-    } else if (!current) throw new Error('占用检测缺少进程编号')
+    } else if (!current) throw new Error('Missing process ID in lock inspection output')
     else if (key === 'c' && !file && !current.name) current.name = value
     else if (key === 'u' && !file && current.uid === -1 && /^\d+$/.test(value)) current.uid = Number(value)
     else if (key === 'f') { endFile(); file = { descriptor: value } }
     else if (key === 't' && file && !file.type) file.type = value
     else if (key === 'n' && file && !file.name) file.name = value
-    else throw new Error('占用检测返回无法识别的字段')
+    else throw new Error('Unrecognized field in lock inspection output')
   }
   endFile()
-  if (rows.some(row => !row.name || row.uid < 0 || !Number.isSafeInteger(row.uid) || !row.paths.length)) throw new Error('占用检测结果不完整')
+  if (rows.some(row => !row.name || row.uid < 0 || !Number.isSafeInteger(row.uid) || !row.paths.length)) throw new Error('Incomplete lock inspection result')
   return rows
 }
 export function sameMacProcess(a: MacProcessIdentity, b: MacProcessIdentity) {
@@ -67,7 +67,7 @@ export class MacFileLocks {
     const result = await this.run('/bin/ps', ['-p', String(pid), '-o', 'pid=,uid=,lstart=,stat=,comm='], signal, true)
     if (result.code === 1 && !result.stdout.trim()) return undefined
     const match = result.stdout.trimEnd().match(/^\s*(\d+)\s+(\d+)\s+([A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\S+)\s+([^\r\n]+)$/)
-    if (!match || Number(match[1]) !== pid || !match[5]!.startsWith('/')) throw new Error('无法确认占用进程的启动时间和程序路径，禁止结束')
+    if (!match || Number(match[1]) !== pid || !match[5]!.startsWith('/')) throw new Error('Unable to verify process start time and executable path; termination blocked')
     return { pid, uid: Number(match[2]), started: match[3]!, zombie: match[4]!.includes('Z'), executable: match[5]! }
   }
   async scan(target: string, directory: boolean, signal: AbortSignal, ownBrokerPid?: number, onlyPid?: number): Promise<InspectedLock[]> {
@@ -84,10 +84,10 @@ export class MacFileLocks {
       catch (error) { reason = error instanceof Error ? error.message : String(error) }
       signal.throwIfAborted()
       if (!reason && (!identity || identity.zombie)) continue
-      if (identity && identity.uid !== row.uid) reason = '检测期间进程身份已变化，请重新扫描'
+      if (identity && identity.uid !== row.uid) reason = 'Process identity changed during inspection; scan again'
       const name = identity ? path.basename(identity.executable) : row.name
-      if (row.pid <= 1 || protectedPids.has(row.pid) || ['launchd', 'kernel_task', 'windowserver', 'loginwindow', 'ztoolspathaccessbroker'].includes(name.toLowerCase())) reason = '系统或客户端关键进程受保护'
-      if (identity && process.getuid && identity.uid !== process.getuid()) reason = '其他用户的进程，不能在此结束'
+      if (row.pid <= 1 || protectedPids.has(row.pid) || ['launchd', 'kernel_task', 'windowserver', 'loginwindow', 'ztoolspathaccessbroker'].includes(name.toLowerCase())) reason = 'Protected system or client critical process'
+      if (identity && process.getuid && identity.uid !== process.getuid()) reason = 'Process owned by another user cannot be terminated here'
       locks.push({ pid: row.pid, name, executablePath: identity?.executable || '', userId: row.uid, paths: row.paths, protected: Boolean(reason), reason, ...(identity ? { identity } : {}) })
     }
     return locks
@@ -96,7 +96,7 @@ export class MacFileLocks {
     // 包含外接磁盘的 APFS 合成卷；只筛 physical 会漏掉其实际挂载点。
     const result = await this.run('/usr/sbin/diskutil', ['list', '-plist', 'external'], signal)
     const data: unknown = parsePlist(result.stdout)
-    if (!fileUnlockRecord(data) || !Array.isArray(data.AllDisksAndPartitions)) throw new Error('外接磁盘列表格式无效')
+    if (!fileUnlockRecord(data) || !Array.isArray(data.AllDisksAndPartitions)) throw new Error('Invalid external disk list format')
     return parseMacVolumes(data).filter(volume => volume.path !== '/').map(volume => ({ path: volume.path, label: volume.label }))
   }
 }

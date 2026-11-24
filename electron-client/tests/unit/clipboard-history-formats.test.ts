@@ -21,7 +21,7 @@ test('三种历史持久化后恢复原始内容，图片与文件不按文本�
     assert.deepEqual(service.getEntry(picture.id), { type: 'image', image })
     assert.deepEqual(service.getEntry(fileRecord.id), { type: 'files', files })
     assert.equal(service.queryItems().length, 3)
-    assert.throws(() => service.getEntry('missing'), /已不存在/)
+    assert.throws(() => service.getEntry('missing'), /no longer exists/i)
     assert.throws(() => service.recordClipboardEntry({ type: 'image', image: 'x'.repeat(16 * 1024 * 1024 + 1) }), /16 MiB/)
   } finally {
     service.close()
@@ -33,7 +33,7 @@ test('手工构造 files 记录不能获得系统采集来源，清空保留置�
   const service = new ClipboardHistoryService()
   try {
     const manual = service.recordItem({ content: JSON.stringify(['/tmp/not-selected']), format_type: 'files' })!
-    assert.throws(() => service.getEntry(manual.id), /并非系统剪贴板采集/)
+    assert.throws(() => service.getEntry(manual.id), /not captured from the system clipboard/i)
     service.togglePin(manual.id)
     service.recordClipboardEntry({ type: 'text', text: 'remove' })
     assert.equal(service.clearUnpinned(), 1)
@@ -123,7 +123,7 @@ test('文件历史只认当前平台的本机绝对路径：其它系统的路�
     assert.equal(service.recordClipboardEntry({ type: 'files', files: ['/Users/me/a.txt', '\\Users\\x'] }), null)
     service.close()
     service = new ClipboardHistoryService({ dbPath, platform: 'darwin' })
-    assert.throws(() => service.getEntry(fromWindows.id), /不是本机的文件路径/)
+    assert.throws(() => service.getEntry(fromWindows.id), /non-native file path/i)
     assert.deepEqual(service.systemCapturedFilePaths([fromWindows, mixed]), ['/Users/me/a.txt'])
     assert.deepEqual(service.getEntry(mixed.id), { type: 'files', files: ['/Users/me/a.txt'] })
   } finally {

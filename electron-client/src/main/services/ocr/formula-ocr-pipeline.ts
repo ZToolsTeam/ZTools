@@ -32,7 +32,7 @@ function luminance(data: Uint8Array, offset: number): number {
  */
 export function analyzeContent(image: BgraImage): ContentLayout | undefined {
   const { width, height, data } = image
-  if (width < 1 || height < 1 || data.length !== width * height * 4) throw new Error('图片像素数据无效')
+  if (width < 1 || height < 1 || data.length !== width * height * 4) throw new Error('Invalid image pixel data')
   const border: number[] = []
   const step = Math.max(1, Math.floor((width + height) / 400))
   for (let x = 0; x < width; x += step) border.push(luminance(data, x * 4), luminance(data, ((height - 1) * width + x) * 4))
@@ -76,7 +76,7 @@ export function invertImage(image: BgraImage): BgraImage {
 export function toPixelValues(image: BgraImage): Float32Array {
   const size = FORMULA_INPUT_SIZE
   if (image.width !== size || image.height !== size || image.data.length !== size * size * 4) {
-    throw new Error(`公式识别输入必须是 ${size}×${size} 像素`)
+    throw new Error(`Formula OCR input must be ${size}×${size} pixels`)
   }
   const plane = size * size
   const out = new Float32Array(3 * plane)
@@ -110,7 +110,7 @@ export async function greedyDecode(runner: FormulaModelRunner, pixelValues: Floa
   let steps = 0
   for (; steps < maxTokens; steps++) {
     const logits = await runner.nextLogits(encoded, tokens)
-    if (logits.length !== FORMULA_TOKENS.vocabSize) throw new Error('公式识别模型输出维度无效')
+    if (logits.length !== FORMULA_TOKENS.vocabSize) throw new Error('Invalid formula OCR model output dimensions')
     let best = 0
     for (let k = 1; k < logits.length; k++) if (logits[k]! > logits[best]!) best = k
     let total = 0
@@ -119,7 +119,7 @@ export async function greedyDecode(runner: FormulaModelRunner, pixelValues: Floa
     if (best === FORMULA_TOKENS.eos) { steps++; break }
     tokens.push(best)
   }
-  if (tokens.length > maxTokens) throw new Error('公式过长或无法识别')
+  if (tokens.length > maxTokens) throw new Error('Formula is too long or could not be recognized')
   return { tokens: tokens.slice(1), score: steps ? Math.exp(logSum / steps) : 0 }
 }
 
@@ -145,13 +145,13 @@ const BYTE_LEVEL = byteLevelTable()
 export function parseVocabulary(tokenizerJson: string): string[] {
   const parsed = JSON.parse(tokenizerJson) as { model?: { type?: unknown; vocab?: unknown } }
   const vocab = parsed.model?.vocab
-  if (parsed.model?.type !== 'BPE' || !vocab || typeof vocab !== 'object') throw new Error('公式识别词表格式无效')
+  if (parsed.model?.type !== 'BPE' || !vocab || typeof vocab !== 'object') throw new Error('Invalid formula OCR vocabulary format')
   const tokens: string[] = []
   for (const [token, id] of Object.entries(vocab as Record<string, unknown>)) {
-    if (!Number.isSafeInteger(id) || (id as number) < 0 || (id as number) >= FORMULA_TOKENS.vocabSize) throw new Error('公式识别词表编号无效')
+    if (!Number.isSafeInteger(id) || (id as number) < 0 || (id as number) >= FORMULA_TOKENS.vocabSize) throw new Error('Invalid formula OCR vocabulary token ID')
     tokens[id as number] = token
   }
-  if (tokens.length !== FORMULA_TOKENS.vocabSize || tokens.some(token => token === undefined)) throw new Error('公式识别词表与模型不匹配')
+  if (tokens.length !== FORMULA_TOKENS.vocabSize || tokens.some(token => token === undefined)) throw new Error('Formula OCR vocabulary does not match model')
   return tokens
 }
 
@@ -161,7 +161,7 @@ export function decodeTokens(tokens: readonly number[], vocabulary: readonly str
   for (const id of tokens) {
     if (id < FORMULA_TOKENS.firstText) continue
     const token = vocabulary[id]
-    if (token === undefined) throw new Error('公式识别模型输出了词表外的编号')
+    if (token === undefined) throw new Error('Formula OCR model produced an out-of-vocabulary token ID')
     for (const char of token) bytes.push(BYTE_LEVEL.get(char) ?? 0x3f)
   }
   return Buffer.from(bytes).toString('utf8')

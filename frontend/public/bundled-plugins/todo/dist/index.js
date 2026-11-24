@@ -1,6 +1,6 @@
 import { List, Form, ActionPanel, Action, Icon, showToast, Toast, useNavigation, useState, useEffect, useRef, useLocale, LocalStorage, confirmAlert } from "@ztools/declarative-ui";
 import { t } from "./i18n.js";
-import { createTodo, deleteTodoItem, clearCompletedTodos, filterAndSearchTodos, readStoredTodos, formatListDate, CorruptTodosError, isBlankQuery, quickAddTitle, TODOS_STORAGE_KEY } from "./logic.js";
+import { createTodo, updateTodoItem, deleteTodoItem, clearCompletedTodos, filterAndSearchTodos, readStoredTodos, formatListDate, CorruptTodosError, isBlankQuery, quickAddTitle, TODOS_STORAGE_KEY } from "./logic.js";
 import { updateStorageItem, hostUpgradeError } from "./host-compat.js";
 function errorMessage(err) {
     return err instanceof Error && err.message ? err.message : String(err);
@@ -43,14 +43,29 @@ export function CreateTodoForm({ onCreated, initialTitle = "" }) {
             submitting.current = false;
         }
     };
-    return Form({
+    return renderTodoFormView({
         navigationTitle: t("formNavTitle"),
+        title,
+        priority,
+        error,
+        onTitleChange: (val) => {
+            setTitle(val);
+            if (error)
+                setError(undefined);
+        },
+        onPriorityChange: setPriority,
+        onSubmit: handleSubmit
+    });
+}
+function renderTodoFormView(options) {
+    return Form({
+        navigationTitle: options.navigationTitle,
         // 只保留「保存」：返回用 Esc，表单里 ⌘↵ 也是保存
         actions: ActionPanel({ title: t("formActionsTitle") }, [
             Action.SubmitForm({
                 title: t("saveTodo"),
                 icon: Icon.Check,
-                onSubmit: handleSubmit
+                onSubmit: options.onSubmit
             })
         ])
     }, [
@@ -58,25 +73,71 @@ export function CreateTodoForm({ onCreated, initialTitle = "" }) {
             id: "title",
             title: t("titleField"),
             placeholder: t("titlePlaceholder"),
-            value: title,
-            error,
-            onChange: (val) => {
-                setTitle(val);
-                if (error)
-                    setError(undefined);
-            }
+            value: options.title,
+            error: options.error,
+            onChange: options.onTitleChange
         }),
         Form.Dropdown({
             id: "priority",
             title: t("priorityField"),
-            value: priority,
-            onChange: (val) => setPriority(val)
+            value: options.priority,
+            onChange: (val) => options.onPriorityChange(val)
         }, [
             Form.Dropdown.Item({ title: t("priorityHigh"), value: "high" }),
             Form.Dropdown.Item({ title: t("priorityMedium"), value: "medium" }),
             Form.Dropdown.Item({ title: t("priorityLow"), value: "low" })
         ])
     ]);
+}
+/**
+ * 编辑已有待办事项 Form 表单（保留原完成状态与创建时间）
+ */
+export function EditTodoForm({ todo, onSaved }) {
+    useLocale();
+    const { pop } = useNavigation();
+    const [title, setTitle] = useState(todo.title);
+    const [priority, setPriority] = useState(todo.priority);
+    const [error, setError] = useState(undefined);
+    const submitting = useRef(false);
+    const handleSubmit = async (values) => {
+        const todoTitle = typeof values.title === "string" && values.title ? values.title : title;
+        const todoPriority = (typeof values.priority === "string" && values.priority ? values.priority : priority);
+        if (!todoTitle || !todoTitle.trim()) {
+            setError(t("titleEmptyError"));
+            await showToast(Toast.Style.Failure, t("titleEmptyToast"));
+            return;
+        }
+        if (submitting.current)
+            return;
+        submitting.current = true;
+        try {
+            if (!(await onSaved({ title: todoTitle.trim(), priority: todoPriority })))
+                return;
+            await showToast(Toast.Style.Success, t("editSuccess"));
+            pop();
+        }
+        catch (err) {
+            const message = errorMessage(err);
+            setError(message);
+            await showToast(Toast.Style.Failure, t("editFailed"), message);
+        }
+        finally {
+            submitting.current = false;
+        }
+    };
+    return renderTodoFormView({
+        navigationTitle: t("formEditNavTitle"),
+        title,
+        priority,
+        error,
+        onTitleChange: (val) => {
+            setTitle(val);
+            if (error)
+                setError(undefined);
+        },
+        onPriorityChange: setPriority,
+        onSubmit: handleSubmit
+    });
 }
 function toLoadError(err) {
     if (err instanceof CorruptTodosError)
@@ -169,6 +230,19 @@ export default function TodoCommand() {
             await showToast(Toast.Style.Success, t("todoDeleted"));
     };
     const handleClearCompleted = async () => {
+        const completedCount = todos.filter((item) => item.completed).length;
+        if (completedCount === 0) {
+            await showToast(Toast.Style.Success, t("noCompletedTodos"));
+            return;
+        }
+        const confirmed = await confirmAlert({
+            title: t("clearCompletedConfirmTitle", { count: completedCount }),
+            message: t("clearCompletedConfirmMsg"),
+            primaryAction: { title: t("clearCompletedConfirmPrimary"), style: "destructive" },
+            dismissAction: { title: t("cancel") }
+        });
+        if (!confirmed)
+            return;
         let count = 0;
         if (await commit((current) => {
             count = current.filter((t) => t.completed).length;
@@ -203,6 +277,21 @@ export default function TodoCommand() {
         push(() => CreateTodoForm({
             initialTitle,
             onCreated: (newTodo) => commit(current => [newTodo, ...current])
+        }));
+    };
+    const handleOpenEditForm = (todo) => {
+        if (!writable.current) {
+            showToast(Toast.Style.Failure, t("cannotEditTitle"), t("cannotEditDesc"));
+            return;
+        }
+        push(() => EditTodoForm({
+            todo,
+            onSaved: (updates) => commit((current) => {
+                if (!current.some((item) => item.id === todo.id)) {
+                    throw new Error(t("deletedByOtherWindow"));
+                }
+                return updateTodoItem(current, todo.id, updates);
+            })
         }));
     };
     const reload = () => setReloadSeq(n => n + 1);
@@ -315,6 +404,11 @@ export default function TodoCommand() {
                             title: item.completed ? t("markIncomplete") : t("markCompleted"),
                             icon: item.completed ? Icon.Circle : Icon.Check,
                             onAction: () => handleToggle(item.id)
+                        }),
+                        Action({
+                            title: t("editTodo"),
+                            icon: Icon.Pencil,
+                            onAction: () => handleOpenEditForm(item)
                         }),
                         Action.CopyToClipboard({
                             title: t("copyTitle"),

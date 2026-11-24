@@ -19,19 +19,26 @@ describe('PromptTemplateManager', () => {
   test('render performs variable interpolation and applies defaults', () => {
     const manager = new PromptTemplateManager();
 
-    // file_search_assistant has required variable: query, default: directory = 全部工作区
-    const renderedWithDefault = manager.render('file_search_assistant', {
-      query: 'electron 窗口置顶'
+    // 默认 en-US 下 file_search_assistant 的默认 directory 为 All workspaces
+    const renderedWithDefaultEn = manager.render('file_search_assistant', {
+      query: 'electron always on top'
     });
+    assert.ok(renderedWithDefaultEn.includes('Request: electron always on top'));
+    assert.ok(renderedWithDefaultEn.includes('Optional directory scope: All workspaces'));
 
-    assert.ok(renderedWithDefault.includes('需求：electron 窗口置顶'));
-    assert.ok(renderedWithDefault.includes('可选约束目录：全部工作区'));
+    // 显式指定 zh-CN 时保留原有中文默认变量与模板
+    const renderedWithDefaultZh = manager.render('file_search_assistant', {
+      query: 'electron 窗口置顶'
+    }, 'zh-CN');
+
+    assert.ok(renderedWithDefaultZh.includes('需求：electron 窗口置顶'));
+    assert.ok(renderedWithDefaultZh.includes('可选约束目录：全部工作区'));
 
     // 覆盖默认值
     const renderedCustom = manager.render('file_search_assistant', {
       query: 'config.json',
       directory: 'D:\\Projects\\ZTools'
-    });
+    }, 'zh-CN');
     assert.ok(renderedCustom.includes('可选约束目录：D:\\Projects\\ZTools'));
   });
 

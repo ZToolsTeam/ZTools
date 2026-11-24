@@ -42,14 +42,19 @@ export function deleteMemo(items, id) {
     return items.filter(item => item.id !== id);
 }
 /**
- * 按标题、正文、标签检索；最近更新的排在前面
+ * 按标题、正文、标签检索；置顶便签排在最前，其余按最近更新倒序
  */
 export function filterMemos(items, query) {
     const q = (query || '').trim().toLowerCase();
     const list = q
         ? items.filter(m => m.title.toLowerCase().includes(q) || m.content.toLowerCase().includes(q) || m.tag.toLowerCase().includes(q))
         : items;
-    return [...list].sort((a, b) => b.updateTime - a.updateTime);
+    return [...list].sort((a, b) => {
+        const pinDiff = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
+        if (pinDiff !== 0)
+            return pinDiff;
+        return b.updateTime - a.updateTime;
+    });
 }
 export const MEMOS_STORAGE_KEY = 'memo.items.v1';
 /** 旧版本直接写在浏览器 localStorage 里的键 */
@@ -79,6 +84,7 @@ export function sanitizeStoredMemos(raw) {
             title: m.title,
             content: m.content,
             tag: typeof m.tag === 'string' ? m.tag : '',
+            ...(m.pinned === true ? { pinned: true } : {}),
             createTime,
             updateTime: typeof m.updateTime === 'number' ? m.updateTime : createTime
         });
@@ -168,7 +174,10 @@ export function applyMemoMutation(latest, mutation) {
         const found = base.filter(entry => matches(entry, mutation.expected.id));
         const current = sanitizeStoredMemos(found)[0];
         const fields = ['title', 'content', 'tag', 'createTime', 'updateTime'];
-        if (found.length !== 1 || !current || fields.some(field => current[field] !== mutation.expected[field])) {
+        if (found.length !== 1 ||
+            !current ||
+            fields.some(field => current[field] !== mutation.expected[field]) ||
+            Boolean(current.pinned) !== Boolean(mutation.expected.pinned)) {
             throw new Error(t('concurrentModifiedError'));
         }
     }
@@ -178,9 +187,18 @@ export function applyMemoMutation(latest, mutation) {
                 throw new Error(t('duplicateIdError'));
             return [mutation.item, ...base];
         case 'update':
-            return base.map(entry => matches(entry, mutation.expected.id)
-                ? { ...entry, ...mutation.updates, updateTime: Date.now() }
-                : entry);
+            return base.map(entry => {
+                if (!matches(entry, mutation.expected.id))
+                    return entry;
+                const nextEntry = {
+                    ...entry,
+                    ...mutation.updates,
+                    ...(mutation.touchUpdateTime === false ? {} : { updateTime: Date.now() })
+                };
+                if (nextEntry.pinned !== true)
+                    delete nextEntry.pinned;
+                return nextEntry;
+            });
         case 'delete':
             return base.filter((entry) => !matches(entry, mutation.expected.id));
         default:

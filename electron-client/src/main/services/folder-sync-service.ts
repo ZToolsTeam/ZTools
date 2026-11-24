@@ -45,7 +45,7 @@ export class FolderSyncService {
   }
   #assertWritable(file: string) {
     const normalized = path.resolve(file).toLowerCase()
-    if (isProtectedSystemPath(file) || this.protectedRoots.some(root => normalized === path.resolve(root).toLowerCase() || normalized.startsWith(path.resolve(root).toLowerCase() + path.sep))) throw new Error('不能同步到系统关键目录或客户端自身的数据目录')
+    if (isProtectedSystemPath(file) || this.protectedRoots.some(root => normalized === path.resolve(root).toLowerCase() || normalized.startsWith(path.resolve(root).toLowerCase() + path.sep))) throw new Error('Cannot sync to system critical directories or client data directories')
   }
   async #authorize(root: SyncRoot, relative: string, caller: CallerIdentity) {
     const file = path.join(root.path, relative)
@@ -56,7 +56,7 @@ export class FolderSyncService {
   async execute(value: unknown, caller: CallerIdentity, outerSignal: AbortSignal) {
     validateFolderSyncRequest(value)
     const key = ownerKey(caller)
-    if (this.#stopped || this.#jobs.has(key) || this.#jobs.size >= 4) throw new Error('目录同步繁忙，请等待当前操作结束')
+    if (this.#stopped || this.#jobs.has(key) || this.#jobs.size >= 4) throw new Error('Folder sync is busy; wait for the current operation to finish')
     const job: { id: string; controller: AbortController; adapter?: PathAccessAdapter } = { id: value.operationId, controller: new AbortController() }
     this.#jobs.set(key, job)
     const signal = AbortSignal.any([outerSignal, job.controller.signal])
@@ -64,7 +64,7 @@ export class FolderSyncService {
       signal.throwIfAborted()
       if (value.action === 'compare') {
         await this.#discard(key)
-        if (this.#plans.size >= 4) throw new Error('待执行的目录清单过多，请关闭其他同步窗口后重试')
+        if (this.#plans.size >= 4) throw new Error('Too many pending folder sync plans; close another sync window and retry')
         const adapter = this.makeAdapter(); job.adapter = adapter
         try {
           const plan = await this.#compare(value, caller, adapter, signal)
@@ -73,20 +73,20 @@ export class FolderSyncService {
         } catch (error) { await adapter.stop(); throw error }
       }
       const plan = this.#plans.get(key)
-      if (!plan || plan.id !== value.planId) throw new Error('比对清单已失效，请重新比对')
+      if (!plan || plan.id !== value.planId) throw new Error('Sync plan has expired; compare again')
       const selected = value.selectedRelPaths.map(name => plan.diffs.find(diff => diff.relPath === name))
-      if (selected.some(diff => !diff || diff.direction === 'conflict')) throw new Error('清单包含无效条目或未解决的双向冲突')
+      if (selected.some(diff => !diff || diff.direction === 'conflict')) throw new Error('Plan contains invalid items or unresolved two-way conflicts')
       this.#plans.delete(key); clearTimeout(plan.timer); job.adapter = plan.adapter
       try { return await this.#apply(plan, selected as SyncDiff[], signal) }
       finally { await plan.adapter.stop() }
     } finally { this.#jobs.delete(key) }
   }
   async #compare(request: Extract<FolderSyncRequest, { action: 'compare' }>, caller: CallerIdentity, adapter: PathAccessAdapter, signal: AbortSignal): Promise<Plan> {
-    if (request.syncMode === 'mirror' && (adapter.platform !== 'darwin' || !adapter.trash)) throw new Error('此平台暂不支持安全镜像回收，请使用增量或双向同步')
+    if (request.syncMode === 'mirror' && (adapter.platform !== 'darwin' || !adapter.trash)) throw new Error('Safe mirror trash is not supported on this platform; use incremental or two-way sync')
     const paths: string[] = []
     for (const input of [request.sourceDir, request.targetDir]) paths.push(await this.authorization.resolveAuthorizedPath(input, caller, 'read', false))
     const [left, right] = paths.map(file => path.resolve(file).normalize('NFC').toLowerCase()) as [string, string]
-    if (left === right || left.startsWith(right + path.sep) || right.startsWith(left + path.sep)) throw new Error('源目录与目标目录不能相同或互相包含')
+    if (left === right || left.startsWith(right + path.sep) || right.startsWith(left + path.sep)) throw new Error('Source and target directories cannot be the same or nested inside each other')
     this.#assertWritable(paths[1]!)
     if (request.syncMode === 'two-way') this.#assertWritable(paths[0]!)
     const roots = [] as SyncRoot[]
@@ -100,7 +100,7 @@ export class FolderSyncService {
     const diffs = buildSyncDiffs(trees[0], trees[1], request.syncMode, pair)
     signal.throwIfAborted()
     const id = randomUUID(), key = ownerKey(caller)
-    const timer = setTimeout(() => { if (this.#plans.get(key)?.id === id) void this.#discard(key).catch(error => console.error('同步清单释放失败', error)) }, 5 * 60_000)
+    const timer = setTimeout(() => { if (this.#plans.get(key)?.id === id) void this.#discard(key).catch(error => console.error('Failed to release folder sync plan', error)) }, 5 * 60_000)
     timer.unref()
     return { id, caller, adapter, roots: pair, trees, request, diffs, timer }
   }
@@ -108,18 +108,18 @@ export class FolderSyncService {
     const root = plan.roots[index]!, base = `${SYNC_BACKUPS}/${plan.id}`
     await this.#authorize(root, base, plan.caller)
     await plan.adapter.createDirectory(root.object, [SYNC_BACKUPS], signal)
-    if ((await plan.adapter.createDirectory(root.object, segmentsOf(base), signal)).status !== 'created') throw new Error('备份目录已存在，请重新比对')
-    const text = ['ZTools 目录同步恢复记录', `原目录：${root.path}`, 'backup/ 保存比对时的原文件副本；original/ 保留执行过程中移出的原文件；incoming/ 是尚未写入的副本。',
-      '恢复时先停止同步，在文件管理器中把所需文件复制回原目录内相同的相对路径。请自行确认后再清理本目录；程序不会自动清理备份。', '',
+    if ((await plan.adapter.createDirectory(root.object, segmentsOf(base), signal)).status !== 'created') throw new Error('Backup directory already exists; compare again')
+    const text = ['ZTools Folder Sync Recovery Record', `Original directory: ${root.path}`, 'backup/ stores original file copies from comparison; original/ preserves files moved out during execution; incoming/ holds staged copies not yet committed.',
+      'To recover, stop syncing first and copy the needed files back to the same relative paths inside the original directory. Clean up this directory manually after verifying; backups are never deleted automatically.', '',
       ...items.filter(item => (item.direction === 'dst-to-src' ? 0 : 1) === index).map(item => `${item.actionBadge}\t${item.relPath}`)].join('\n')
-    const save = await plan.adapter.deriveSave(root.object, [SYNC_BACKUPS, plan.id, '恢复说明.txt'], signal)
+    const save = await plan.adapter.deriveSave(root.object, [SYNC_BACKUPS, plan.id, 'RECOVERY_README.txt'], signal)
     try { await plan.adapter.save(save, Buffer.from(text), false, signal) } finally { await plan.adapter.release(save) }
     return base
   }
   async #apply(plan: Plan, items: SyncDiff[], signal: AbortSignal) {
     const { adapter, roots, trees } = plan
     const recoveryPaths: string[] = [], failures: { relPath: string; error: string }[] = []
-    let syncedCount = 0, deletedCount = 0, transferredBytes = 0, current = '执行前复核'
+    let syncedCount = 0, deletedCount = 0, transferredBytes = 0, current = 'pre-execution-verification'
     try {
       for (let i = 0; i < 2; i++) assertSameTree(trees[i]!, await scanTree(adapter, roots[i]!, plan.request.ignoreDevJunk, signal))
       for (const item of items) await this.#authorize(roots[item.direction === 'dst-to-src' ? 0 : 1], item.relPath, plan.caller)
@@ -149,7 +149,7 @@ export class FolderSyncService {
           if (item.direction === 'delete-dst') {
             const trashObject = await adapter.deriveRead(destination.object, segmentsOf(`${base}/original/${item.relPath}`), signal)
             try {
-              if (!adapter.trash) throw new Error('安全回收组件不可用')
+              if (!adapter.trash) throw new Error('Safe trash helper is unavailable')
               if (!original || !sameFile(original, await fingerprint(adapter, trashObject, signal))) throw changed()
               await adapter.trash(trashObject, signal)
             } finally { await adapter.release(trashObject) }
@@ -169,7 +169,7 @@ export class FolderSyncService {
             catch {
               // 停止或超时会让原生文件组件整代失效，原组件上的恢复必然失败：换新组件重新固定目标目录后再恢复
               try { await this.#restoreWithFreshAdapter(plan, destination, `${base}/original/${item.relPath}`, item.relPath) }
-              catch (restoreError) { throw new Error(`${message(error)}；原位恢复未确认：${message(restoreError)}。请查看备份目录：${path.join(destination.path, base)}`) }
+              catch (restoreError) { throw new Error(`${message(error)}; in-place restore not confirmed: ${message(restoreError)}. Check backup directory: ${path.join(destination.path, base)}`) }
             }
           }
           throw error

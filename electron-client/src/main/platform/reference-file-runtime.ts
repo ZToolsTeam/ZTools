@@ -209,10 +209,10 @@ function createCleanupScope() {
   }
 }
 function ensureActive(signal: AbortSignal): void {
-  if (signal.aborted) throw new ZToolsError(errorCodes.appStopping, '文件引用运行时正在取消初始化')
+  if (signal.aborted) throw new ZToolsError(errorCodes.appStopping, 'File reference runtime initialization is being cancelled')
 }
 // Invoke through promises so a synchronous failure cannot skip later owned cleanup.
 function settleCleanup(actions: Array<() => void | Promise<void>>): Promise<PromiseSettledResult<void>[]> {
   return Promise.allSettled(actions.map(action => Promise.resolve().then(action)))
 }
-function failed(): ZToolsError { return new ZToolsError(errorCodes.fileError, '文件引用运行时初始化或退出未确认') }
+function failed(): ZToolsError { return new ZToolsError(errorCodes.fileError, 'File reference runtime initialization or shutdown was not confirmed') }

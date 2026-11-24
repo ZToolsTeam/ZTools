@@ -115,7 +115,7 @@ export class ExtensionHostProcess extends EventEmitter {
    */
   public async start(): Promise<void> {
     if (this.isDisabled) {
-      throw new Error('[ExtensionHostProcess] 宿主进程因 1 分钟内连续崩溃超限已停用')
+      throw new Error('[ExtensionHostProcess] Host process disabled after exceeding crash limit within 1 minute')
     }
 
     if (this.bridge) return
@@ -193,7 +193,7 @@ export class ExtensionHostProcess extends EventEmitter {
       if (electron?.utilityProcess?.fork) {
         const child = electron.utilityProcess.fork(this.hostEntryPath, [], {
           serviceName: 'ztools-extension-host',
-          env: { ...process.env }
+          env: { ...process.env, ZTOOLS_LOCALE: getResolvedLocale() }
         })
 
         return {
@@ -216,7 +216,7 @@ export class ExtensionHostProcess extends EventEmitter {
 
     // 2. 纯 Node.js 测试环境平滑降级为 child_process.fork
     const cp = cpFork(this.hostEntryPath, [], {
-      env: { ...process.env },
+      env: { ...process.env, ZTOOLS_LOCALE: getResolvedLocale() },
       stdio: ['pipe', 'pipe', 'pipe', 'ipc']
     })
 
@@ -262,7 +262,7 @@ export class ExtensionHostProcess extends EventEmitter {
       if (msg.success) {
         req.resolve(msg.data)
       } else {
-        const err = new Error(msg.error?.message || '宿主指令执行失败') as Error & { code?: string }
+        const err = new Error(msg.error?.message || 'Host action execution failed') as Error & { code?: string }
         if (msg.error?.code) err.code = msg.error.code
         req.reject(err)
       }
@@ -322,7 +322,7 @@ export class ExtensionHostProcess extends EventEmitter {
    */
   public async sendRequest<T = unknown>(action: string, payload?: unknown, timeoutMs?: number): Promise<T> {
     if (this.isDisabled) {
-      throw new Error('[ExtensionHostProcess] 扩展宿主进程已停用')
+      throw new Error('[ExtensionHostProcess] Extension host process is disabled')
     }
 
     // 懒启动
@@ -336,7 +336,7 @@ export class ExtensionHostProcess extends EventEmitter {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(id)
-        reject(new Error(`[ExtensionHostProcess] Action [${action}] 请求超时 (${effectiveTimeout}ms)`))
+        reject(new Error(`[ExtensionHostProcess] Action [${action}] timed out (${effectiveTimeout}ms)`))
       }, effectiveTimeout)
 
       this.pendingRequests.set(id, {

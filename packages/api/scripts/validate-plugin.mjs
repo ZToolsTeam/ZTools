@@ -53,12 +53,12 @@ function validateNativePayloads(manifest, pluginDir, targetIndexesById, errors, 
     if (typeof file.entry !== 'string' || typeof component.targetId !== 'string') return
     const normalized = file.entry.replaceAll('\\', '/').toLowerCase()
     const targetKey = `${component.targetId}:${normalized}`
-    if (targetPaths.has(targetKey)) errors.push(`${prefix}.entry 与同一 target 的原生文件路径重复（忽略大小写）`)
+    if (targetPaths.has(targetKey)) errors.push(`${prefix}.entry duplicates a native file path within the same target (case-insensitive)`)
     targetPaths.add(targetKey)
     const metadata = JSON.stringify({ format, arch: file.arch ?? null, sha256: file.sha256 ?? null })
     const existing = sharedPaths.get(normalized)
     if (hasPayloadContract && existing && existing.targetId !== component.targetId && existing.metadata !== metadata) {
-      errors.push(`${prefix}.entry 跨 target 复用的 format、arch、sha256 必须一致`)
+      errors.push(`${prefix}.entry reused across targets must have identical format, arch, and sha256`)
     }
     sharedPaths.set(normalized, { targetId: component.targetId, metadata })
   }
@@ -66,7 +66,7 @@ function validateNativePayloads(manifest, pluginDir, targetIndexesById, errors, 
     if (!component || typeof component !== 'object' || Array.isArray(component)) return
     const prefix = `nativeComponents[${index}]`
     if (component.sha256 !== undefined && (typeof component.sha256 !== 'string' || !SHA256_PATTERN.test(component.sha256))) {
-      errors.push(`${prefix}.sha256 必须是64位小写十六进制SHA-256`)
+      errors.push(`${prefix}.sha256 must be a 64-character lowercase hexadecimal SHA-256 hash`)
     }
     registerPath(component, component, prefix, /\.(dll|exe)$/i.test(component.entry ?? '') ? 'pe' : 'component')
     const hasPayload = Object.hasOwn(component, 'payloadFiles')
@@ -75,49 +75,49 @@ function validateNativePayloads(manifest, pluginDir, targetIndexesById, errors, 
       const target = indexes.length === 1 ? manifest.targets[indexes[0]] : undefined
       if (component.kind !== 'dll' || component.arch !== 'ia32' || component.abi !== NATIVE_HOST32_DLL_ABI ||
           component.protocolVersion !== 1 || target?.platform !== 'windows' || target?.runtime !== 'electron') {
-        errors.push(`${prefix}.payloadFiles 仅适用于 Windows Electron ia32 NativeHost DLL（protocolVersion=1）`)
+        errors.push(`${prefix}.payloadFiles is only supported for Windows Electron ia32 NativeHost DLLs (protocolVersion=1)`)
       }
       if (typeof component.sha256 !== 'string' || !SHA256_PATTERN.test(component.sha256)) {
-        errors.push(`${prefix}.sha256 在声明 payloadFiles 时必填`)
+        errors.push(`${prefix}.sha256 is required when payloadFiles is declared`)
       }
       if (!Array.isArray(component.payloadFiles)) {
-        errors.push(`${prefix}.payloadFiles 必须是数组`)
+        errors.push(`${prefix}.payloadFiles must be an array`)
       } else {
         component.payloadFiles.forEach((file, fileIndex) => {
           const filePrefix = `${prefix}.payloadFiles[${fileIndex}]`
           if (!file || typeof file !== 'object' || Array.isArray(file)) {
-            errors.push(`${filePrefix} 必须是对象`)
+            errors.push(`${filePrefix} must be an object`)
             return
           }
           for (const field of ['entry', 'format', 'sha256']) {
-            if (!Object.hasOwn(file, field)) errors.push(`${filePrefix}.${field} 为必填字段`)
+            if (!Object.hasOwn(file, field)) errors.push(`${filePrefix}.${field} is required`)
           }
           for (const field of Object.keys(file)) {
-            if (!['entry', 'format', 'sha256', 'arch'].includes(field)) errors.push(`${filePrefix}.${field} 不是支持的 payload 字段`)
+            if (!['entry', 'format', 'sha256', 'arch'].includes(field)) errors.push(`${filePrefix}.${field} is not a supported payload field`)
           }
-          if (!isNativePayloadPath(file.entry)) errors.push(`${filePrefix}.entry 必须是 lib/ 下的规范安全文件路径`)
+          if (!isNativePayloadPath(file.entry)) errors.push(`${filePrefix}.entry must be a safe canonical relative path under lib/`)
           if (typeof file.sha256 !== 'string' || !SHA256_PATTERN.test(file.sha256)) {
-            errors.push(`${filePrefix}.sha256 必须是64位小写十六进制SHA-256`)
+            errors.push(`${filePrefix}.sha256 must be a 64-character lowercase hexadecimal SHA-256 hash`)
           }
           if (file.format === 'pe') {
-            if (!['ia32', 'x64'].includes(file.arch)) errors.push(`${filePrefix}.arch 在 format=pe 时必须是 ia32 或 x64`)
+            if (!['ia32', 'x64'].includes(file.arch)) errors.push(`${filePrefix}.arch must be ia32 or x64 when format=pe`)
             if (typeof file.entry !== 'string' || !/\.(dll|exe)$/i.test(file.entry)) {
-              errors.push(`${filePrefix}.entry 在 format=pe 时必须是 .dll 或 .exe`)
+              errors.push(`${filePrefix}.entry must end with .dll or .exe when format=pe`)
             }
           } else if (file.format === 'data') {
-            if (Object.hasOwn(file, 'arch')) errors.push(`${filePrefix}.arch 在 format=data 时禁止声明`)
+            if (Object.hasOwn(file, 'arch')) errors.push(`${filePrefix}.arch is disallowed when format=data`)
             if (typeof file.entry === 'string' && /\.(dll|exe)$/i.test(file.entry)) {
-              errors.push(`${filePrefix}.entry 在 format=data 时不能是 .dll 或 .exe`)
+              errors.push(`${filePrefix}.entry must not end with .dll or .exe when format=data`)
             }
           } else {
-            errors.push(`${filePrefix}.format 必须是 pe 或 data`)
+            errors.push(`${filePrefix}.format must be pe or data`)
           }
           registerPath(component, file, filePrefix, file.format)
           if (isNativePayloadPath(file.entry)) {
             const filePath = resolveSafePluginPath(pluginDir, file.entry)
-            if (!filePath) errors.push(`${filePrefix}.entry 必须在插件目录内`)
-            else if (!existsSync(filePath)) warnings.push(`${filePrefix}.entry 文件尚未生成：${file.entry}`)
-            else if (!statSync(filePath).isFile()) errors.push(`${filePrefix}.entry 必须指向普通文件`)
+            if (!filePath) errors.push(`${filePrefix}.entry must stay within the plugin directory`)
+            else if (!existsSync(filePath)) warnings.push(`${filePrefix}.entry file has not been built yet: ${file.entry}`)
+            else if (!statSync(filePath).isFile()) errors.push(`${filePrefix}.entry must point to a regular file`)
           }
         })
       }
@@ -125,7 +125,7 @@ function validateNativePayloads(manifest, pluginDir, targetIndexesById, errors, 
     const owner = manifest.nativeComponents.find((item) => item && typeof item === 'object' &&
       item.id === component.hostComponentId && Object.hasOwn(item, 'payloadFiles'))
     if (owner && (typeof component.sha256 !== 'string' || !SHA256_PATTERN.test(component.sha256))) {
-      errors.push(`${prefix}.sha256 绑定含 payloadFiles 的 Host 时必填`)
+      errors.push(`${prefix}.sha256 is required when bound to a Host component declaring payloadFiles`)
     }
   })
 }
@@ -133,7 +133,7 @@ function validateNativePayloads(manifest, pluginDir, targetIndexesById, errors, 
 function assertTargetSchemaSupported(schema, path = '$', allowedKeys = SUPPORTED_TARGET_SCHEMA_KEYS) {
   const unsupportedKeys = Object.keys(schema).filter((key) => !allowedKeys.has(key))
   if (unsupportedKeys.length > 0) {
-    throw new Error(`validator 不支持 ${path} 的 schema 约束：${unsupportedKeys.join(', ')}`)
+    throw new Error(`Validator does not support schema constraints at ${path}: ${unsupportedKeys.join(', ')}`)
   }
   for (const [field, fieldSchema] of Object.entries(schema.properties ?? {})) {
     assertTargetSchemaSupported(fieldSchema, `${path}.properties.${field}`, SUPPORTED_TARGET_FIELD_KEYS)
@@ -150,7 +150,7 @@ function loadTargetSchema() {
   if (cachedTargetSchema) return cachedTargetSchema
   const schema = JSON.parse(readFileSync(TARGET_SCHEMA_PATH, 'utf8'))
   assertTargetSchemaSupported(schema)
-  if (schema.additionalProperties !== false) throw new Error('validator 要求平台目标 schema 禁止未知字段')
+  if (schema.additionalProperties !== false) throw new Error('Validator requires platform target schema to disallow unknown properties')
   cachedTargetSchema = schema
   return cachedTargetSchema
 }
@@ -170,21 +170,21 @@ function schemaTypeMatches(value, type) {
 function validateSchemaNode(value, schema, path, errors) {
   let valid = true
   if (schema.type && !schemaTypeMatches(value, schema.type)) {
-    errors.push(`${path} 类型不正确`)
+    errors.push(`${path} has invalid type`)
     return false
   }
   if (Object.hasOwn(schema, 'const') && value !== schema.const) {
-    errors.push(`${path} 值必须是 ${schema.const}`)
+    errors.push(`${path} must equal ${schema.const}`)
     valid = false
   }
   if (schema.enum && !schema.enum.includes(value)) {
-    errors.push(`${path} 值不受支持`)
+    errors.push(`${path} has unsupported value`)
     valid = false
   }
   if (schema.required) {
     for (const field of schema.required) {
       if (!Object.hasOwn(value, field)) {
-        errors.push(`${path}.${field} 为必填字段`)
+        errors.push(`${path}.${field} is required`)
         valid = false
       }
     }
@@ -193,7 +193,7 @@ function validateSchemaNode(value, schema, path, errors) {
     const properties = schema.properties ?? {}
     for (const field of Object.keys(value)) {
       if (!Object.hasOwn(properties, field)) {
-        errors.push(`${path}.${field} 不是支持的目标字段`)
+        errors.push(`${path}.${field} is not a supported target field`)
         valid = false
       }
     }
@@ -203,15 +203,15 @@ function validateSchemaNode(value, schema, path, errors) {
     valid = validateSchemaNode(value[field], fieldSchema, `${path}.${field}`, errors) && valid
   }
   if (schema.minLength !== undefined && value.length < schema.minLength) {
-    errors.push(`${path} 不能为空`)
+    errors.push(`${path} must not be empty`)
     valid = false
   }
   if (schema.pattern !== undefined && !new RegExp(schema.pattern).test(value)) {
-    errors.push(`${path} 格式不正确`)
+    errors.push(`${path} has invalid format`)
     valid = false
   }
   if (schema.minimum !== undefined && value < schema.minimum) {
-    errors.push(`${path} 不能小于 ${schema.minimum}`)
+    errors.push(`${path} must be >= ${schema.minimum}`)
     valid = false
   }
   for (const childSchema of schema.allOf ?? []) {
@@ -229,7 +229,7 @@ function validateSchemaNode(value, schema, path, errors) {
 function validateTargetAgainstContract(target, index, errors, schema) {
   const prefix = `targets[${index}]`
   if (!target || typeof target !== 'object' || Array.isArray(target)) {
-    errors.push(`${prefix} 必须是对象`)
+    errors.push(`${prefix} must be an object`)
     return false
   }
   const targetErrors = []
@@ -242,7 +242,7 @@ function validateManifestTarget(target, index, errors, schema) {
   const valid = validateTargetAgainstContract(target, index, errors, schema)
   if (!target || typeof target !== 'object' || Array.isArray(target)) return false
   if (!Object.hasOwn(target, 'id')) {
-    errors.push(`targets[${index}].id 为插件目标必填字段`)
+    errors.push(`targets[${index}].id is required for plugin targets`)
     return false
   }
   return valid
@@ -250,7 +250,7 @@ function validateManifestTarget(target, index, errors, schema) {
 
 function validateNativeComponents(manifest, pluginDir, schema, targetIndexesById, validTargetIndexes, errors, warnings) {
   if (!Array.isArray(manifest.nativeComponents)) {
-    errors.push('显式声明 targets 时 nativeComponents 必须是数组；纯 JS 插件使用 []')
+    errors.push('nativeComponents must be an array when targets is declared; use [] for pure JS plugins')
     return []
   }
 
@@ -272,19 +272,19 @@ function validateNativeComponents(manifest, pluginDir, schema, targetIndexesById
     const initialErrorCount = errors.length
     let targetIndex
     if (!component || typeof component !== 'object' || Array.isArray(component)) {
-      errors.push(`${prefix} 必须是对象`)
+      errors.push(`${prefix} must be an object`)
       return
     }
 
     for (const field of requiredFields) {
-      if (!Object.hasOwn(component, field)) errors.push(`${prefix}.${field} 为必填字段`)
+      if (!Object.hasOwn(component, field)) errors.push(`${prefix}.${field} is required`)
     }
     for (const field of Object.keys(component)) {
-      if (!allowedFields.has(field)) errors.push(`${prefix}.${field} 不是支持的组件字段`)
+      if (!allowedFields.has(field)) errors.push(`${prefix}.${field} is not a supported component field`)
     }
 
     if (typeof component.id === 'string') {
-      if (componentIds.has(component.id)) errors.push(`${prefix}.id 重复：${component.id}`)
+      if (componentIds.has(component.id)) errors.push(`${prefix}.id is duplicated: ${component.id}`)
       componentIds.add(component.id)
     }
     for (const field of ['id', 'targetId']) {
@@ -294,14 +294,14 @@ function validateNativeComponents(manifest, pluginDir, schema, targetIndexesById
       errors.push(...fieldErrors)
     }
     if (!NATIVE_COMPONENT_KINDS.has(component.kind)) {
-      errors.push(`${prefix}.kind 必须是 dll、shared-library 或 worker`)
+      errors.push(`${prefix}.kind must be dll, shared-library, or worker`)
     }
 
     if (Object.hasOwn(component, 'arch')) {
       const archErrors = []
       validateSchemaNode(component.arch, schema.properties.arch, `${prefix}.arch`, archErrors)
       errors.push(...archErrors)
-      if (component.arch === 'any') errors.push(`${prefix}.arch 不能是 any；原生组件必须声明实际架构`)
+      if (component.arch === 'any') errors.push(`${prefix}.arch cannot be any; native components must declare a concrete architecture`)
     }
     if (Object.hasOwn(component, 'abi')) {
       const abiErrors = []
@@ -310,7 +310,7 @@ function validateNativeComponents(manifest, pluginDir, schema, targetIndexesById
     }
     if (component.protocolVersion !== undefined &&
         (!Number.isInteger(component.protocolVersion) || component.protocolVersion < 1)) {
-      errors.push(`${prefix}.protocolVersion 必须是大于等于 1 的整数`)
+      errors.push(`${prefix}.protocolVersion must be an integer >= 1`)
     }
     if (component.hostComponentId !== undefined) {
       const hostIdErrors = []
@@ -322,50 +322,50 @@ function validateNativeComponents(manifest, pluginDir, schema, targetIndexesById
     if (typeof component.targetId === 'string') {
       const matchingIndexes = targetIndexesById.get(component.targetId) ?? []
       if (matchingIndexes.length !== 1) {
-        errors.push(`${prefix}.targetId 必须唯一引用一个 targets 项：${component.targetId}`)
+        errors.push(`${prefix}.targetId must uniquely reference one targets entry: ${component.targetId}`)
       } else {
         targetIndex = matchingIndexes[0]
         const target = manifest.targets[targetIndex]
 
         if (component.abi === NATIVE_HOST32_DLL_ABI) {
           if (component.kind !== 'dll' || target.platform !== 'windows' || target.runtime !== 'electron') {
-            errors.push(`${prefix}.abi=${NATIVE_HOST32_DLL_ABI} 仅支持 Windows Electron kind=dll`)
+            errors.push(`${prefix}.abi=${NATIVE_HOST32_DLL_ABI} is only supported for Windows Electron kind=dll`)
           }
           if (component.arch !== 'ia32') {
-            errors.push(`${prefix}.arch 使用 ${NATIVE_HOST32_DLL_ABI} 时必须声明真实 ia32 架构`)
+            errors.push(`${prefix}.arch must declare concrete ia32 architecture when using ${NATIVE_HOST32_DLL_ABI}`)
           }
           if (component.protocolVersion !== 1) {
-            errors.push(`${prefix}.protocolVersion 使用 ${NATIVE_HOST32_DLL_ABI} 时必须显式等于 1`)
+            errors.push(`${prefix}.protocolVersion must explicitly equal 1 when using ${NATIVE_HOST32_DLL_ABI}`)
           }
         }
 
         if (component.abi === WINDOWS_PE_DEPENDENCY_ABI) {
           if (component.kind !== 'shared-library' || target.platform !== 'windows' || target.runtime !== 'electron') {
-            errors.push(`${prefix}.abi=${WINDOWS_PE_DEPENDENCY_ABI} 仅支持 Windows Electron kind=shared-library`)
+            errors.push(`${prefix}.abi=${WINDOWS_PE_DEPENDENCY_ABI} is only supported for Windows Electron kind=shared-library`)
           }
           if (component.arch !== 'ia32') {
-            errors.push(`${prefix}.arch 使用 ${WINDOWS_PE_DEPENDENCY_ABI} 时必须声明 ia32 架构`)
+            errors.push(`${prefix}.arch must declare ia32 architecture when using ${WINDOWS_PE_DEPENDENCY_ABI}`)
           }
           if (typeof component.entry === 'string' && !component.entry.toLowerCase().endsWith('.dll')) {
-            errors.push(`${prefix}.entry 使用 ${WINDOWS_PE_DEPENDENCY_ABI} 时必须是 .dll`)
+            errors.push(`${prefix}.entry must end with .dll when using ${WINDOWS_PE_DEPENDENCY_ABI}`)
           }
         }
 
         if (component.hostComponentId !== undefined) {
           if (component.kind !== 'shared-library' || component.abi !== WINDOWS_PE_DEPENDENCY_ABI) {
-            errors.push(`${prefix}.hostComponentId 仅适用于 windows-pe/v1 shared-library`)
+            errors.push(`${prefix}.hostComponentId is only allowed for windows-pe/v1 shared-library components`)
           }
           if (typeof component.hostComponentId === 'string') {
             linkedHostComponent = componentsById.get(component.hostComponentId)
             if (!linkedHostComponent) {
-              errors.push(`${prefix}.hostComponentId 引用了未知组件：${component.hostComponentId}`)
+              errors.push(`${prefix}.hostComponentId references unknown component: ${component.hostComponentId}`)
             } else if (linkedHostComponent.targetId !== component.targetId) {
-              errors.push(`${prefix}.hostComponentId 必须引用同一 target 的 DLL`)
+              errors.push(`${prefix}.hostComponentId must reference a DLL bound to the same target`)
             } else if (
               linkedHostComponent.kind !== 'dll' || linkedHostComponent.arch !== 'ia32' ||
               linkedHostComponent.abi !== NATIVE_HOST32_DLL_ABI || linkedHostComponent.protocolVersion !== 1
             ) {
-              errors.push(`${prefix}.hostComponentId 必须引用 ia32 ${NATIVE_HOST32_DLL_ABI} DLL，protocolVersion=1`)
+              errors.push(`${prefix}.hostComponentId must reference an ia32 ${NATIVE_HOST32_DLL_ABI} DLL with protocolVersion=1`)
             }
           }
         }
@@ -384,32 +384,32 @@ function validateNativeComponents(manifest, pluginDir, schema, targetIndexesById
         if (typeof component.arch === 'string' && component.arch !== target.arch &&
             !allowedNativeHost32DllBinding && !allowedNativeHost32DependencyBinding) {
           errors.push(
-            `${prefix}.arch 必须与 targets[${targetIndex}].arch 精确相等；Windows Electron x64 的 ia32 例外要求 ` +
-            `${NATIVE_HOST32_DLL_ABI} DLL 或绑定该 DLL 的 ${WINDOWS_PE_DEPENDENCY_ABI} shared-library`
+            `${prefix}.arch must exactly equal targets[${targetIndex}].arch; the Windows Electron x64 ia32 exception requires ` +
+            `a ${NATIVE_HOST32_DLL_ABI} DLL or a ${WINDOWS_PE_DEPENDENCY_ABI} shared-library bound to that DLL`
           )
         }
         if (!validTargetIndexes.has(targetIndex)) {
-          errors.push(`${prefix}.targetId 指向的 target 自身无效：${component.targetId}`)
+          errors.push(`${prefix}.targetId points to an invalid target: ${component.targetId}`)
         }
       }
     }
 
     if (component.kind === 'dll') {
       if (targetIndex !== undefined && manifest.targets[targetIndex].platform !== 'windows') {
-        errors.push(`${prefix}.kind=dll 只能绑定 Windows target`)
+        errors.push(`${prefix}.kind=dll can only bind to a Windows target`)
       }
       if (typeof component.entry === 'string' && !component.entry.toLowerCase().endsWith('.dll')) {
-        errors.push(`${prefix}.entry 的 DLL 路径必须以 .dll 结尾`)
+        errors.push(`${prefix}.entry for a DLL component must end with .dll`)
       }
     }
 
     const componentEntry = resolveSafePluginPath(pluginDir, component.entry)
     if (!componentEntry) {
-      errors.push(`${prefix}.entry 必须是插件目录内的安全相对路径`)
+      errors.push(`${prefix}.entry must be a safe relative path within the plugin directory`)
     } else if (!existsSync(componentEntry)) {
-      warnings.push(`${prefix}.entry 文件尚未生成：${component.entry}`)
+      warnings.push(`${prefix}.entry file has not been built yet: ${component.entry}`)
     } else if (!statSync(componentEntry).isFile()) {
-      errors.push(`${prefix}.entry 必须指向普通文件`)
+      errors.push(`${prefix}.entry must point to a regular file`)
     }
 
     if (errors.length === initialErrorCount && targetIndex !== undefined) {
@@ -438,9 +438,9 @@ function targetsOverlap(left, right) {
 function validateTargets(manifest, pluginDir, errors, warnings) {
   if (!Object.hasOwn(manifest, 'targets')) {
     if (Object.hasOwn(manifest, 'nativeComponents')) {
-      errors.push('nativeComponents 必须通过显式 targets 声明目标绑定')
+      errors.push('nativeComponents requires explicit targets declaration')
     }
-    warnings.push('未声明 targets：仅按旧版 Windows 兼容规则处理，不推断 macOS 支持')
+    warnings.push('targets not declared: falling back to legacy Windows compatibility rules; macOS support is not implied')
     return
   }
 
@@ -458,30 +458,30 @@ function validateTargets(manifest, pluginDir, errors, warnings) {
         schemaPropertyKeys.length !== allowedKeys.length ||
         schemaPropertyKeys.some((key) => !allowedKeys.includes(key))
       ) {
-        throw new Error('目标manifest顶层字段白名单与properties不一致')
+        throw new Error('Target manifest root field whitelist does not match schema properties')
       }
       cachedTargetManifestKeys = new Set(allowedKeys)
     }
     allowedManifestKeys = cachedTargetManifestKeys
   } catch (error) {
-    errors.push(`无法读取平台目标manifest契约 ${PLUGIN_MANIFEST_SCHEMA_PATH}：${error.message}`)
+    errors.push(`Failed to load target manifest contract ${PLUGIN_MANIFEST_SCHEMA_PATH}: ${error.message}`)
     return
   }
   for (const key of Object.keys(manifest)) {
-    if (!allowedManifestKeys.has(key)) errors.push(`plugin.json.${key} 不是支持的顶层字段`)
+    if (!allowedManifestKeys.has(key)) errors.push(`plugin.json.${key} is not a supported root field`)
   }
 
   if (!Array.isArray(manifest.targets)) {
-    errors.push('targets 必须是目标对象数组')
+    errors.push('targets must be an array of target objects')
     return
   }
-  if (manifest.targets.length === 0) errors.push('targets 至少要声明一个目标')
+  if (manifest.targets.length === 0) errors.push('targets must declare at least one target')
 
   let schema
   try {
     schema = loadTargetSchema()
   } catch (error) {
-    errors.push(`无法读取平台目标契约 ${TARGET_SCHEMA_PATH}：${error.message}`)
+    errors.push(`Failed to load platform target contract ${TARGET_SCHEMA_PATH}: ${error.message}`)
     return
   }
 
@@ -501,7 +501,7 @@ function validateTargets(manifest, pluginDir, errors, warnings) {
   })
 
   for (const [targetId, indexes] of targetIndexesById) {
-    if (indexes.length > 1) errors.push(`targets.id 必须唯一：${targetId} 出现在 ${indexes.join(', ')}`)
+    if (indexes.length > 1) errors.push(`targets.id must be unique: ${targetId} appears at ${indexes.join(', ')}`)
   }
 
   const validComponents = validateNativeComponents(
@@ -511,14 +511,14 @@ function validateTargets(manifest, pluginDir, errors, warnings) {
   for (let leftIndex = 0; leftIndex < validTargets.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < validTargets.length; rightIndex += 1) {
       if (targetsOverlap(validTargets[leftIndex], validTargets[rightIndex])) {
-        errors.push(`targets[${leftIndex}] 与 targets[${rightIndex}] 匹配范围重叠，目标选择存在歧义`)
+        errors.push(`targets[${leftIndex}] and targets[${rightIndex}] overlap and cause ambiguous target selection`)
       }
     }
   }
 
   if (manifest.dllloader !== undefined || manifest.requireAdmin === true) {
     if (validTargets.some((target) => target.platform === 'macos')) {
-      errors.push('旧版 dllloader/requireAdmin 仅适用于 Windows，不能与 macOS 目标同时声明')
+      errors.push('Legacy dllloader/requireAdmin fields are Windows-only and cannot be combined with macOS targets')
     }
   }
 
@@ -528,10 +528,10 @@ function validateTargets(manifest, pluginDir, errors, warnings) {
   if (manifest.dllloader !== undefined && !validWindowsDllComponents.some(({ component }) =>
     component.entry === manifest.dllloader
   )) {
-    errors.push('声明 dllloader 时必须有 Windows kind=dll 组件，且 entry 与 dllloader 完全一致')
+    errors.push('dllloader requires a Windows kind=dll component whose entry matches dllloader exactly')
   }
   if (manifest.requireAdmin === true && validWindowsDllComponents.length === 0) {
-    errors.push('requireAdmin=true 时必须声明绑定到 Windows target 的 kind=dll 组件')
+    errors.push('requireAdmin=true requires a kind=dll component bound to a Windows target')
   }
 }
 
@@ -597,75 +597,75 @@ function validateDirectory(input) {
   const warnings = []
 
   if (!existsSync(manifestPath)) {
-    return { input, errors: [`缺少 ${manifestPath}`], warnings }
+    return { input, errors: [`Missing ${manifestPath}`], warnings }
   }
 
   let manifest
   try {
     manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
   } catch (error) {
-    return { input, errors: [`plugin.json 不是有效 JSON：${error.message}`], warnings }
+    return { input, errors: [`plugin.json is not valid JSON: ${error.message}`], warnings }
   }
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
-    return { input, errors: ['plugin.json 根节点必须是对象'], warnings }
+    return { input, errors: ['plugin.json root must be an object'], warnings }
   }
 
   for (const field of REQUIRED_STRING_FIELDS) {
     if (typeof manifest[field] !== 'string' || manifest[field].trim() === '') {
-      errors.push(`${field} 必须是非空字符串`)
+      errors.push(`${field} must be a non-empty string`)
     }
   }
 
   if (manifest.id && !/^[a-z][a-z0-9-]*$/.test(manifest.id)) {
-    errors.push('id 必须以小写字母开头，且只能包含小写字母、数字和连字符')
+    errors.push('id must start with a lowercase letter and contain only lowercase letters, digits, and hyphens')
   }
   if (manifest.version && !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version)) {
-    errors.push('version 必须使用语义化版本，例如 1.0.0 或 1.0.0-beta.1')
+    errors.push('version must follow SemVer format, e.g. 1.0.0 or 1.0.0-beta.1')
   }
   const hasKeyword = typeof manifest.keyword === 'string' && manifest.keyword.trim() !== ''
   const hasKeywords = Array.isArray(manifest.keywords) &&
     manifest.keywords.length > 0 && manifest.keywords.every((item) => typeof item === 'string' && item.trim() !== '')
   if (!hasKeyword && !hasKeywords) {
-    warnings.push('未配置 keyword 或 keywords，插件仍可加载，但不利于在主面板中搜索')
+    warnings.push('Neither keyword nor keywords is configured; the plugin still loads, but search discoverability is reduced')
   }
 
   for (const field of ['entry', 'icon']) {
     const value = manifest[field]
     const target = resolveSafePluginPath(pluginDir, value)
     if (!target) {
-      errors.push(`${field} 必须是插件目录内的安全相对路径`)
+      errors.push(`${field} must be a safe relative path within the plugin directory`)
       continue
     }
     if (!existsSync(target) || !statSync(target).isFile()) {
-      errors.push(`${field} 指向的文件不存在：${value}`)
+      errors.push(`${field} target file does not exist: ${value}`)
     }
   }
 
   if (!manifest.window || typeof manifest.window !== 'object' || Array.isArray(manifest.window)) {
-    errors.push('window 必须是对象')
+    errors.push('window must be an object')
   } else {
     const window = manifest.window
     for (const field of ['width', 'height']) {
       if (!Number.isInteger(window[field]) || window[field] <= 0) {
-        errors.push(`window.${field} 必须是正整数`)
+        errors.push(`window.${field} must be a positive integer`)
       }
     }
     for (const field of ['minWidth', 'minHeight']) {
       if (window[field] !== undefined && (!Number.isInteger(window[field]) || window[field] < 0)) {
-        errors.push(`window.${field} 必须是非负整数`)
+        errors.push(`window.${field} must be a non-negative integer`)
       }
     }
-    if (window.minWidth > window.width) errors.push('window.minWidth 不能大于 window.width')
-    if (window.minHeight > window.height) errors.push('window.minHeight 不能大于 window.height')
-    if (typeof window.resizable !== 'boolean') errors.push('window.resizable 必须是布尔值')
-    if (typeof window.singleInstance !== 'boolean') errors.push('window.singleInstance 必须是布尔值')
+    if (window.minWidth > window.width) errors.push('window.minWidth must not exceed window.width')
+    if (window.minHeight > window.height) errors.push('window.minHeight must not exceed window.height')
+    if (typeof window.resizable !== 'boolean') errors.push('window.resizable must be a boolean')
+    if (typeof window.singleInstance !== 'boolean') errors.push('window.singleInstance must be a boolean')
     if (window.controls !== undefined) {
       if (!window.controls || typeof window.controls !== 'object' || Array.isArray(window.controls)) {
-        errors.push('window.controls 必须是对象')
+        errors.push('window.controls must be an object')
       } else {
         for (const field of ['minimize', 'maximize']) {
           if (typeof window.controls[field] !== 'boolean') {
-            errors.push(`window.controls.${field} 必须是布尔值`)
+            errors.push(`window.controls.${field} must be a boolean`)
           }
         }
       }
@@ -673,21 +673,21 @@ function validateDirectory(input) {
   }
 
   if (manifest.requireAdmin !== undefined && typeof manifest.requireAdmin !== 'boolean') {
-    errors.push('requireAdmin 必须是布尔值')
+    errors.push('requireAdmin must be a boolean')
   }
   validateTargets(manifest, pluginDir, errors, warnings)
   if (manifest.commonLibs !== undefined &&
       (!Array.isArray(manifest.commonLibs) || manifest.commonLibs.some((item) => typeof item !== 'string' || !item))) {
-    errors.push('commonLibs 必须是非空字符串数组')
+    errors.push('commonLibs must be an array of non-empty strings')
   }
   if (manifest.dllloader !== undefined) {
     const dllPath = resolveSafePluginPath(pluginDir, manifest.dllloader)
     if (!dllPath || typeof manifest.dllloader !== 'string' || !manifest.dllloader.toLowerCase().endsWith('.dll')) {
-      errors.push('dllloader 必须是插件目录内的 .dll 相对路径')
+      errors.push('dllloader must be a .dll relative path within the plugin directory')
     } else if (!existsSync(dllPath)) {
-      warnings.push(`尚未生成 DLL：${manifest.dllloader}（打包和真实加载前必须存在）`)
+      warnings.push(`DLL has not been built yet: ${manifest.dllloader} (must exist before packaging or loading)`)
     } else if (!statSync(dllPath).isFile()) {
-      errors.push('dllloader 必须指向插件目录内的普通文件')
+      errors.push('dllloader must point to a regular file within the plugin directory')
     }
   }
 
@@ -695,10 +695,10 @@ function validateDirectory(input) {
   if (entryPath && existsSync(entryPath) && statSync(entryPath).isFile()) {
     const html = readFileSync(entryPath, 'utf8')
     if (!html.includes('ztools://web/sdk/ztools-api.js')) {
-      errors.push('入口 HTML 必须引入 ztools://web/sdk/ztools-api.js')
+      errors.push('Entry HTML must include ztools://web/sdk/ztools-api.js')
     }
     if (!html.includes('ztools://web/sdk/plugin-sdk.js')) {
-      warnings.push('未引入 plugin-sdk.js；生命周期、主题和拖拽等高层能力不可用')
+      warnings.push('plugin-sdk.js is not included; high-level lifecycle, theme, and drag-and-drop capabilities will be unavailable')
     }
   }
 
@@ -712,17 +712,17 @@ function validateDirectoryTargets(input) {
   const warnings = []
 
   if (!existsSync(manifestPath)) {
-    return { input, errors: [`缺少 ${manifestPath}`], warnings }
+    return { input, errors: [`Missing ${manifestPath}`], warnings }
   }
 
   let manifest
   try {
     manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
   } catch (error) {
-    return { input, errors: [`plugin.json 不是有效 JSON：${error.message}`], warnings }
+    return { input, errors: [`plugin.json is not valid JSON: ${error.message}`], warnings }
   }
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
-    return { input, errors: ['plugin.json 根节点必须是对象'], warnings }
+    return { input, errors: ['plugin.json root must be an object'], warnings }
   }
 
   validateTargets(manifest, pluginDir, errors, warnings)
@@ -733,7 +733,7 @@ const args = process.argv.slice(2)
 const targetsOnly = args[0] === '--targets-only'
 const inputs = targetsOnly ? args.slice(1) : args
 if (inputs.length === 0) {
-  console.error('用法：node scripts/validate-plugin.mjs [--targets-only] <插件目录> [...]')
+  console.error('Usage: node scripts/validate-plugin.mjs [--targets-only] <plugin-dir> [...]')
   process.exit(2)
 }
 

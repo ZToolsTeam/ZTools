@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
 import { ReferenceZipCompressionService } from '../../src/main/services/reference-zip-compression-service.js'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 import { ReferenceZipService } from '../../src/main/services/reference-zip-service.js'
 import type { PathSaveResult } from '../../src/main/platform/path-access.js'
 import type { CallerIdentity } from '../../src/contracts/capabilities.js'
@@ -50,7 +50,7 @@ test('unknown or late-canceled save is never reported as successful ZIP output',
   await assert.rejects(g.service.compress({ fileGrantIds: [first], saveGrantId: output }, caller, controller.signal), { code: 'FILE_WRITE_OUTCOME_UNKNOWN' })
 })
 test('public ZIP compression sends FileRef/SaveRef IDs, level zero and AbortSignal', async () => {
-  const source = ['fs-reference', 'zip'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join(String.fromCharCode(10))
+  const source = loadCefIpcSources(['api/fs-reference', 'api/zip'])
   const Constructor = vm.runInNewContext(source + String.fromCharCode(10) + 'ZipAPI', { window: { __ztoolsElectron: { contractVersion: 2, transport: { methods: { zip_compress() {} }, cancellations: { zip_compress() {} } } } }, TextEncoder }) as new (dll: unknown, transport: unknown) => { compress(options: unknown): Promise<boolean> }
   let response = { success: true, status: 'committed', fileCount: 1, sourceCount: 1, size: 100 }; const calls: unknown[][] = [], signal = new AbortController().signal
   const api = new Constructor({}, { supportsAbortSignal: true, call: async (...args: unknown[]) => { calls.push(args); return response } })

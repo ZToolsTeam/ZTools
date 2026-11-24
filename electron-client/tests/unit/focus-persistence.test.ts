@@ -6,16 +6,19 @@ import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { FocusService } from '../../src/main/services/focus-service.js'
 import { HudService } from '../../src/main/services/hud-service.js'
+import { getLocaleSetting, setLocale } from '../../src/main/i18n/index.js'
 import { validateMethodParams } from '../../src/contracts/method-params.js'
 import { toPublicError } from '../../src/contracts/errors.js'
 
 function fixture() {
+  const previousLocale = getLocaleSetting()
+  setLocale('zh-CN')
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'focus-persistent-')), dbPath = path.join(directory, 'focus.sqlite')
   let now = Date.now()
   const notices: string[] = [], hudMessages: string[] = [], instances: FocusService[] = []
   const hud = new HudService({ onShow: payload => { hudMessages.push(payload.message) } })
   const open = () => { const s = new FocusService({ dbPath, now: () => now, hudService: hud, onNotification: (_title, body) => { notices.push(body) } }); instances.push(s); return s }
-  return { dbPath, open, notices, hudMessages, add: (ms: number) => { now += ms }, close: () => { for (const s of instances) s.stop(); hud.stop(); fs.rmSync(directory, { recursive: true, force: true }) } }
+  return { dbPath, open, notices, hudMessages, add: (ms: number) => { now += ms }, close: () => { for (const s of instances) s.stop(); hud.stop(); fs.rmSync(directory, { recursive: true, force: true }); setLocale(previousLocale, 'zh-CN') } }
 }
 
 test('旧分类默认时长和生成标题也遵守恢复契约；非法值不覆盖已保存状态', () => {

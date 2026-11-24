@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 const id = 's'.repeat(43), ref = { grantId: id, kind: 'file', displayName: 'history.sqlite', operations: ['read'] }
 function fixture(version = 2) {
   const methods = { sqlite_read_browser_snapshot() {} }
-  const source = ['fs-reference', 'sqlite-reference'].map(name => fs.readFileSync('../frontend/public/js/cef-ipc/src/api/' + name + '.js', 'utf8').replace(/^export .+$/mg, '')).join(String.fromCharCode(10))
+  const source = loadCefIpcSources(['api/fs-reference', 'api/sqlite-reference'])
   const Constructor = vm.runInNewContext(source + String.fromCharCode(10) + 'ReferenceSQLiteAPI', { window: { __ztoolsElectron: { contractVersion: version, transport: { methods, cancellations: methods } } }, TextEncoder }) as new (transport: unknown) => { readBrowserSnapshot(ref: unknown, options: unknown): Promise<{ columns: string[]; rows: unknown[][]; truncated: boolean }> }
   const calls: { method: string; params: unknown; options: unknown }[] = []
   let response: unknown = { success: true, columns: ['url', 'title'], rows: [['https://example.test', null]], truncated: false, sqliteVersion: '3.49.1' }

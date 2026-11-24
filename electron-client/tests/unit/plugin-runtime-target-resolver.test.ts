@@ -104,7 +104,7 @@ test('allows the current Windows Electron ia32 runtime to read legacy manifests 
 test('rejects a targetless manifest on macOS with an actionable NOT_SUPPORTED error', () => {
   assert.throws(
     () => resolvePluginRuntimeTarget({ entry: 'index.html' }, macArm64),
-    (error: any) => error?.code === errorCodes.notSupported && /未声明 targets/.test(error.message)
+    (error: any) => error?.code === errorCodes.notSupported && /does not declare targets/.test(error.message)
   )
 })
 
@@ -123,11 +123,11 @@ test('rejects unsupported ia32 Mac runtime identities and target declarations', 
   const macIa32: PluginRuntimeIdentity = { platform: 'darwin', runtime: 'electron', arch: 'ia32' }
   assert.throws(
     () => resolvePluginRuntimeTarget(manifest([target('mac-ia32', 'macos', 'ia32')]), macArm64),
-    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /macOS Electron 目标不支持 ia32/.test(error.message)
+    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /macOS Electron target does not support ia32/.test(error.message)
   )
   assert.throws(
     () => resolvePluginRuntimeTarget(manifest([target('mac-x64', 'macos', 'x64')]), macIa32),
-    (error: any) => error?.code === errorCodes.notSupported && /不支持 ia32 进程架构/.test(error.message)
+    (error: any) => error?.code === errorCodes.notSupported && /does not support ia32 process architecture/.test(error.message)
   )
 })
 
@@ -138,11 +138,11 @@ test('selects minSdkContractVersion 2 on the current host and supports version i
 
   assert.throws(
     () => resolvePluginRuntimeTarget(packageManifest, macArm64, { sdkContractVersion: 1 }),
-    (error: any) => error?.code === errorCodes.notSupported && /要求 SDK 契约版本 2/.test(error.message)
+    (error: any) => error?.code === errorCodes.notSupported && /requires SDK contract version 2/.test(error.message)
   )
   assert.throws(
     () => resolvePluginRuntimeTarget(packageManifest, macArm64, { sdkContractVersion: 1 }),
-    (error: any) => error?.code === errorCodes.notSupported && /要求 SDK 契约版本 2/.test(error.message)
+    (error: any) => error?.code === errorCodes.notSupported && /requires SDK contract version 2/.test(error.message)
   )
   assert.equal(
     resolvePluginRuntimeTarget(packageManifest, macArm64).target?.id,
@@ -211,7 +211,7 @@ test('allows arch=any only for a JavaScript-only target', () => {
       manifest(targets, [component('native', 'mac-js', 'any')]),
       macArm64
     ),
-    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /不能是 any/.test(error.message)
+    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /cannot be "any"/.test(error.message)
   )
 })
 
@@ -327,7 +327,7 @@ test('binds ia32 Windows PE dependencies to an explicitly identified NativeHost3
       manifest([windowsX64Target], [unknownAbiDependency, nativeHost32Dll]),
       windowsX64
     ),
-    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /arch 必须与 target/.test(error.message)
+    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /arch must exactly match target/.test(error.message)
   )
 
   assert.throws(
@@ -335,7 +335,7 @@ test('binds ia32 Windows PE dependencies to an explicitly identified NativeHost3
       manifest([windowsX64Target], [{ ...mediaService, entry: 'lib/MediaService.node' }, nativeHost32Dll]),
       windowsX64
     ),
-    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /使用 windows-pe\/v1 时必须是 \.dll/.test(error.message)
+    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /must end with \.dll when using windows-pe\/v1/.test(error.message)
   )
 
   const unknownHost = { ...mediaService, hostComponentId: 'missing-host' }
@@ -344,7 +344,7 @@ test('binds ia32 Windows PE dependencies to an explicitly identified NativeHost3
       manifest([windowsX64Target], [unknownHost, nativeHost32Dll]),
       windowsX64
     ),
-    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /未知组件/.test(error.message)
+    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /unknown component/.test(error.message)
   )
 
   const chainedDependency = { ...mediaService, hostComponentId: 'media-service-chain' }
@@ -354,7 +354,7 @@ test('binds ia32 Windows PE dependencies to an explicitly identified NativeHost3
       manifest([windowsX64Target], [chainedDependency, dependencyChain, nativeHost32Dll]),
       windowsX64
     ),
-    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /必须引用 ia32 ztools-native-host\/v1 DLL/.test(error.message)
+    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /must reference an ia32 ztools-native-host\/v1 DLL/.test(error.message)
   )
 
   const otherTarget = target('win-ia32', 'windows', 'ia32')
@@ -371,7 +371,7 @@ test('binds ia32 Windows PE dependencies to an explicitly identified NativeHost3
       ]),
       windowsX64
     ),
-    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /同一 target/.test(error.message)
+    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /same target/.test(error.message)
   )
 })
 
@@ -396,7 +396,7 @@ test('rejects duplicate, unknown, and malformed target declarations', () => {
   const duplicateId = [target('same', 'macos', 'arm64'), target('same', 'macos', 'x64')]
   assert.throws(
     () => resolvePluginRuntimeTarget(manifest(duplicateId), macArm64),
-    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /重复/.test(error.message)
+    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /Duplicate/.test(error.message)
   )
   for (const malformed of [
     { id: 'bad', platform: 'linux', runtime: 'electron', arch: 'arm64' },
@@ -425,7 +425,7 @@ test('unknown manifest property errors do not echo untrusted keys', () => {
     (error: any) => {
       if (error?.code !== errorCodes.pluginPackageInvalid) return false
       const publicError = toPublicError(error)
-      return publicError.message === 'targets[0] 包含未知字段' &&
+      return publicError.message === 'targets[0] contains unknown fields' &&
         !publicError.message.includes('secret-token') &&
         !publicError.message.includes('forged')
     }
@@ -438,7 +438,7 @@ test('rejects ambiguous overlapping targets for the current runtime', () => {
       manifest([target('mac-universal', 'macos', 'universal'), target('mac-arm64', 'macos', 'arm64')]),
       macArm64
     ),
-    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /多个/.test(error.message)
+    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /multiple targets/.test(error.message)
   )
 })
 
@@ -451,7 +451,7 @@ test('rejects a DLL bound to a macOS target and active legacy DLL fields on macO
       ),
       macArm64
     ),
-    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /只能绑定 Windows/.test(error.message)
+    (error: any) => error?.code === errorCodes.pluginPackageInvalid && /only bind to a Windows target/.test(error.message)
   )
   for (const fields of [{ dllloader: 'lib/plugin.dll' }, { requireAdmin: true }]) {
     assert.throws(
@@ -475,14 +475,14 @@ test('rejects selected macOS native components and unbound common libraries unti
       manifest([macTarget], [component('mac-library', 'mac-native', 'arm64')]),
       macArm64
     ),
-    (error: any) => error?.code === errorCodes.notSupported && /只能安装纯 JavaScript/.test(error.message)
+    (error: any) => error?.code === errorCodes.notSupported && /pure JavaScript plugins only/.test(error.message)
   )
   assert.throws(
     () => resolvePluginRuntimeTarget(
       manifest([target('mac-js', 'macos', 'any')], [], { commonLibs: ['ffmpeg-1.0.0'] }),
       macArm64
     ),
-    (error: any) => error?.code === errorCodes.notSupported && /未绑定运行目标的 commonLibs/.test(error.message)
+    (error: any) => error?.code === errorCodes.notSupported && /target-unbound commonLibs/.test(error.message)
   )
   assert.equal(
     resolvePluginRuntimeTarget(

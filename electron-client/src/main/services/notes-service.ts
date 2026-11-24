@@ -157,7 +157,7 @@ export class NotesService {
    * 自动从 Markdown 首行提取标题（若未指定）
    */
   public extractTitleFromContent(content: string): string {
-    if (!content || typeof content !== 'string') return '无标题笔记'
+    if (!content || typeof content !== 'string') return 'Untitled Note'
     const lines = content.split('\n')
     for (const rawLine of lines) {
       const line = rawLine.trim().replace(/^#+\s*/, '')
@@ -165,7 +165,7 @@ export class NotesService {
         return line.slice(0, 60)
       }
     }
-    return '无标题笔记'
+    return 'Untitled Note'
   }
 
   /**
@@ -244,7 +244,7 @@ export class NotesService {
     const db = this.requireDb()
     const existing = this.getNote(id)
     if (!existing) {
-      throw new Error(`笔记不存在: ${id}`)
+      throw new Error(`Note not found: ${id}`)
     }
 
     const now = Date.now()
@@ -282,7 +282,7 @@ export class NotesService {
    */
   public togglePin(id: string): boolean {
     const note = this.getNote(id)
-    if (!note) throw new Error(`笔记不存在: ${id}`)
+    if (!note) throw new Error(`Note not found: ${id}`)
     const updated = this.updateNote(id, { pinned: !note.pinned })
     return updated.pinned
   }

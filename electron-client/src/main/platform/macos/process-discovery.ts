@@ -126,13 +126,13 @@ export class MacosProcessDiscoveryAdapter implements ProcessDiscoveryAdapter {
       if (signal.aborted) throw signal.reason ?? new Error('Process list cancelled')
       const processes = parseMacosProcessList(output)
       if (processes.length === 0) {
-        throw new ZToolsError(errorCodes.processError, 'macOS 进程列表没有有效记录')
+        throw new ZToolsError(errorCodes.processError, 'macOS process list returned no valid entries')
       }
       return processes
     } catch (error) {
       if (signal.aborted) throw error
       if (error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.processError, '读取 macOS 进程列表失败')
+      throw new ZToolsError(errorCodes.processError, 'Failed to read macOS process list')
     }
   }
 }

@@ -33,7 +33,7 @@ try {
 
 export function screenFailure(error: unknown): ZToolsError {
   if (error instanceof ZToolsError) return error
-  return new ZToolsError(errorCodes.screenError, '屏幕操作失败')
+  return new ZToolsError(errorCodes.screenError, 'Screen operation failed')
 }
 
 function powershellPath(): string {
@@ -46,7 +46,7 @@ export class WindowsScreenCaptureFallback implements ScreenCaptureFallback {
 
   capture(rect: ScreenRectangle, signal: AbortSignal): Promise<Buffer> {
     if (process.platform !== 'win32') {
-      throw new ZToolsError(errorCodes.notSupported, 'GDI 截图兜底仅支持 Windows')
+      throw new ZToolsError(errorCodes.notSupported, 'GDI screen capture fallback is only supported on Windows')
     }
     return new Promise((resolve, reject) => {
       const command = Buffer.from(SCREEN_CAPTURE_SCRIPT, 'utf16le').toString('base64')
@@ -77,17 +77,17 @@ export class WindowsScreenCaptureFallback implements ScreenCaptureFallback {
       }
       const onAbort = (): void => {
         child.kill()
-        finish(new ZToolsError(errorCodes.callerDestroyed, 'GDI 截图已取消'))
+        finish(new ZToolsError(errorCodes.callerDestroyed, 'GDI screen capture was cancelled'))
       }
       const timeout = setTimeout(() => {
         child.kill()
-        finish(new ZToolsError(errorCodes.requestTimeout, 'GDI 截图超时'))
+        finish(new ZToolsError(errorCodes.requestTimeout, 'GDI screen capture timed out'))
       }, FALLBACK_TIMEOUT_MS)
       child.stdout.on('data', (chunk: Buffer) => {
         outputBytes += chunk.byteLength
         if (outputBytes > MAX_CAPTURE_PNG_BYTES) {
           child.kill()
-          finish(new ZToolsError(errorCodes.fileTooLarge, 'GDI 截图 PNG 超过 16 MiB 上限'))
+          finish(new ZToolsError(errorCodes.fileTooLarge, 'GDI screen capture PNG exceeded 16 MiB limit'))
           return
         }
         output.push(chunk)
@@ -100,7 +100,7 @@ export class WindowsScreenCaptureFallback implements ScreenCaptureFallback {
       child.once('close', (code) => {
         if (code !== 0) {
           const detail = Buffer.concat(errors).toString('utf8').trim().slice(0, 512)
-          finish(new Error(detail || `Windows PowerShell 退出码 ${String(code)}`))
+          finish(new Error(detail || `Windows PowerShell exited with code ${String(code)}`))
           return
         }
         finish()

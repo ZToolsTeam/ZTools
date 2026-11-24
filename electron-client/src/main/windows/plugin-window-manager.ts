@@ -13,6 +13,8 @@ import { secureWebPreferences, suppressWindowsSystemMenu } from './main-window.j
 import type { PluginSessionProvider } from './plugin-session-manager.js'
 import type { WindowRegistry } from './window-registry.js'
 import { ensureBoundsVisible } from './display-bounds.js'
+import { getLocalizedPluginName } from '../i18n/plugin-i18n.js'
+import { getResolvedLocale, t, type SupportedLocale } from '../i18n/index.js'
 
 const MAX_PLUGIN_WINDOWS = 16
 const DEFAULT_WIDTH = 900
@@ -96,6 +98,7 @@ interface NormalizedWindowConfig {
 interface PluginWindowRecord {
   pluginId: string
   instanceId: string
+  manifest: PluginManifest
   window: BrowserWindow
   singleInstance: boolean
   state: PluginWindowState
@@ -123,6 +126,7 @@ interface PluginWindowRecord {
   suspendTimer: NodeJS.Timeout | undefined
   backgroundTimestamp?: number | undefined
   crashDetails?: PluginCrashDetails | undefined
+  pendingLocaleSync?: SupportedLocale | undefined
 }
 
 interface PersistedWindowState {
@@ -144,7 +148,7 @@ function optionalBoolean(
 ): boolean {
   if (value === undefined) return fallback
   if (typeof value !== 'boolean') {
-    throw new ZToolsError(errorCodes.pluginPackageInvalid, `${label} 必须是布尔值`)
+    throw new ZToolsError(errorCodes.pluginPackageInvalid, `${label} must be a boolean`)
   }
   return value
 }
@@ -157,7 +161,7 @@ function optionalDimension(
 ): number {
   if (value === undefined) return fallback
   if (!Number.isInteger(value) || (value as number) < minimum || (value as number) > MAX_WINDOW_DIMENSION) {
-    throw new ZToolsError(errorCodes.pluginPackageInvalid, `${label} 超出有效范围`)
+    throw new ZToolsError(errorCodes.pluginPackageInvalid, `${label} is out of valid range`)
   }
   return value as number
 }
@@ -165,12 +169,12 @@ function optionalDimension(
 export function normalizePluginWindowConfig(manifest: PluginManifest): NormalizedWindowConfig {
   const raw = manifest.window
   if (raw !== undefined && !isRecord(raw)) {
-    throw new ZToolsError(errorCodes.pluginPackageInvalid, 'window 必须是对象')
+    throw new ZToolsError(errorCodes.pluginPackageInvalid, 'window must be an object')
   }
   const windowConfig = raw ?? {}
   const rawControls = windowConfig.controls
   if (rawControls !== undefined && !isRecord(rawControls)) {
-    throw new ZToolsError(errorCodes.pluginPackageInvalid, 'window.controls 必须是对象')
+    throw new ZToolsError(errorCodes.pluginPackageInvalid, 'window.controls must be an object')
   }
   const controls = rawControls ?? {}
   const configValue = (key: string): unknown => Object.hasOwn(manifest, key) ? manifest[key] : windowConfig[key]
@@ -194,7 +198,7 @@ export function normalizePluginWindowConfig(manifest: PluginManifest): Normalize
 }
 
 function pluginTitle(manifest: PluginManifest): string {
-  const title = manifest.name.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 128)
+  const title = getLocalizedPluginName(manifest).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 128)
   return title || manifest.id
 }
 
@@ -216,6 +220,11 @@ function isPluginUrl(value: string, pluginId: string): boolean {
 function startupPayloadScript(payload: Record<string, unknown>): string {
   const serialized = JSON.stringify(JSON.stringify(payload))
   return `(()=>{const payload=JSON.parse(${serialized});window.__ztools_plugin_startup_payload=payload;window.dispatchEvent(new CustomEvent('ztools:startup-payload',{detail:payload}));})()`
+}
+
+function localeSyncScript(locale: SupportedLocale): string {
+  const serializedLocale = JSON.stringify(locale)
+  return `(()=>{window.__ztoolsLocale=${serializedLocale};if(document&&document.documentElement){document.documentElement.lang=${serializedLocale};}})()`
 }
 
 function runtimeIdentityScript(
@@ -350,7 +359,7 @@ export class PluginWindowManager {
       caller.pluginId?.toLowerCase() !== record.pluginId.toLowerCase() ||
       caller.pluginInstanceId !== record.instanceId
     ) {
-      throw new ZToolsError(errorCodes.permissionDenied, '生命周期确认不属于当前插件窗口')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Lifecycle acknowledgement does not belong to the current plugin window')
     }
     this.#resolveLifecycleAck(lifecycleId)
     return { success: true }
@@ -430,6 +439,40 @@ export class PluginWindowManager {
     return [...records.values()][0]?.crashDetails
   }
 
+  /**
+   * 语言热切换时同步刷新所有活跃独立插件窗口的标题与全局运行期 locale 变量（R5）。
+   * 若窗口正处于 creating 建窗加载态，登记 pendingLocaleSync，待 loadURL 完成后立即补同步。
+   */
+  refreshLocale(locale: SupportedLocale): void {
+    const syncScript = localeSyncScript(locale)
+    for (const records of this.#records.values()) {
+      for (const record of records.values()) {
+        if (record.state === 'destroyed' || record.state === 'closing' || record.window.isDestroyed()) {
+          continue
+        }
+        try {
+          if (typeof record.window.setTitle === 'function') {
+            record.window.setTitle(pluginTitle(record.manifest))
+          }
+        } catch (error) {
+          console.warn(`刷新插件窗口标题失败: pluginId=${record.pluginId}`, error)
+        }
+        if (record.state === 'creating') {
+          record.pendingLocaleSync = locale
+          continue
+        }
+        if (record.state === 'ready' && typeof record.window.webContents?.executeJavaScript === 'function') {
+          void Promise.resolve(record.window.webContents.executeJavaScript(syncScript)).catch((error: unknown) => {
+            if (record.state === 'destroyed' || record.state === 'closing' || record.window.isDestroyed()) {
+              return
+            }
+            console.warn(`刷新插件窗口运行期语言失败: pluginId=${record.pluginId}`, error)
+          })
+        }
+      }
+    }
+  }
+
   stop(): Promise<void> {
     this.#detachScreenListeners()
     if (this.#stopPromise) return this.#stopPromise
@@ -464,7 +507,9 @@ export class PluginWindowManager {
     this.#requireRunning()
     return this.options.manifests.withPluginManifest(params.pluginId, async (manifest, runtimeMetadata) => {
       if (this.options.state && !(await this.options.state.isEnabled(manifest.id, manifest.enabled !== false))) {
-        throw new ZToolsError(errorCodes.pluginNotFound, '插件已禁用')
+        throw new ZToolsError(errorCodes.pluginNotFound, t('pluginWindow.error.pluginDisabled'), {
+          i18nKey: 'pluginWindow.error.pluginDisabled'
+        })
       }
       const crashed = this.#findCrashed(params.pluginId)
       const previousCrashedId = crashed?.instanceId
@@ -474,14 +519,18 @@ export class PluginWindowManager {
       const reusable = this.#findReusable(params.pluginId)
       if (reusable) return this.#reuseAndMarkUsed(reusable, params.payload)
       if (this.#windowCount() + this.#reservedWindows >= MAX_PLUGIN_WINDOWS) {
-        throw new ZToolsError(errorCodes.pluginBusy, '插件窗口数量已达上限')
+        throw new ZToolsError(errorCodes.pluginBusy, t('pluginWindow.error.windowLimitReached'), {
+          i18nKey: 'pluginWindow.error.windowLimitReached'
+        })
       }
       this.#reservedWindows += 1
       let reserved = true
       try {
         this.#requireRunning()
         if (!manifest.entry) {
-          throw new ZToolsError(errorCodes.notSupported, '插件不包含可显示页面')
+          throw new ZToolsError(errorCodes.notSupported, t('pluginWindow.error.noDisplayPage'), {
+            i18nKey: 'pluginWindow.error.noDisplayPage'
+          })
         }
         const config = normalizePluginWindowConfig(manifest)
         const secondReusable = this.#findReusable(params.pluginId)
@@ -534,6 +583,14 @@ export class PluginWindowManager {
       initialHeight = safeBounds.height
     }
 
+    const baseWebPreferences = secureWebPreferences()
+    const initialLocale = getResolvedLocale()
+    const localeArg = `--ztools-locale=${initialLocale}`
+    const mergedAdditionalArgs = [
+      ...(baseWebPreferences.additionalArguments ?? []).filter((arg) => !arg.startsWith('--ztools-locale=')),
+      localeArg
+    ]
+
     const window = this.#createWindow({
       title: pluginTitle(manifest),
       width: initialWidth,
@@ -552,7 +609,8 @@ export class PluginWindowManager {
       autoHideMenuBar: true,
       backgroundColor: this.options.isDarkMode?.() === true ? '#141414' : '#ffffff',
       webPreferences: {
-        ...secureWebPreferences(),
+        ...baseWebPreferences,
+        additionalArguments: mergedAdditionalArgs,
         ...(pluginSession ? { session: pluginSession } : {})
       }
     })
@@ -561,6 +619,7 @@ export class PluginWindowManager {
     const record: PluginWindowRecord = {
       pluginId: manifest.id,
       instanceId,
+      manifest,
       window,
       singleInstance: config.singleInstance,
       state: 'creating',
@@ -617,7 +676,9 @@ export class PluginWindowManager {
       await window.loadURL(url)
       this.#requireRunning()
       if (window.isDestroyed()) {
-        throw new ZToolsError(errorCodes.callerDestroyed, '插件窗口在加载期间被关闭')
+        throw new ZToolsError(errorCodes.callerDestroyed, t('pluginWindow.error.closedDuringLoad'), {
+          i18nKey: 'pluginWindow.error.closedDuringLoad'
+        })
       }
       record.state = 'ready'
       record.opened = true
@@ -629,6 +690,19 @@ export class PluginWindowManager {
           this.options.isDarkMode?.() ?? false
         )
       )
+      // 建窗期间若发生语言切换，在 loadURL 完成后立即补同步最新标题与运行期 locale
+      const latestLocale = record.pendingLocaleSync ?? getResolvedLocale()
+      if (record.pendingLocaleSync !== undefined || latestLocale !== initialLocale) {
+        record.pendingLocaleSync = undefined
+        try {
+          if (typeof window.setTitle === 'function') {
+            window.setTitle(pluginTitle(manifest))
+          }
+        } catch (error) {
+          console.warn(`建窗后补刷插件窗口标题失败: pluginId=${manifest.id}`, error)
+        }
+        await window.webContents.executeJavaScript(localeSyncScript(latestLocale))
+      }
       if (payload) await this.#deliverPayload(record, payload)
       record.pendingOpenStatus = 'created'
       if (record.restoreMaximized && !window.isMaximized()) window.maximize()
@@ -653,7 +727,9 @@ export class PluginWindowManager {
       console.error(`插件窗口启动失败: pluginId=${manifest.id}, instanceId=${instanceId}`, error)
       this.#destroyRecord(record)
       if (error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.pluginPackageInvalid, '插件页面加载失败')
+      throw new ZToolsError(errorCodes.pluginPackageInvalid, t('pluginWindow.error.loadFailed'), {
+        i18nKey: 'pluginWindow.error.loadFailed'
+      })
     }
   }
 
@@ -668,7 +744,9 @@ export class PluginWindowManager {
     const window = record.window
     if (window.isDestroyed()) {
       this.#removeRecord(record)
-      throw new ZToolsError(errorCodes.callerDestroyed, '插件窗口已销毁')
+      throw new ZToolsError(errorCodes.callerDestroyed, t('pluginWindow.error.windowDestroyed'), {
+        i18nKey: 'pluginWindow.error.windowDestroyed'
+      })
     }
     if (payload) await this.#deliverPayload(record, payload)
     if (window.isMinimized()) window.restore()
@@ -712,7 +790,9 @@ export class PluginWindowManager {
     payload: Record<string, unknown>
   ): Promise<void> {
     if (record.window.isDestroyed()) {
-      throw new ZToolsError(errorCodes.callerDestroyed, '插件窗口已销毁')
+      throw new ZToolsError(errorCodes.callerDestroyed, t('pluginWindow.error.windowDestroyed'), {
+        i18nKey: 'pluginWindow.error.windowDestroyed'
+      })
     }
     await record.window.webContents.executeJavaScript(startupPayloadScript(payload))
     record.startupPayload = payload
@@ -1219,7 +1299,9 @@ export class PluginWindowManager {
 
   #requireRunning(): void {
     if (this.#stopping) {
-      throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+      throw new ZToolsError(errorCodes.appStopping, t('pluginWindow.error.appStopping'), {
+        i18nKey: 'pluginWindow.error.appStopping'
+      })
     }
   }
 }

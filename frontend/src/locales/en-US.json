@@ -22,9 +22,11 @@
     "moreActions": "More actions",
     "clear": "Clear",
     "saving": "Saving…",
+    "loading": "Loading…",
     "noDescription": "No description",
     "official": "Official",
-    "newContent": "New updates"
+    "newContent": "New updates",
+    "localUser": "Local User"
   },
   "nav": {
     "home": "Home",
@@ -85,8 +87,8 @@
     "degradedHint": "System index unavailable; results may be incomplete",
     "emptyDesc": "Try a file name, app name, or extension; or search in the Marketplace",
     "searchInMarket": "Search in Marketplace",
-    "resultsCount": "{count} results",
-    "resultsCountDegraded": "{count} results · System index unavailable",
+    "resultsCount": "{count} result | {count} results",
+    "resultsCountDegraded": "{count} result · System index unavailable | {count} results · System index unavailable",
     "footOpen": "Open",
     "footLocate": "Locate",
     "footPin": "Pin",
@@ -236,7 +238,7 @@
     "submitTooltip": "Submit a PR to the open-source extensions repository for official review",
     "viewAll": "All",
     "emptySearchTitle": "No plugins found for \"{keyword}\"",
-    "emptySearchDesc": "Try another keyword, or build your own in minutes with Declarative UI and submit a PR.",
+    "emptySearchDesc": "Try another keyword or browse all plugins.",
     "emptyTitle": "No plugins yet",
     "emptyDesc": "Check back later",
     "pluginRepo": "Plugin Repo",
@@ -249,7 +251,7 @@
     "jumpPrev5": "Previous 5 pages",
     "jumpNext5": "Next 5 pages",
     "categoryPreviewFailed": "Failed to load category previews",
-    "partialCategoryFailed": "{count} category(ies) failed to load, please retry later",
+    "partialCategoryFailed": "{count} category failed to load, please retry later | {count} categories failed to load, please retry later",
     "loadListFailed": "Failed to load list: {reason}",
     "favoriteAdded": "Added to favorites",
     "favoriteRemoved": "Removed from favorites",
@@ -273,7 +275,7 @@
       "revoked": "Removed",
       "uninstallHintPlatform": "This plugin is no longer supported on your OS and can be uninstalled",
       "uninstallHintRevoked": "This plugin has been removed; uninstalling is recommended",
-      "ratingTooltip": "Avg {score} / 5 ({count} ratings)",
+      "ratingTooltip": "Avg {score} / 5 ({count} rating) | Avg {score} / 5 ({count} ratings)",
       "ratingAria": "Rating {score}",
       "upgradeRequired": "Upgrade required",
       "viewSource": "View source repository",
@@ -288,7 +290,8 @@
       "installingToast": "Installing plugin, please wait...",
       "installComplete": "Plugin installed",
       "installPendingVerify": "Installation pending verification; refresh the plugin list"
-    }
+    },
+    "clearSearchAndBrowse": "Clear search and browse all plugins"
   },
   "details": {
     "loadFailed": "Load Failed",
@@ -308,7 +311,7 @@
     "updateSuccess": "Plugin updated",
     "installSuccess": "Plugin installed",
     "builtinCannotUninstall": "Built-in system plugins cannot be uninstalled",
-    "manageBundledInSettings": "Manage or restore bundled plugins in Settings",
+    "manageBundledInSettings": "Show or hide built-in plugins in Settings",
     "uninstallConfirmTitle": "Uninstall this plugin?",
     "uninstallConfirmContent": "Plugin files will be removed.",
     "installBeforeShortcut": "Please install this plugin before creating a shortcut",
@@ -318,12 +321,12 @@
       "bundledSizeTitle": "Bundled file size",
       "packageSizeTitle": "Package size",
       "bundled": "Bundled",
-      "installs": "{count} installs",
+      "installs": "{count} install | {count} installs",
       "ratingInsufficient": "Not enough ratings",
-      "ratingInsufficientTitle": "{count} rating(s); average shown at 3+",
+      "ratingInsufficientTitle": "{count} rating; average shown at 3+ | {count} ratings; average shown at 3+",
       "ratingNoneTitle": "No ratings yet",
       "ratingText": "{score} ({count})",
-      "ratingTitle": "Avg {score} / 5 ({count} ratings)",
+      "ratingTitle": "Avg {score} / 5 ({count} rating) | Avg {score} / 5 ({count} ratings)",
       "hasUpdate": "Update Available",
       "upgradeClient": "Client Upgrade Required"
     },
@@ -342,7 +345,8 @@
       "zoomAria": "View full size: {title}",
       "prev": "Previous",
       "next": "Next"
-    }
+    },
+    "usageExample": "Example"
   },
   "myPage": {
     "welcomeTitle": "Welcome to ZTools",
@@ -364,10 +368,10 @@
     "syncing": "Syncing...",
     "savePinnedFailed": "Failed to save pinned list: {reason}",
     "saveOrderFailed": "Failed to save order: {reason}",
-    "maxPinnedWarning": "You can pin up to {count} plugins",
+    "maxPinnedWarning": "You can pin up to {count} plugin | You can pin up to {count} plugins",
     "orderSaved": "Order saved",
-    "manageBundledTitle": "Manage Bundled Plugin in Settings",
-    "manageBundledContent": "Bundled plugins ship with ZTools. You can hide them in Settings and restore anytime. Open Settings?",
+    "manageBundledTitle": "Manage built-in plugins",
+    "manageBundledContent": "Choose which built-in plugins appear on Home and in search. Open Settings?",
     "goToSettings": "Open Settings",
     "confirmUninstallTitle": "Confirm Uninstall",
     "confirmUninstallContent": "Are you sure you want to uninstall this plugin?",
@@ -429,6 +433,8 @@
     "errorNotFoundTitle": "Extension Not Found",
     "errorNotFoundDesc": "Plugin \"{id}\" is not registered or failed to load.",
     "handoffRestoreFailed": "Failed to restore previous window state",
+    "handoffOversized": "Content is too large; the pop-out window will start fresh",
+    "handoffPartialLoss": "Some content could not be carried over to the pop-out window",
     "unsupportedPluginDesc": "\"{name}\" is not available on this OS",
     "dynamicLoadFailed": "Failed to load declarative plugin",
     "popoutFailed": "Unable to open pop-out window: {reason}"
@@ -465,6 +471,7 @@
     },
     "hotkeyConflict": {
       "globalWake": "Global Wake Hotkey",
+      "globalLauncher": "Show Quick Launcher Hotkey",
       "mouseWake": "Mouse Quick Wake",
       "systemHotkey": "System Shortcut",
       "unknownTrigger": "Unknown Trigger",
@@ -519,6 +526,8 @@
     "revoke": "Revoke",
     "loadGrantsFailed": "Failed to load authorized plugins, please retry.",
     "loadPermissionFailed": "Failed to read system permission, please retry.",
+    "readStatusFailed": "Unable to read current permission status. Please try again later.",
+    "watchStatusFailed": "Unable to watch permission changes. Please recheck manually.",
     "revokeUnconfirmed": "Host did not confirm revocation",
     "revokeFailed": "Revoke failed: {detail}, please retry.",
     "status": {
@@ -545,6 +554,7 @@
     "pluginNotInstalledReinstall": "{error}. Please download the plugin again"
   },
   "app": {
+    "windowTitle": "ZTools - Free, Clean Productivity Hub",
     "unknownPlugin": "Unknown Plugin",
     "webUpdateDone": "Web resources updated",
     "webUpdateFailed": "Web update failed",
@@ -651,6 +661,16 @@
           "default": "Hotkey service returned an error"
         }
       },
+      "launcherHotkey": {
+        "label": "Show Quick Launcher Hotkey",
+        "desc": "Dedicated global shortcut to toggle the floating launcher bar independently of the global wake hotkey",
+        "loadFailed": "Failed to load quick launcher hotkey",
+        "conflict": "Quick launcher hotkey conflicts with \"{names}\". Please choose another combination",
+        "saveFailed": "Failed to save quick launcher hotkey",
+        "syncFailed": "Failed to sync quick launcher hotkey: {reason}",
+        "saved": "Quick launcher hotkey saved",
+        "disabled": "Quick launcher hotkey disabled"
+      },
       "mouseWake": {
         "label": "Mouse Quick Wake",
         "desc": "Use middle click, side buttons, or right-button long press to toggle the window",
@@ -688,7 +708,8 @@
         "dashboard": "Workspace",
         "savedLauncher": "Switched default wake mode to Launcher",
         "savedDashboard": "Switched default wake mode to Workspace",
-        "saveFailed": "Failed to save preference: {reason}"
+        "saveFailed": "Failed to save preference: {reason}",
+        "invalid": "Invalid wake preference: {preference}"
       },
       "pluginLaunch": {
         "label": "Launch Shortcuts",
@@ -713,14 +734,12 @@
     },
     "bundled": {
       "title": "Bundled Plugins",
-      "desc": "Built-in tools shipped with ZTools. Uninstalling hides them from your list and search while keeping local data intact for restoration anytime.",
-      "uninstalledTag": "Uninstalled",
-      "restore": "Restore",
-      "uninstall": "Uninstall",
-      "restoredToast": "Restored \"{name}\"",
-      "uninstalledToast": "Uninstalled \"{name}\". You can restore it here anytime",
-      "restoreFailed": "Restore failed: {reason}",
-      "uninstallFailed": "Uninstall failed: {reason}"
+      "desc": "Choose which tools appear on Home and in search.",
+      "visibilityLabel": "Show {name} on Home and in search",
+      "shownToast": "{name} is now visible",
+      "hiddenToast": "{name} is now hidden",
+      "showFailed": "Couldn’t show this tool: {reason}",
+      "hideFailed": "Couldn’t hide this tool: {reason}"
     }
   },
   "declarative": {
@@ -768,7 +787,9 @@
       "unsupportedFormatMsg": "This tool only supports {extensions} files",
       "fileInputFailedTitle": "File Input Failed",
       "fileInputFailedDefault": "Unable to read the selected file or folder",
-      "partialAccepted": "Accepted {accepted} item(s), ignored {rejected} unsupported item(s)"
+      "acceptedCount": "{count} item | {count} items",
+      "rejectedCount": "{count} unsupported item | {count} unsupported items",
+      "partialAccepted": "Accepted {accepted}, ignored {rejected}"
     },
     "toast": {
       "copied": "Copied to clipboard",
@@ -828,6 +849,15 @@
       "inProgress": "Screen color picker is already active; finish or press Esc to cancel",
       "unsupported": "Interactive screen color picker is not supported in this client",
       "invalidColor": "Screen color picker did not return a valid color"
+    },
+    "markdown": {
+      "alertNote": "Note",
+      "alertTip": "Tip",
+      "alertImportant": "Important",
+      "alertWarning": "Warning",
+      "alertCaution": "Caution",
+      "taskDone": "Completed",
+      "taskTodo": "Incomplete"
     }
   },
   "eventMonitor": {
@@ -910,6 +940,7 @@
       "conflictOther": "Shortcut conflicts with another shortcut of {plugin}",
       "unavailable": "Global shortcut service is unavailable",
       "conflictGlobalWake": "Shortcut conflicts with the global wake hotkey",
+      "conflictGlobalLauncher": "Shortcut conflicts with the quick launcher hotkey",
       "conflictPlugins": "Shortcut conflicts with plugin \"{names}\"",
       "registerOccupied": "Failed to register shortcut; it may be occupied by another app",
       "setSuccess": "Shortcut set for \"{plugin} - {feature}\"",
@@ -935,7 +966,8 @@
       "unregisterFailed": "Failed to unregister shortcut",
       "unregisterFailedWithDetail": "Failed to unregister shortcut: {detail}",
       "clearSuccess": "Shortcut cleared",
-      "clearFailed": "Failed to clear shortcut"
+      "clearFailed": "Failed to clear shortcut",
+      "pluginOnly": "Launch shortcuts are only supported for plugins"
     }
   },
   "pluginCatalog": {
@@ -1016,7 +1048,7 @@
     "platformUnsupported": "No longer supported on this system",
     "cannotLaunchWithReason": "Cannot launch: {reason}",
     "cannotLaunchRevoked": "Cannot launch: this plugin has been removed and disabled (Reason: {reason})",
-    "bundledHiddenError": "This built-in plugin is uninstalled; restore it to use",
+    "bundledHiddenError": "This built-in plugin is hidden. Show it again in Settings.",
     "cannotLaunchNotPublic": "Cannot launch: this plugin is not available yet",
     "cannotLaunchUnsupportedPlatform": "Cannot launch: this plugin is not supported on this system",
     "cannotInstallRevoked": "Cannot install: this plugin has been removed and disabled (Reason: {reason})",
@@ -1026,9 +1058,8 @@
     "installFailed": "Installation failed",
     "bundledOnlyAction": "This action is only supported for built-in plugins",
     "operationInProgress": "Operation in progress",
-    "saveHideBundledFailed": "Failed to save built-in plugin uninstall state",
     "bundledOnlyRestore": "Only built-in plugins can be restored",
-    "saveRestoreBundledFailed": "Failed to save built-in plugin restore state"
+    "saveBundledVisibilityFailed": "Couldn’t save built-in plugin visibility"
   },
   "nativeApi": {
     "notInitialized": "ZTools API is not initialized",
@@ -1043,5 +1074,335 @@
     "payloadTooLarge": "Internal plugin payload exceeds the 64KB limit",
     "invalidPluginId": "pluginId must be a non-empty string",
     "desktopOnlyPrompt": "Built-in feature [{name}] is only available in the full desktop client"
+  },
+  "versionCompat": {
+    "appTooLow": "This plugin requires App >= {min} (current: {current}). Please update ZTools.",
+    "webTooLow": "This plugin requires Web >= {min} (current: {current}). Please check for updates."
+  },
+  "pluginInstall": {
+    "eventsUnavailable": "Client installation notifications are unavailable. Please restart ZTools and try again.",
+    "failed": "Installation failed",
+    "statusMismatch": "Installation status response does not match the current task",
+    "resultNotFound": "Client could not find the final result for this installation",
+    "statusUnknown": "Unable to confirm installation result. Please refresh the plugin list.",
+    "executionFailed": "Failed to start installation"
+  },
+  "pluginUpdate": {
+    "bundledWithClient": "Built-in plugins update with the client",
+    "startFailed": "Failed to start plugin update",
+    "notInCatalog": "Plugin not found in the marketplace catalog"
+  },
+  "pluginApi": {
+    "notInCatalog": "Plugin not found in the marketplace catalog",
+    "notInCatalogOrMissingDownload": "Plugin not found in the catalog or missing download info",
+    "platformUnsupported": "This plugin is not supported on the current platform"
+  },
+  "themeStore": {
+    "unsupportedMode": "Unsupported theme mode",
+    "themeNotSaved": "Failed to save theme preference",
+    "unsupportedAccent": "Unsupported accent theme",
+    "accentNotSaved": "Failed to save accent preference"
+  },
+  "categoriesStore": {
+    "loadFailed": "Failed to load categories"
+  },
+  "diagnostics": {
+    "title": "API Diagnostics",
+    "subtitle": "Inspect host APIs or run read-only checks on this device",
+    "modeNative": "Host Mode",
+    "modeBrowser": "Browser Mode",
+    "tabs": {
+      "ariaLabel": "Diagnostic categories",
+      "system": "System",
+      "power": "Power",
+      "filesystem": "File System",
+      "database": "Database",
+      "window": "Window",
+      "clipboardShell": "Clipboard / Shell",
+      "eventsTrigger": "Events / Triggers",
+      "advanced": "Advanced"
+    },
+    "platformHints": {
+      "windowsReadFailed": "Unable to confirm host platform; Windows-only manual diagnostics are disabled to avoid unintended file or registry changes.",
+      "windowsOnMacos": "These actions use Windows paths, registry, or ZToolsService and do not apply to macOS. File access diagnostics will be available after the authorized file contract is complete.",
+      "windowsUnknown": "Unable to confirm host platform; Windows-only manual diagnostics are disabled.",
+      "inputMacos": "macOS input injection is not yet integrated; key simulation is disabled.",
+      "inputWindowsElectron": "The current Electron host does not integrate a key-injection provider yet; key simulation is disabled.",
+      "inputUnavailable": "Key-injection provider is not enabled on this host; key simulation is disabled.",
+      "sysInfoUnavailable": "System info API is unavailable",
+      "hostPlatformApiUnavailable": "Host platform info API is unavailable",
+      "windowsOnlyNotExecuted": "{name} skipped: {reason}"
+    },
+    "batch": {
+      "title": "Read-only diagnostics",
+      "running": "Running checks...",
+      "start": "Run read-only checks",
+      "progress": "Progress",
+      "passCount": "Passed: {count}",
+      "failCount": "Failed: {count}",
+      "applicableCount": "Applicable: {count}",
+      "skipCount": "Skipped: {count}",
+      "invalidResponse": "The host returned an invalid result",
+      "nonNativeError": "Not in a native host environment; cannot run diagnostics",
+      "started": "Checking local host status",
+      "runtimeUnknown": "Unknown Host",
+      "platformDetected": "Detected platform: {platform} ({runtime})",
+      "platformReadFailed": "Unable to read host platform; Windows-only tests were skipped and excluded from pass/fail counts.",
+      "platformUnsupported": "Host platform \"{platform}\" has no platform-specific tests; Windows-only tests were skipped and excluded from pass/fail counts.",
+      "macosSkipNotice": "Windows-only tests do not apply on macOS and will be skipped without counting as failures.",
+      "skipReasonPlatformReadFailed": "Unable to confirm host platform; skipped",
+      "skipReasonPlatformMismatch": "Current platform is {platform}; not applicable",
+      "testingItem": "Testing: {name}...",
+      "summaryNoApplicable": "Diagnostics complete: no applicable tests, {skipped} skipped.",
+      "summaryResult": "Diagnostics complete: {score}% pass rate ({passed} passed, {failed} failed, {skipped} skipped).",
+      "httpReadFailed": "Read failed (HTTP {status})"
+    },
+    "batchTests": {
+      "sysGetInfo": "System Info (sys.getInfo)",
+      "sysResource": "Resource Monitor (CPU/Mem)",
+      "sysPathDesktop": "System Path - Desktop (sys.getPath)",
+      "sysPathDocuments": "System Path - Documents (sys.getPath)",
+      "sysPathTemp": "System Path - Temp (sys.getPath)",
+      "fsCwd": "Current Directory (fs.getCurrentDirectory)",
+      "winBounds": "Window Bounds (win.getBounds)",
+      "screenDisplays": "Displays (screen.getAllDisplays)",
+      "screenCursor": "Cursor Position (screen.getCursorScreenPoint)",
+      "processList": "Process List (process.list)",
+      "pluginList": "Local Plugins (plugin.getList)",
+      "dllList": "DLL Plugins (dllplugin.list)",
+      "protocolRead": "Protocol Read (protocol.readText)",
+      "results": {
+        "readSuccess": "Read succeeded ({bytes} byte) | Read succeeded ({bytes} bytes)",
+        "captureSuccess": "Capture succeeded ({bytes} byte) | Capture succeeded ({bytes} bytes)",
+        "marketListSuccess": "Loaded {count} plugin ({total} total) | Loaded {count} plugins ({total} total)",
+        "protocolReadSuccess": "Protocol read succeeded ({bytes} byte) | Protocol read succeeded ({bytes} bytes)"
+      }
+    },
+    "logs": {
+      "title": "Live Logs",
+      "clear": "Clear",
+      "empty": "No logs yet",
+      "ready": "Diagnostics ready. Select an action on the left or run batch diagnostics.",
+      "nonNativeWarn": "Warning: Not running in host environment; native APIs are unavailable",
+      "globalHotkeyTriggered": "[Global] Hotkey triggered: {id} ({keys})"
+    },
+    "system": {
+      "infoCardTitle": "System Info (sys)",
+      "getInfoBtn": "Get System Info",
+      "sendNotifyBtn": "Send Notification",
+      "cpuMemBtn": "CPU / Memory",
+      "pathCardTitle": "System Paths (sys.getPath)",
+      "getPathBtn": "Get Path",
+      "getInfoSuccess": "System info fetched",
+      "getPathSuccess": "Path ({type}): {path}",
+      "testNotifyTitle": "Test Notification",
+      "testNotifyBody": "This is a test notification from Diagnostics",
+      "notifySent": "Notification sent",
+      "cpuMemLog": "CPU: {cpu}%, Memory: {mem}%"
+    },
+    "power": {
+      "warningAlert": "Some actions execute immediately. Test with caution.",
+      "safeCardTitle": "Safe Actions",
+      "lockBtn": "Lock Screen",
+      "sleepBtn": "Sleep",
+      "dangerCardTitle": "Dangerous Actions (Confirmation Required)",
+      "hibernateBtn": "Hibernate",
+      "logoutBtn": "Sign Out",
+      "restartBtn": "Restart",
+      "shutdownBtn": "Shut Down",
+      "dangerConfirmTitle": "Confirm Dangerous Action",
+      "dangerConfirmContent": "Are you sure you want to execute {action}? This may cause data loss!",
+      "commandSent": "{action} command sent"
+    },
+    "fs": {
+      "cardTitle": "File Operations (fs)",
+      "pathAddon": "Path",
+      "readBtn": "Read",
+      "checkExistsBtn": "Check Exists",
+      "deleteBtn": "Delete",
+      "writeCardTitle": "Write File",
+      "writeBtn": "Write to Path Above",
+      "dirCardTitle": "Directory Operations",
+      "listDirBtn": "List Current Directory",
+      "mkDirBtn": "Create Test Directory",
+      "emptyContent": "(empty)",
+      "opRead": "Read file",
+      "opWrite": "Write file",
+      "opCheckExists": "Check file existence",
+      "opDelete": "Delete file",
+      "opListDir": "List directory",
+      "opMkDir": "Create test directory",
+      "readSuccess": "Read file succeeded ({bytes} byte) | Read file succeeded ({bytes} bytes)",
+      "writeSuccess": "Write file succeeded: {path}",
+      "existsResult": "File exists: {exists}",
+      "deleteConfirmTitle": "Confirm Delete",
+      "deleteConfirmContent": "Are you sure you want to delete {path}?",
+      "deleteSuccess": "Deleted file: {path}",
+      "listDirSuccess": "Listed directory: {dir} ({count} item) | Listed directory: {dir} ({count} items)",
+      "mkDirSuccess": "Created directory: {dir}"
+    },
+    "db": {
+      "cardTitle": "Storage Test (db)",
+      "keyAddon": "Key",
+      "valueAddon": "Value",
+      "setBtn": "Write",
+      "getBtn": "Read",
+      "deleteBtn": "Delete",
+      "allBtn": "All Docs",
+      "secureSetBtn": "Encrypted Write",
+      "secureGetBtn": "Encrypted Read",
+      "opSuccess": "Database operation {op} succeeded"
+    },
+    "win": {
+      "cardTitle": "Window Operations (win)",
+      "minBtn": "Minimize",
+      "maxBtn": "Maximize",
+      "restoreBtn": "Restore",
+      "topBtn": "Always on Top",
+      "untopBtn": "Disable Top",
+      "devtoolsBtn": "DevTools",
+      "getBoundsBtn": "Get Bounds",
+      "widthAddon": "Width",
+      "heightAddon": "Height",
+      "setSizeBtn": "Set Size",
+      "opacityLabel": "Opacity",
+      "applyBtn": "Apply",
+      "dialogCardTitle": "Dialogs (dialog)",
+      "openFileBtn": "Open File",
+      "openMultiBtn": "Open Multiple",
+      "saveFileBtn": "Save File",
+      "selectFolderBtn": "Select Folder",
+      "boundsLog": "Window bounds: {bounds}",
+      "actionLog": "Window action executed: {action}",
+      "dialogOpenTitle": "Select File",
+      "dialogAllFiles": "All Files",
+      "dialogOpenMultiTitle": "Select Multiple Files",
+      "dialogSaveTitle": "Save File",
+      "dialogFolderTitle": "Select Folder",
+      "dialogResultLog": "Dialog result: {result}"
+    },
+    "clipboard": {
+      "cardTitle": "Clipboard (clipboard)",
+      "placeholder": "Text to write to clipboard",
+      "writeTextBtn": "Write Text",
+      "readTextBtn": "Read Text",
+      "readImageBtn": "Read Image",
+      "readFilesBtn": "Read Files",
+      "clearBtn": "Clear",
+      "apiUnavailable": "Clipboard API is unavailable",
+      "textLog": "Clipboard text: {text}",
+      "imageLog": "Clipboard image: {status}",
+      "hasImage": "Image data present",
+      "noImage": "No image",
+      "filesLog": "Clipboard files: {files}",
+      "opSuccess": "Clipboard operation {op} succeeded"
+    },
+    "shell": {
+      "cardTitle": "Shell Operations (shell)",
+      "urlAddon": "URL",
+      "openExternalBtn": "Open External URL",
+      "cmdAddon": "Command",
+      "execBtn": "Run Command",
+      "beepBtn": "Beep",
+      "apiUnavailable": "Shell API is unavailable",
+      "externalOpened": "Opened external URL: {url}",
+      "execResult": "Command output: {result}"
+    },
+    "events": {
+      "cardTitle": "Events System (events)",
+      "nameAddon": "Event",
+      "dataPlaceholder": "Event payload (JSON)",
+      "emitBtn": "Emit Event",
+      "onBtn": "Start Listening",
+      "offBtn": "Stop Listening",
+      "fileDropBtn": "Listen File Drop (10s)",
+      "apiUnavailable": "Events API is unavailable",
+      "emitted": "Event emitted: {name}",
+      "received": "Event received {name}: {data}",
+      "listening": "Listening to event: {name}",
+      "stopped": "Stopped listening to event: {name}",
+      "fileDropped": "Files dropped: {files}",
+      "fileDropStarted": "File drop listener started (auto-stops after 10s)",
+      "fileDropClosed": "File drop listener stopped"
+    },
+    "trigger": {
+      "cardTitle": "Triggers (trigger)",
+      "hotkeyAddon": "Hotkey",
+      "hotkeyPlaceholder": "e.g. Ctrl+Alt+T",
+      "registerBtn": "Register Hotkey",
+      "listBtn": "List Triggers",
+      "clearBtn": "Clear All",
+      "alreadyRegistered": "Hotkey {hotkey} is already registered (ID: {id}); skipped",
+      "registered": "Hotkey registered: {result}",
+      "listLog": "Triggers ({count}): {list}",
+      "cleared": "Cleared all triggers"
+    },
+    "protocol": {
+      "cardTitle": "Protocol Read (ztools://)",
+      "pathAddon": "Path",
+      "urlBtn": "Build URL",
+      "readTextBtn": "Read Text",
+      "readBlobBtn": "Read Blob",
+      "opName": "Local file protocol test",
+      "urlLog": "Protocol URL: {url}",
+      "readTextLog": "Protocol read text succeeded: {preview}...",
+      "readBlobLog": "Protocol read Blob succeeded: {size} byte, type: {type} | Protocol read Blob succeeded: {size} bytes, type: {type}"
+    },
+    "privileged": {
+      "cardTitle": "Privileged Service (privileged)",
+      "systemAlert": "Executes via ZToolsService (System privilege)",
+      "regPathAddon": "Registry Path",
+      "regNameAddon": "Name",
+      "regValAddon": "Value",
+      "regWrite64Btn": "Write 64-bit",
+      "regWrite32Btn": "Write 32-bit",
+      "regDelete64Btn": "Delete 64-bit",
+      "regDelete32Btn": "Delete 32-bit",
+      "fileAddon": "File",
+      "fileWriteBtn": "Privileged Write",
+      "restartExplorerBtn": "Restart Explorer",
+      "opName": "Privileged service test",
+      "restartConfirmTitle": "Warning",
+      "restartConfirmContent": "Are you sure you want to restart Windows Explorer? The taskbar will briefly flicker.",
+      "restartSent": "Restart Explorer command sent",
+      "actionResult": "Privileged action {action} result: {result}"
+    },
+    "screen": {
+      "cardTitle": "Screen & Input (screen)",
+      "captureBtn": "Capture",
+      "displaysBtn": "List Displays",
+      "cursorBtn": "Cursor Pos",
+      "keyPlaceholder": "Key",
+      "simulateKeyBtn": "Simulate Key",
+      "captureLog": "Capture succeeded (Base64 length: {length})",
+      "displaysLog": "Displays: {displays}",
+      "cursorLog": "Cursor position: {pos}",
+      "simulateKeyLog": "Simulated key press: {key}"
+    },
+    "network": {
+      "cardTitle": "Network & Process (network / process)",
+      "urlAddon": "URL",
+      "sendHttpBtn": "Send HTTP Request",
+      "getProcessesBtn": "List Processes",
+      "httpSuccess": "HTTP request succeeded: {status}",
+      "processListLog": "Processes fetched: {count}"
+    },
+    "dll": {
+      "cardTitle": "DLL Plugin Call (dllplugin)",
+      "pluginAddon": "Plugin",
+      "funcAddon": "Function",
+      "paramsPlaceholder": "Parameters (JSON)",
+      "callBtn": "Call DLL Function",
+      "listBtn": "List DLL Plugins",
+      "callSuccess": "DLL plugin call succeeded",
+      "listLog": "DLL plugins: {list}"
+    }
+  },
+  "bundledPlugins": {
+    "errors": {
+      "notBundled": "Not a bundled plugin: {pluginId}",
+      "invalidResourcePath": "Invalid plugin resource path: {path}",
+      "loadResourceFailed": "Failed to load bundled plugin resource [{pluginId}/{path}]: HTTP {status}"
+    }
   }
 }

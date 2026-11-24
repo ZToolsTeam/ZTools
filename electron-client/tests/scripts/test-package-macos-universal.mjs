@@ -13,7 +13,8 @@ import {
   macApplicationIconPath,
   main,
   stageMacUniversal,
-  verifyPackagedIcon
+  verifyPackagedIcon,
+  writeMacLocalizationResources
 } from '../../scripts/package-macos-universal.mjs'
 
 // 最小 ICNS 夹具：魔数 icns + 长度，足以通过格式检查
@@ -225,11 +226,12 @@ test('configures the locked Universal target and skips a second lipo of classic-
   assert.equal(options.appVersion, '1.1.7')
   assert.equal(options.buildVersion, '1171')
   assert.equal(options.extendInfo.CFBundleDevelopmentRegion, 'en')
-  assert.deepEqual(options.extendInfo.CFBundleLocalizations, ['en', 'zh_CN'])
+  assert.deepEqual(options.extendInfo.CFBundleLocalizations, ['en', 'zh-Hans'])
   assert.deepEqual(options.extendInfo.CFBundleURLTypes, [
     { CFBundleURLName: 'ZTools plugin open', CFBundleURLSchemes: ['ztools'] }
   ])
-  assert.match(options.extendInfo.NSAppleEventsUsageDescription, /控制其他应用/)
+  assert.match(options.extendInfo.NSAppleEventsUsageDescription, /control other applications/)
+  assert.doesNotMatch(options.extendInfo.NSAppleEventsUsageDescription, /[\u4e00-\u9fff]/)
   assert.deepEqual(options.asar, { unpack: '**/{.**,**}/**/*.node', unpackDir: '{**/node_modules/exiftool-vendored.*,**/node_modules/onnxruntime-web}' })
   // 公式识别用 onnxruntime-web：只带 Node 入口与 wasm 运行时，其它构建变体与已内联的依赖不打包
   const ignored = file => options.ignore.some(pattern => pattern.test(file))
@@ -389,6 +391,8 @@ test('writes the versioned read-only runtime target marker only after the final 
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(resourcesPath, 'ztools-bundle-versions.json'), 'utf8')), {
       schemaVersion: 1, appVersion: '1.1.7.1', shortVersion: '1.1.7', buildVersion: '1171', nativeHostMode: 'disabled'
     })
+    assert.equal(fs.existsSync(path.join(resourcesPath, 'en.lproj', 'InfoPlist.strings')), true)
+    assert.equal(fs.existsSync(path.join(resourcesPath, 'zh-Hans.lproj', 'InfoPlist.strings')), true)
     assert.equal(result.nativeHostMode, 'disabled')
     if (process.platform !== 'win32') {
       assert.equal(fs.statSync(result.runtimeTargetManifestPath).mode & 0o222, 0)
@@ -588,4 +592,39 @@ test('打 asar 前把包内 package.json 版本改回四段式完整版本，打
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+// ── macOS 本地化资源 (.lproj) ───────────────────────────────────────────
+
+test('writeMacLocalizationResources 生成 en.lproj 与 zh-Hans.lproj 且含 CFBundleDisplayName 与对应语言说明', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-mac-lproj-'))
+  try {
+    const bundle = path.join(root, 'ZTools.app')
+    const resources = path.join(bundle, 'Contents', 'Resources')
+    fs.mkdirSync(resources, { recursive: true })
+
+    const written = writeMacLocalizationResources(fs, bundle)
+    assert.equal(written.length, 2)
+
+    const enPath = path.join(resources, 'en.lproj', 'InfoPlist.strings')
+    const zhPath = path.join(resources, 'zh-Hans.lproj', 'InfoPlist.strings')
+    assert.equal(fs.existsSync(enPath), true)
+    assert.equal(fs.existsSync(zhPath), true)
+
+    const enStrings = fs.readFileSync(enPath, 'utf8')
+    const zhStrings = fs.readFileSync(zhPath, 'utf8')
+
+    assert.equal(enStrings.includes('CFBundleDisplayName = "ZTools";'), true)
+    assert.equal(zhStrings.includes('CFBundleDisplayName = "ZTools";'), true)
+    assert.match(enStrings, /"NSAppleEventsUsageDescription"\s*=\s*"ZTools needs to control other applications/)
+    assert.doesNotMatch(enStrings, /[\u4e00-\u9fff]/)
+    assert.match(zhStrings, /"NSAppleEventsUsageDescription"\s*=\s*"ZTools 需要控制其他应用/)
+
+    // 破坏性校验：拒绝相对路径及缺失 Contents/Resources 目录的无效 bundle
+    assert.throws(() => writeMacLocalizationResources(fs, 'relative/ZTools.app'), /absolute application bundle path/)
+    assert.throws(() => writeMacLocalizationResources(fs, path.join(root, 'Missing.app')))
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 

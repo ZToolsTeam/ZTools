@@ -232,6 +232,17 @@ export default function MemoCommand() {
         if (await commit({ type: 'delete', expected: memo }))
             await showToast(Toast.Style.Success, t('deletedMemoToast'));
     };
+    const togglePin = async (memo) => {
+        const nextPinned = !memo.pinned;
+        const ok = await commit({
+            type: 'update',
+            expected: memo,
+            updates: { pinned: nextPinned },
+            touchUpdateTime: false
+        });
+        if (ok)
+            await showToast(Toast.Style.Success, nextPinned ? t('pinnedMemoToast') : t('unpinnedMemoToast'));
+    };
     // 复制失败（内容为空、剪贴板被占用）如实提示，不显示「已复制」
     const copyText = async (text, emptyMessage, successTitle) => {
         try {
@@ -241,6 +252,19 @@ export default function MemoCommand() {
         }
         catch (err) {
             await showToast(Toast.Style.Failure, t('copyFailedTitle'), err instanceof Error ? err.message : String(err));
+            return;
+        }
+        await showToast(Toast.Style.Success, successTitle);
+    };
+    // 直接粘贴正文回前台；空内容或宿主失败时如实提示
+    const pasteText = async (text, emptyMessage, successTitle) => {
+        try {
+            if (!text)
+                throw new Error(emptyMessage);
+            await Clipboard.paste(text);
+        }
+        catch (err) {
+            await showToast(Toast.Style.Failure, t('pasteFailedTitle'), err instanceof Error ? err.message : String(err));
             return;
         }
         await showToast(Toast.Style.Success, successTitle);
@@ -255,11 +279,16 @@ export default function MemoCommand() {
             id: item.id,
             title: item.title,
             subtitle: item.tag || undefined,
-            icon: Icon.Document,
-            accessories: item.updateTime > 0 ? [{ text: formatListDate(item.updateTime) }] : [],
+            icon: item.pinned ? Icon.Pin : Icon.Document,
+            accessories: [
+                ...(item.pinned ? [{ tag: t('pinnedTag') }] : []),
+                ...(item.updateTime > 0 ? [{ text: formatListDate(item.updateTime) }] : [])
+            ],
             detail: List.Item.Detail({ markdown: item.content || t('emptyContentMarkdown') }),
             actions: ActionPanel({ title: item.title }, [
                 Action({ title: t('copyContentAction'), icon: Icon.Clipboard, onAction: () => copyText(item.content, t('noContentError'), t('copiedContentToast')) }),
+                Action({ title: t('pasteContentAction'), icon: Icon.ArrowRight, shortcut: { modifiers: ['ctrl'], key: 'return' }, onAction: () => pasteText(item.content, t('noContentError'), t('pastedContentToast')) }),
+                Action({ title: item.pinned ? t('unpinMemoAction') : t('pinMemoAction'), icon: Icon.Pin, onAction: () => togglePin(item) }),
                 Action({ title: t('editMemoAction'), icon: Icon.Pencil, onAction: () => openEdit(item) }),
                 // 「新建便签」只放在 List 级：客户端会以「全局操作」附在每条便签的动作后面，这里不再重复
                 Action({ title: t('copyTitleAction'), icon: Icon.Clipboard, onAction: () => copyText(item.title, t('noTitleError'), t('copiedTitleToast')) }),

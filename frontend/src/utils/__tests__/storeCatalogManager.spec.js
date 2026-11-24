@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { StoreCatalogManager } from '@/utils/storeCatalogManager'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
+import { getCurrentLocale, setI18nLocale } from '@/i18n'
 
 function asMac() {
   vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)')
@@ -238,5 +239,62 @@ describe('StoreCatalogManager 搜索按匹配程度排序', () => {
     const m = manager()
     expect((await m.query({ keyword: '   ' })).total).toBe(catalog.length)
     expect(await m.query({ keyword: '不存在的插件' })).toMatchObject({ list: [], total: 0, lastPage: 1 })
+  })
+
+  it('[国际化] 字符串排序透传 getCurrentLocale() 给 localeCompare', async () => {
+    const originalLocale = getCurrentLocale()
+    const localeCompareSpy = vi.spyOn(String.prototype, 'localeCompare')
+    try {
+      setI18nLocale('en-US')
+      await manager().query({ sort: 'name', direction: 'asc' })
+      expect(localeCompareSpy.mock.calls.some((args) => args[1] === 'en-US')).toBe(true)
+
+      localeCompareSpy.mockClear()
+      setI18nLocale('zh-CN')
+      await manager().query({ sort: 'name', direction: 'asc' })
+      expect(localeCompareSpy.mock.calls.some((args) => args[1] === 'zh-CN')).toBe(true)
+    } finally {
+      localeCompareSpy.mockRestore()
+      setI18nLocale(originalLocale)
+    }
+  })
+
+  it('[国际化] sort="name" 按当前生效语言的本地化名称排序，热切换语言后重排生效', async () => {
+    const originalLocale = getCurrentLocale()
+    const bilingualCatalog = [
+      {
+        id: 'tool-a',
+        name: '竹子工具',
+        i18n: { 'en-US': { name: 'Alpha Tool' } },
+        author: 'alice',
+        is_official: false,
+        source_type: 'community'
+      },
+      {
+        id: 'tool-b',
+        name: '阿里工具',
+        i18n: { 'en-US': { name: 'Zebra Tool' } },
+        author: 'bob',
+        is_official: false,
+        source_type: 'community'
+      }
+    ]
+    const bilingualManager = new StoreCatalogManager({
+      apiBaseUrl: '',
+      getStaticCatalog: async () => ({ plugins: bilingualCatalog }),
+      getOfficialList: () => []
+    })
+
+    try {
+      setI18nLocale('zh-CN')
+      const zhRes = await bilingualManager.query({ sort: 'name', direction: 'asc' })
+      expect(zhRes.list.map((p) => p.pluginId)).toEqual(['tool-b', 'tool-a'])
+
+      setI18nLocale('en-US')
+      const enRes = await bilingualManager.query({ sort: 'name', direction: 'asc' })
+      expect(enRes.list.map((p) => p.pluginId)).toEqual(['tool-a', 'tool-b'])
+    } finally {
+      setI18nLocale(originalLocale)
+    }
   })
 })

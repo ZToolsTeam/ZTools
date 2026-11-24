@@ -16,7 +16,7 @@
     </template>
 
     <div class="update-body">
-      <div v-if="changelog" class="update-changelog" v-html="formattedChangelog"></div>
+      <div v-if="activeChangelog" class="update-changelog" v-html="formattedChangelog"></div>
       <p v-else class="update-empty">{{ t('modals.update.emptyChangelog') }}</p>
 
       <p v-if="!updating && updateType === 'app'" class="update-install-hint">
@@ -61,9 +61,11 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useUpdateStore } from '@/stores/update'
 import { useAppUpdate } from '@/composables/useAppUpdate'
 import { renderMarkdown } from '@/declarative/markdown'
-import { useAppI18n } from '@/i18n'
+import { resolveLocalizedChangelog } from '@/utils/updateChangelog'
+import { resolveErrorMessage } from '@/utils/errorMessage'
+import { getCurrentLocale, useAppI18n } from '@/i18n'
 
-const { t } = useAppI18n()
+const { t, locale } = useAppI18n()
 
 // 更新偏好存储 key（LevelDB，pluginId = __system__）
 const SKIP_VERSION_KEY = 'update:skipVersion'
@@ -75,6 +77,7 @@ const REMIND_LATER_MS = 3 * 24 * 60 * 60 * 1000
 const visible = ref(false)
 const version = ref('')
 const changelog = ref('')
+const changelogI18n = ref(null)
 const updateType = ref('web')
 const force = ref(false)
 const updating = ref(false)
@@ -83,8 +86,16 @@ const updateError = ref('')
 const operationId = ref('')
 const cancelling = ref(false)
 
+// 按当前响应式 locale 优先读取 changelogI18n，缺失时安全回退默认 changelog
+const activeChangelog = computed(() =>
+  resolveLocalizedChangelog(
+    { changelog: changelog.value, changelogI18n: changelogI18n.value },
+    locale.value
+  )
+)
+
 // 复用宿主的安全 Markdown 渲染器，兼容旧接口使用字面量 \n 的说明。
-const formattedChangelog = computed(() => renderMarkdown(String(changelog.value).replace(/\\n/g, '\n')))
+const formattedChangelog = computed(() => renderMarkdown(String(activeChangelog.value).replace(/\\n/g, '\n')))
 
 const updateStore = useUpdateStore()
 const { downloadAndInstall, silentWebUpdate, cancelUpdate } = useAppUpdate()
@@ -124,7 +135,7 @@ async function shouldShowNotification(ver, isForce) {
     if (remindResult?.value) {
       const remindAfter = Number(remindResult.value)
       if (remindAfter > 0 && Date.now() < remindAfter) {
-        console.log(`[update] 稍后提醒冷却中，${new Date(remindAfter).toLocaleString()} 后再提醒`)
+        console.log(`[update] 稍后提醒冷却中，${new Date(remindAfter).toLocaleString(getCurrentLocale())} 后再提醒`)
         return false
       }
     }
@@ -175,6 +186,7 @@ async function show(type, data) {
   actionRevision += 1
   version.value = ver
   changelog.value = data.changelog || ''
+  changelogI18n.value = data.changelogI18n || data.changelog_i18n || null
   force.value = isForce
   pendingType = type
   pendingData = data
@@ -221,7 +233,7 @@ function cancelInProgress() {
       pendingType = null
       pendingData = null
     } catch (error) {
-      updateError.value = error.message || t('modals.update.cancelFailed')
+      updateError.value = resolveErrorMessage(error, 'modals.update.cancelFailed')
     } finally {
       cancelling.value = false
     }
@@ -269,6 +281,7 @@ async function doUpdate() {
         versionInfo: {
           version: data.version,
           changelog: data.changelog,
+          changelogI18n: data.changelogI18n || data.changelog_i18n || null,
           fileSize: data.fileSize || 0,
           downloadUrl: data.downloadUrl || data.url || '',
           checksum: data.checksum || ''
@@ -288,12 +301,13 @@ async function doUpdate() {
       if (cancellationTask) await cancellationTask
       if (revision !== actionRevision) return
       updating.value = false
-      updateError.value = err.message || t('common.unknownError')
+      const errReason = resolveErrorMessage(err, 'common.unknownError')
+      updateError.value = errReason
       console.error('App 更新失败:', err)
       const cancelled = err.code === 'CANCELLED'
       window.__ztoolsToast?.(
         cancelled ? 'warning' : 'error',
-        cancelled ? t('modals.update.updateCancelled') : t('modals.update.updateFailed', { reason: err.message || t('common.unknownError') })
+        cancelled ? t('modals.update.updateCancelled') : t('modals.update.updateFailed', { reason: errReason })
       )
     }
   } else {
@@ -302,7 +316,7 @@ async function doUpdate() {
       if (!started) window.__ztoolsToast?.('error', t('modals.update.webIncomplete'))
     } catch (err) {
       console.error('Web 更新失败:', err)
-      window.__ztoolsToast?.('error', t('modals.update.webFailed', { reason: err.message || t('common.unknownError') }))
+      window.__ztoolsToast?.('error', t('modals.update.webFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }))
     }
   }
 }

@@ -168,7 +168,7 @@ function safeRuntimeTimestamp(now: () => number): number {
 }
 
 function redactDiagnosticText(value: string, source: string): string {
-  return value ? `${source} 原始错误详情已隐藏` : ''
+  return value ? `${source} raw error details hidden` : ''
 }
 
 function safeDiagnosticErrorCode(value: string): string {
@@ -185,7 +185,7 @@ export function sanitizeRuntimeDiagnosticDetails(
     },
     service: {
       ...details.service,
-      pipe: details.service.pipe ? '已配置' : '',
+      pipe: details.service.pipe ? 'configured' : '',
       lastError: details.service.lastError
         ? safeDiagnosticErrorCode(details.service.lastError)
         : '',

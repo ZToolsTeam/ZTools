@@ -7,6 +7,7 @@
  */
 
 import { reactive, readonly } from 'vue'
+import { t } from '@/i18n'
 
 export const WINDOW_MODES = Object.freeze({
   DASHBOARD: 'dashboard',
@@ -124,7 +125,7 @@ export function _resetWindowModeForTesting() {
  */
 export function setWakePreference(preference) {
   if (![WAKE_PREFERENCES.DASHBOARD, WAKE_PREFERENCES.LAUNCHER].includes(preference)) {
-    throw new Error(`无效的唤醒偏好设置: ${preference}`)
+    throw new Error(t('settings.shortcuts.wakePreference.invalid', { preference: String(preference) }))
   }
   state.wakePreference = preference
   writeStorage(STORAGE_KEY_PREFERENCE, preference)

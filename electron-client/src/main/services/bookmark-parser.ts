@@ -4,16 +4,16 @@ import type { BookmarkBrowser, BrowserBookmark } from '../../contracts/browser-b
 
 export interface BookmarkSource { browser: BookmarkBrowser; browserLabel: string; profile: string; file: string; format: 'chromium' | 'firefox' | 'safari' }
 export function record(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('书签结构损坏')
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Corrupt bookmark structure')
   return value as Record<string, unknown>
 }
 function name(value: unknown): string {
   if (value === undefined || value === null) return ''
-  if (typeof value !== 'string' || value.length > 4096) throw new Error('书签名称过长或类型无效')
+  if (typeof value !== 'string' || value.length > 4096) throw new Error('Bookmark title is too long or has an invalid type')
   return value
 }
 export function bookmarkItem(source: BookmarkSource, id: string, title: unknown, urlValue: unknown, trail: string[], date: number): BrowserBookmark | null {
-  if (typeof urlValue !== 'string' || urlValue.length > 16384) throw new Error('书签网址过长或类型无效')
+  if (typeof urlValue !== 'string' || urlValue.length > 16384) throw new Error('Bookmark URL is too long or has an invalid type')
   let url: URL
   try { url = new URL(urlValue) } catch { return null /* 浏览器中不可打开的地址不参与网页检索。 */ }
   if (!['http:', 'https:'].includes(url.protocol)) return null
@@ -35,7 +35,7 @@ export function parseBookmarkTree(value: unknown, source: BookmarkSource): Brows
   let nodes = 0
   while (pending.length) {
     const { node, trail, id, depth } = pending.pop()!
-    if (++nodes > 50000 || depth > 64) throw new Error('书签树超过 50000 个节点或 64 层')
+    if (++nodes > 50000 || depth > 64) throw new Error('Bookmark tree exceeds 50000 nodes or depth 64')
     const entry = record(node), type = safari ? entry.WebBookmarkType : entry.type
     if (type === 'url' || type === 'WebBookmarkTypeLeaf') {
       const title = safari ? record(entry.URIDictionary ?? {}).title : entry.name
@@ -45,20 +45,20 @@ export function parseBookmarkTree(value: unknown, source: BookmarkSource): Brows
     } else if (type === 'folder' || type === 'WebBookmarkTypeList') {
       // Safari 的空文件夹省略 Children；Chromium 则必须包含 children 数组。
       const children = safari ? entry.Children === undefined ? [] : entry.Children : entry.children
-      if (!Array.isArray(children)) throw new Error('书签文件夹内容无效')
+      if (!Array.isArray(children)) throw new Error('Invalid bookmark folder children')
       const label = name(safari ? entry.Title : entry.name), next = label ? [...trail, label] : trail
       for (let i = children.length - 1; i >= 0; i--) pending.push({ node: children[i], trail: next, id: `${id}.${i}`, depth: depth + 1 })
-    } else if (type !== 'WebBookmarkTypeProxy') throw new Error('不支持的书签节点类型')
-    if (result.length > 20000) throw new Error('单个配置超过 20000 条书签，未载入不完整结果')
+    } else if (type !== 'WebBookmarkTypeProxy') throw new Error('Unsupported bookmark node type')
+    if (result.length > 20000) throw new Error('Profile exceeds 20000 bookmarks; partial result skipped')
   }
   return result
 }
 
 export function parseFirefoxRows(rows: Record<string, unknown>[], source: BookmarkSource): BrowserBookmark[] {
-  if (rows.length > 20000) throw new Error('Firefox 超过 20000 个书签节点，未载入不完整结果')
+  if (rows.length > 20000) throw new Error('Firefox profile exceeds 20000 bookmark nodes; partial result skipped')
   const nodes = new Map<number, Record<string, unknown>>(), result: BrowserBookmark[] = []
   for (const row of rows) {
-    if (!Number.isSafeInteger(row.id) || !Number.isSafeInteger(row.parent) || nodes.has(Number(row.id))) throw new Error('Firefox 书签编号无效')
+    if (!Number.isSafeInteger(row.id) || !Number.isSafeInteger(row.parent) || nodes.has(Number(row.id))) throw new Error('Invalid Firefox bookmark ID')
     nodes.set(Number(row.id), row)
   }
   for (const row of rows) {
@@ -66,10 +66,10 @@ export function parseFirefoxRows(rows: Record<string, unknown>[], source: Bookma
     const trail: string[] = [], seen = new Set<number>([Number(row.id)])
     let parent = Number(row.parent)
     while (parent) {
-      if (seen.has(parent) || seen.size > 64) throw new Error('Firefox 书签父级循环或层级过深')
+      if (seen.has(parent) || seen.size > 64) throw new Error('Firefox bookmark parent cycle or excessive depth')
       seen.add(parent)
       const folder = nodes.get(parent)
-      if (!folder || folder.type !== 2) throw new Error('Firefox 书签父级缺失')
+      if (!folder || folder.type !== 2) throw new Error('Missing Firefox bookmark parent folder')
       trail.unshift(name(folder.title)); parent = Number(folder.parent)
     }
     const item = bookmarkItem(source, String(row.id), row.title, row.url, trail, Number(row.dateAdded) / 1000)

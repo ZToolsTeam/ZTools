@@ -6,7 +6,7 @@ import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import type { AnchoredPathObject, PathAccessAdapter, PathAccessRight, PathDirectoryEntry, PathSaveResult, PathMetadata, PathMutationResult, PathDirectoryCreateResult } from './path-access.js'
 import type { PathWriteJournal } from './path-write-journal.js'
 
-const failure = () => new ZToolsError(errorCodes.fileError, '原生文件访问未完成')
+const failure = () => new ZToolsError(errorCodes.fileError, 'Native file access did not complete')
 class NativeReplyError extends ZToolsError {}
 const u32 = (value: number): Buffer => { const data = Buffer.alloc(4); data.writeUInt32LE(value); return data }
 const u64 = (value: number | bigint): Buffer => { const data = Buffer.alloc(8); data.writeBigUInt64LE(BigInt(value)); return data }
@@ -131,7 +131,7 @@ export class NativePathAccessAdapter implements PathAccessAdapter {
       return { status: 'committed', bytesWritten: data.length }
     } catch (error) {
       if (!this.#dead && error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '保存结果未确认；不能保证输出未提交')
+      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Save outcome is unconfirmed; output commit cannot be ruled out')
     }
   }
 
@@ -231,7 +231,7 @@ export class NativePathAccessAdapter implements PathAccessAdapter {
       }
       if (journal && journalId) { try { await journal.interrupted(journalId) } catch { /* Keep the last durable intent/proof; never invent a successful cleanup. */ } }
       if (!this.#dead && error instanceof ZToolsError) throw error
-      if (commitStarted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '流式保存提交结果未确认；不能保证目标未改变')
+      if (commitStarted) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Streamed save commit outcome is unconfirmed; target modification cannot be ruled out')
       throw failure()
     } finally {
       this.#streams--
@@ -279,7 +279,7 @@ export class NativePathAccessAdapter implements PathAccessAdapter {
       return { status: 'committed', bytesWritten: result.readUInt32LE(1) }
     } catch (error) {
       if (!this.#dead && error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '复制结果未确认；不能保证输出未提交，源文件未删除')
+      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Copy outcome is unconfirmed; output commit cannot be ruled out while source remains intact')
     }
   }
 
@@ -301,7 +301,7 @@ export class NativePathAccessAdapter implements PathAccessAdapter {
       return { status: 'committed' }
     } catch (error) {
       if (!this.#dead && error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '回收结果未确认，请检查系统回收站与备份目录')
+      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Trash outcome is unconfirmed; inspect the system trash and backup directory')
     }
   }
 
@@ -313,7 +313,7 @@ export class NativePathAccessAdapter implements PathAccessAdapter {
       return { status: 'committed' }
     } catch (error) {
       if (!this.#dead && error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '改名结果未确认，请检查原名称和新名称，勿重复操作')
+      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Rename outcome is unconfirmed; inspect both original and new names before retrying')
     }
   }
 
@@ -326,7 +326,7 @@ export class NativePathAccessAdapter implements PathAccessAdapter {
       return { status: 'committed' }
     } catch (error) {
       if (!this.#dead && error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '删除结果未确认；不能保证目标未删除')
+      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Delete outcome is unconfirmed; target removal cannot be ruled out')
     }
   }
 
@@ -339,7 +339,7 @@ export class NativePathAccessAdapter implements PathAccessAdapter {
       return { status: 'committed' }
     } catch (error) {
       if (!this.#dead && error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '移动结果未确认；不能保证源或目标未改变')
+      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Move outcome is unconfirmed; source or target changes cannot be ruled out')
     }
   }
 
@@ -351,7 +351,7 @@ export class NativePathAccessAdapter implements PathAccessAdapter {
       return { status: result[0] === 1 ? 'created' : 'existing' }
     } catch (error) {
       if (!this.#dead && error instanceof ZToolsError) throw error
-      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '创建目录结果未确认；不能保证目录未创建')
+      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, 'Directory creation outcome is unconfirmed; directory creation cannot be ruled out')
     }
   }
 
@@ -494,12 +494,12 @@ export class NativePathAccessAdapter implements PathAccessAdapter {
           if (frame[4] === 0) {
             if (frame.length !== 6 || ![1, 2, 3, 4, 5, 6].includes(frame[5]!)) { pending.reject(failure()); throw failure() }
             const errors = {
-              1: [errorCodes.fileError, '原生文件访问被拒绝'],
-              2: [errorCodes.fileWriteOutcomeUnknown, '提交结果未确认；不能保证输出未提交'],
-              3: [errorCodes.fileAlreadyExists, '输出已存在，未覆盖'],
-              4: [errorCodes.fileTooLarge, '文件超过操作大小上限'],
-              5: [errorCodes.fileCrossDevice, '跨卷移动不受支持；源和目标未提交移动'],
-              6: [errorCodes.fileStagingRetained, '保存未提交；临时文件内容释放未确认，需恢复审计']
+              1: [errorCodes.fileError, 'Native file access denied'],
+              2: [errorCodes.fileWriteOutcomeUnknown, 'Commit outcome is unconfirmed; output commit cannot be ruled out'],
+              3: [errorCodes.fileAlreadyExists, 'Output target already exists and was not overwritten'],
+              4: [errorCodes.fileTooLarge, 'File exceeds operation size limit'],
+              5: [errorCodes.fileCrossDevice, 'Cross-volume move is not supported; source and target were not modified'],
+              6: [errorCodes.fileStagingRetained, 'Save was not committed; staging file cleanup is unconfirmed and requires recovery audit']
             } as const
             const [code, message] = errors[frame[5] as keyof typeof errors]
             pending.reject(new NativeReplyError(code, message))

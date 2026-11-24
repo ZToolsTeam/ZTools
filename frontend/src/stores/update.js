@@ -8,6 +8,7 @@ export const useUpdateStore = defineStore('update', () => {
   const versionInfo = ref({
     version: '',
     changelog: '',
+    changelogI18n: null,
     fileSize: 0,
     downloadUrl: '',
     checksum: ''
@@ -27,6 +28,7 @@ export const useUpdateStore = defineStore('update', () => {
     versionInfo.value = info.versionInfo || {
       version: '',
       changelog: '',
+      changelogI18n: null,
       fileSize: 0,
       downloadUrl: '',
       checksum: ''
@@ -44,6 +46,7 @@ export const useUpdateStore = defineStore('update', () => {
     versionInfo.value = {
       version: '',
       changelog: '',
+      changelogI18n: null,
       fileSize: 0,
       downloadUrl: '',
       checksum: ''

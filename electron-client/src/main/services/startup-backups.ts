@@ -14,7 +14,7 @@ export interface StartupBackup {
 function digest(value: Omit<StartupBackup, 'checksum'>) { return startupHash(JSON.stringify(value)) }
 const validId = (id: string) => /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(id)
 function validateBackup(value: unknown, id: string): StartupBackup {
-  if (!startupRecord(value)) throw new Error('启动项恢复记录格式无效')
+  if (!startupRecord(value)) throw new Error('Invalid startup recovery record format')
   const { checksum, ...body } = value
   if (value.version !== 1 || !['toggle', 'remove'].includes(String(value.kind)) || value.id !== id ||
       typeof value.createdAt !== 'string' || !Number.isFinite(Date.parse(value.createdAt)) ||
@@ -22,9 +22,9 @@ function validateBackup(value: unknown, id: string): StartupBackup {
       !['user-agent', 'system-agent', 'daemon'].includes(String(value.scope)) ||
       typeof value.beforeEnabled !== 'boolean' || typeof value.afterEnabled !== 'boolean' ||
       (value.originalOverride !== null && typeof value.originalOverride !== 'boolean') ||
-      digest(body as unknown as Omit<StartupBackup, 'checksum'>) !== checksum) throw new Error('启动项恢复记录损坏，停止恢复')
+      digest(body as unknown as Omit<StartupBackup, 'checksum'>) !== checksum) throw new Error('Startup recovery record is corrupted; restore aborted')
   const bytes = Buffer.from(value.original as string, 'base64')
-  if (bytes.length > 1024 * 1024 || bytes.toString('base64') !== value.original || startupHash(bytes) !== value.revision) throw new Error('启动配置备份校验失败')
+  if (bytes.length > 1024 * 1024 || bytes.toString('base64') !== value.original || startupHash(bytes) !== value.revision) throw new Error('Startup configuration backup checksum mismatch')
   return value as unknown as StartupBackup
 }
 
@@ -33,15 +33,15 @@ export class StartupBackupStore {
   async #prepare() {
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 })
     const info = await fs.lstat(this.directory)
-    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid!() || (info.mode & 0o077)) throw new Error('启动项备份目录权限不安全，未修改自启状态')
+    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid!() || (info.mode & 0o077)) throw new Error('Insecure startup backup directory permissions; autostart state not modified')
   }
   async load(id: string): Promise<StartupBackup> {
-    if (!validId(id)) throw new Error('启动项备份编号无效')
+    if (!validId(id)) throw new Error('Invalid startup backup ID')
     await this.#prepare()
     const handle = await fs.open(path.join(this.directory, id + '.json'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     try {
       const info = await handle.stat()
-      if (!info.isFile() || info.nlink !== 1 || info.uid !== process.getuid!() || (info.mode & 0o077) || info.size > 2 * 1024 * 1024) throw new Error('启动项备份文件不安全或过大')
+      if (!info.isFile() || info.nlink !== 1 || info.uid !== process.getuid!() || (info.mode & 0o077) || info.size > 2 * 1024 * 1024) throw new Error('Startup backup file is insecure or too large')
       const data = Buffer.alloc(2 * 1024 * 1024 + 1)
       let total = 0
       while (total < data.length) {
@@ -49,14 +49,14 @@ export class StartupBackupStore {
         if (!bytesRead) break
         total += bytesRead
       }
-      if (total > 2 * 1024 * 1024) throw new Error('启动项备份过大')
+      if (total > 2 * 1024 * 1024) throw new Error('Startup backup exceeds size limit')
       return validateBackup(JSON.parse(data.subarray(0, total).toString('utf8')), id)
     } finally { await handle.close() }
   }
   async list() {
     await this.#prepare()
     const names = (await fs.readdir(this.directory)).filter(name => name.endsWith('.json'))
-    if (names.length > 1024) throw new Error('启动项恢复记录超过 1024 条，请先归档')
+    if (names.length > 1024) throw new Error('More than 1024 startup recovery records exist; please archive older records')
     const result: Array<Pick<StartupBackup, 'id' | 'kind' | 'createdAt' | 'label' | 'beforeEnabled' | 'afterEnabled'>> = []
     for (const name of names) {
       const { id, kind, createdAt, label, beforeEnabled, afterEnabled } = await this.load(name.slice(0, -5))
@@ -66,7 +66,7 @@ export class StartupBackupStore {
   }
   /** 删除一条恢复记录（只用于确认系统状态没有被改动时撤销本次备份）；文件不存在视为已删除 */
   async discard(id: string): Promise<void> {
-    if (!validId(id)) throw new Error('启动项备份编号无效')
+    if (!validId(id)) throw new Error('Invalid startup backup ID')
     await this.#prepare()
     await fs.unlink(path.join(this.directory, id + '.json')).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
@@ -85,14 +85,14 @@ export class StartupBackupStore {
     const temporary = path.join(this.directory, body.id + '.tmp'), file = await fs.open(temporary, 'wx', 0o600)
     try {
       try { await file.writeFile(text); await file.sync() } finally { await file.close() }
-      if (await fs.readFile(temporary, 'utf8') !== text) throw new Error('启动项备份读回不一致，未修改自启状态')
+      if (await fs.readFile(temporary, 'utf8') !== text) throw new Error('Startup backup readback mismatch; autostart state not modified')
       // link 不覆盖已有目标；发布成功后才移除本次的临时文件。
       await fs.link(temporary, filename)
     } finally { await fs.unlink(temporary) }
     const directory = await fs.open(this.directory, constants.O_RDONLY | constants.O_NOFOLLOW)
     try { await directory.sync() } finally { await directory.close() }
     const saved = await this.load(body.id)
-    if (JSON.stringify(saved) !== text) throw new Error('启动项备份发布后校验失败，未修改自启状态')
+    if (JSON.stringify(saved) !== text) throw new Error('Startup backup post-publish verification failed; autostart state not modified')
     return saved
   }
 }

@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { KeyboardLockService, macInputLockPath } from '../../src/main/services/keyboard-lock-service.js'
+import { getLocaleSetting, setLocale } from '../../src/main/i18n/index.js'
 import { validateKeyboardLockRequest } from '../../src/contracts/keyboard-lock.js'
 import { validateMethodParams } from '../../src/contracts/method-params.js'
 import { canCall, type CallerIdentity } from '../../src/contracts/capabilities.js'
@@ -14,6 +15,8 @@ const start = { action: 'start', operationId: 'lock_1', durationSeconds: 5, lock
 const signal = () => new AbortController().signal
 const nativeFixture = { skip: process.platform === 'win32' }
 function fixture(body = '') {
+  const previousLocale = getLocaleSetting()
+  setLocale('zh-CN')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-input-lock-')), executable = path.join(root, 'helper')
   fs.writeFileSync(executable, `#!${process.execPath}\nconst fs=require('node:fs'); fs.writeFileSync(${JSON.stringify(path.join(root, 'pid'))},String(process.pid));
 const emit=(event,extra={})=>process.stdout.write(JSON.stringify({version:1,event,remainingSeconds:event==='unlocked'?0:5,blockedEvents:0,reason:event==='unlocked'?'manual':'',...extra})+'\\n');
@@ -21,7 +24,7 @@ ${body || "emit('locked'); process.stdin.on('data',bytes=>{if(bytes.includes('U'
 `, { mode: 0o755 })
   const service = new KeyboardLockService(executable, 'darwin')
   const request = (action: string, identity = caller) => service.handle({ action, operationId: 'lock_1' }, identity, signal())
-  return { root, executable, service, request, async close() { await service.stop(); fs.rmSync(root, { recursive: true, force: true }) } }
+  return { root, executable, service, request, async close() { await service.stop(); fs.rmSync(root, { recursive: true, force: true }); setLocale(previousLocale, 'zh-CN') } }
 }
 test('输入锁参数、能力与路径契约严格拒绝异常输入', () => {
   validateMethodParams('keyboard_lock', start); assert.equal(canCall('keyboard_lock', caller), true)

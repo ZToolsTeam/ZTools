@@ -1,3 +1,4 @@
+import { resolveSdkText } from './core/environment.js'
 /**
  * Client - 客户端门面
  * 组装所有模块，提供统一的 API 入口
@@ -17,6 +18,7 @@ const SDK2_REFERENCE_METHODS = Object.freeze([
   'network_http_upload', 'clipboard_read_files', 'filesystem_list_write_recovery', 'filesystem_inspect_write_recovery', 'sqlite_read_browser_snapshot', 'ocr_local_languages', 'ocr_recognize_reference', 'clipboard_read_text', 'image_get_info', 'zip_list', 'zip_test', 'screen_get_cursor_pos', 'screen_get_primary_display', 'screen_get_all_displays', 'screen_get_display_nearest', 'screen_get_display_matching'
 ])
 
+
 function useReferenceClientContract() {
   const host = typeof window !== 'undefined' ? window.__ztoolsElectron : null
   if (host?.contractVersion !== 2) return false
@@ -26,7 +28,12 @@ function useReferenceClientContract() {
   const hasOwnFunction = (bridge, method) => bridge && typeof bridge === 'object' && !Array.isArray(bridge) &&
     Object.prototype.hasOwnProperty.call(bridge, method) && typeof bridge[method] === 'function'
   if (!SDK2_REFERENCE_METHODS.every(method => hasOwnFunction(methods, method) && hasOwnFunction(cancellations, method))) {
-    const error = new Error('SDK合约2宿主缺少完整的逐方法调用与取消入口')
+    const error = new Error(
+      resolveSdkText(
+        'SDK合约2宿主缺少完整的逐方法调用与取消入口',
+        'SDK Contract 2 host is missing complete per-method call and cancellation bridges'
+      )
+    )
     error.code = 'NOT_SUPPORTED'
     throw error
   }

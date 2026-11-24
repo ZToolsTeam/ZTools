@@ -6,7 +6,7 @@ import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import type { UpdateCheckParams, UpdatePackageParams } from '../../contracts/method-params.js'
 import type { RuntimePaths } from '../runtime/runtime-paths.js'
 import type { WebResourceService } from './web-resource-service.js'
-import { t } from '../i18n/index.js'
+import { getResolvedLocale, t } from '../i18n/index.js'
 
 const MAX_UPDATE_BYTES = 2 * 1024 * 1024 * 1024
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
@@ -77,11 +77,27 @@ interface DownloadMetadata {
 export interface UpdateInfo {
   version: string
   changelog: string
+  changelogI18n?: Record<string, string>
   force: boolean
   fileSize: number
   downloadUrl: string
   checksum: string
   minAppVersion?: string
+}
+
+function normalizeChangelogI18n(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined
+  const out: Record<string, string> = {}
+  let count = 0
+  for (const [rawKey, rawVal] of Object.entries(value)) {
+    if (!Object.hasOwn(value, rawKey)) continue
+    const key = rawKey.trim()
+    if (!key || key === '__proto__' || key === 'constructor' || key === 'prototype') continue
+    if (typeof rawVal !== 'string') continue
+    out[key] = rawVal
+    count += 1
+  }
+  return count > 0 ? out : undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -113,7 +129,10 @@ function compareVersions(left: string, right: string): number {
 
 function normalizeVersion(value: string, label: string): string {
   if (!PRODUCT_VERSION_PATTERN.test(value)) {
-    throw new ZToolsError(errorCodes.dataCorrupt, label + '版本格式无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, t('update.invalidVersionFormat', { target: label }), {
+      i18nKey: 'update.invalidVersionFormat',
+      i18nParams: { target: label }
+    })
   }
   return value
 }
@@ -121,7 +140,10 @@ function normalizeVersion(value: string, label: string): string {
 function normalizeUpdate(value: unknown, label: string): UpdateInfo | null {
   if (value === null || value === undefined) return null
   if (!isRecord(value) || typeof value.version !== 'string') {
-    throw new ZToolsError(errorCodes.dataCorrupt, label + '更新响应无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, t('update.invalidTargetResponse', { target: label }), {
+      i18nKey: 'update.invalidTargetResponse',
+      i18nParams: { target: label }
+    })
   }
   const version = normalizeVersion(value.version, label)
   const downloadUrl = typeof value.downloadUrl === 'string'
@@ -132,13 +154,19 @@ function normalizeUpdate(value: unknown, label: string): UpdateInfo | null {
         ? value.download_url
         : ''
   if (!downloadUrl || !/^https?:\/\//i.test(downloadUrl)) {
-    throw new ZToolsError(errorCodes.dataCorrupt, label + '更新地址无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, t('update.invalidTargetUrl', { target: label }), {
+      i18nKey: 'update.invalidTargetUrl',
+      i18nParams: { target: label }
+    })
   }
   const rawFileSize = value.fileSize ?? value.file_size ?? 0
   const validFileSize = typeof rawFileSize === 'number' && Number.isSafeInteger(rawFileSize) &&
     rawFileSize >= 0 && rawFileSize <= MAX_UPDATE_BYTES
   if (!validFileSize && label !== 'App') {
-    throw new ZToolsError(errorCodes.dataCorrupt, label + '更新大小无效')
+    throw new ZToolsError(errorCodes.dataCorrupt, t('update.invalidTargetSize', { target: label }), {
+      i18nKey: 'update.invalidTargetSize',
+      i18nParams: { target: label }
+    })
   }
   const fileSize = validFileSize ? rawFileSize : 0
   const checksum = typeof value.checksum === 'string' ? value.checksum : ''
@@ -147,11 +175,18 @@ function normalizeUpdate(value: unknown, label: string): UpdateInfo | null {
   const minAppVersion = label === 'App' || rawMinAppVersion === undefined
     ? undefined
     : typeof rawMinAppVersion === 'string'
-      ? normalizeVersion(rawMinAppVersion, label + '最低宿主')
-      : (() => { throw new ZToolsError(errorCodes.dataCorrupt, label + '最低宿主版本无效') })()
+      ? normalizeVersion(rawMinAppVersion, t('update.target.minHost', { target: label }))
+      : (() => {
+        throw new ZToolsError(errorCodes.dataCorrupt, t('update.invalidMinHostVersion', { target: label }), {
+          i18nKey: 'update.invalidMinHostVersion',
+          i18nParams: { target: label }
+        })
+      })()
+  const changelogI18n = normalizeChangelogI18n(value.changelogI18n ?? value.changelog_i18n)
   return {
     version,
     changelog: typeof value.changelog === 'string' ? value.changelog : '',
+    ...(changelogI18n ? { changelogI18n } : {}),
     force: value.force === true,
     fileSize,
     downloadUrl,
@@ -314,6 +349,7 @@ function createUpdaterEnvironment(): NodeJS.ProcessEnv {
     environment.PATH = [path.join(systemRoot, 'System32'), systemRoot].join(path.delimiter)
     environment.ComSpec = path.join(systemRoot, 'System32', 'cmd.exe')
   }
+  environment.ZTOOLS_LOCALE = getResolvedLocale()
   return environment
 }
 
@@ -333,7 +369,9 @@ function runUpdaterAndWait(
     child.once('error', reject)
     child.once('close', (code, signal) => {
       if (code === null) {
-        reject(new Error(`更新器进程未返回退出码${signal ? `（${signal}）` : ''}`))
+        reject(new Error(signal
+          ? t('update.updaterNoExitCodeWithSignal', { signal })
+          : t('update.updaterNoExitCode')))
         return
       }
       resolve(code)
@@ -595,7 +633,7 @@ export class UpdateService {
   }> {
     requestSignal.throwIfAborted()
     const type = updateType(params)
-    const version = normalizeVersion(params.version, '更新')
+    const version = normalizeVersion(params.version, t('update.target.generic'))
     const currentVersion = type === 'web' ? this.#webVersion : this.#appVersion
     const targetLabel = type === 'web' ? 'Web' : 'App'
     if (compareVersions(version, currentVersion) <= 0) {
@@ -797,7 +835,7 @@ export class UpdateService {
   }> {
     signal.throwIfAborted()
     if (this.#appHandoffStarted) throw new ZToolsError(errorCodes.invalidRequest, t('update.appHandoffInProgress'))
-    const version = normalizeVersion(params.version, '更新')
+    const version = normalizeVersion(params.version, t('update.target.generic'))
     if (compareVersions(version, this.#appVersion) <= 0) {
       throw new ZToolsError(errorCodes.invalidRequest, t('update.installVersionNotNewer'))
     }
@@ -842,9 +880,10 @@ export class UpdateService {
       download.state = 'started'
       this.#appHandoffStarted = true
       await persistDownloadMetadata(download, 'started').catch(() => undefined)
+      const updaterLocaleArg = `--lang=${getResolvedLocale()}`
       const runDirectInstaller = () => this.#runUpdater(
         download.path,
-        ['/S', `/D=${this.#runtimePaths.installRoot}`, '--updated', '--need-cleanup'],
+        ['/S', `/D=${this.#runtimePaths.installRoot}`, '--updated', '--need-cleanup', updaterLocaleArg],
         path.dirname(download.path)
       )
       // Let the native updater resolve scope through the Unicode Win32 registry API.
@@ -857,7 +896,8 @@ export class UpdateService {
             '--source=' + download.path,
             '--target=' + this.#runtimePaths.installRoot,
             '--updated',
-            '--need-cleanup'
+            '--need-cleanup',
+            updaterLocaleArg
           ], maintenanceRoot)
         } catch (launchError) {
           const errnoCode =
@@ -908,13 +948,13 @@ export class UpdateService {
     if (this.#appHandoffStarted) {
       throw new ZToolsError(errorCodes.invalidRequest, t('update.webBlockedByAppHandoff'))
     }
-    const version = normalizeVersion(params.version, '更新')
+    const version = normalizeVersion(params.version, t('update.target.generic'))
     const requestedChecksum = normalizeChecksum(params.checksum)
     if (!requestedChecksum) {
       throw new ZToolsError(errorCodes.dataCorrupt, t('update.webMissingChecksum'))
     }
     if (params.minAppVersion !== undefined) {
-      const minimum = normalizeVersion(params.minAppVersion, 'Web 最低宿主')
+      const minimum = normalizeVersion(params.minAppVersion, t('update.target.minHost', { target: t('update.target.web') }))
       if (compareVersions(this.#appVersion, minimum) < 0) {
         throw new ZToolsError(errorCodes.notSupported, t('update.appVersionTooLow'))
       }

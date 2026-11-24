@@ -28,8 +28,8 @@ if($request.initialize) {
     $attributes=[System.IO.File]::GetAttributes($directory)
     if(($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Backup directory cannot be a link' }
     $owner=(Get-Acl -LiteralPath $directory).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-    # 只初始化当前用户的空目录；已有备份必须通过原有 ACL 校验，不替其背书。
-    if($owner -eq $allowed[0] -and [System.IO.Directory]::GetFileSystemEntries($directory).Length -eq 0) {
+    # Only initialize empty directories owned by trusted principals (current user / SYSTEM / Administrators); existing backups must pass existing ACL checks.
+    if($allowed -contains $owner -and [System.IO.Directory]::GetFileSystemEntries($directory).Length -eq 0) {
       [System.IO.Directory]::SetAccessControl($directory,$security)
     }
   }
@@ -49,7 +49,7 @@ async function assertPrivateWindowsPaths(paths: string[], initialize = false) {
   if (process.platform !== 'win32') return
   const executable = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   const result = await runEnvironmentCommand(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PRIVATE_PATHS_SCRIPT, 'utf16le').toString('base64')], JSON.stringify({ paths, initialize }), AbortSignal.timeout(15000))
-  if (result !== 'private') throw new Error('环境变量备份访问权限未确认')
+  if (result !== 'private') throw new Error('Environment backup access permissions could not be confirmed')
 }
 function checksum(record: Omit<EnvironmentBackup, 'checksum'>) { return createHash('sha256').update(JSON.stringify(record)).digest('hex') }
 function state(value: unknown): value is EnvironmentState {
@@ -61,33 +61,33 @@ export class EnvironmentBackupStore {
     if (process.platform === 'win32') await assertPrivateWindowsPaths([this.directory], true)
     else await fs.mkdir(this.directory, { recursive: true, mode: 0o700 })
     const stat = await fs.lstat(this.directory)
-    if (!stat.isDirectory() || stat.isSymbolicLink() || (process.getuid && stat.uid !== process.getuid()) || (process.platform !== 'win32' && (stat.mode & 0o077))) throw new Error('环境变量备份目录权限不安全，未修改配置')
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (process.getuid && stat.uid !== process.getuid()) || (process.platform !== 'win32' && (stat.mode & 0o077))) throw new Error('Environment backup directory permissions are insecure; configuration was not modified')
   }
   async load(id: string): Promise<EnvironmentBackup> {
     await this.#ensure()
-    if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('环境变量备份编号无效')
+    if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid environment backup ID')
     await assertPrivateWindowsPaths([this.directory, path.join(this.directory, `${id}.json`)])
     return this.#read(id)
   }
   async #read(id: string): Promise<EnvironmentBackup> {
-    if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('环境变量备份编号无效')
+    if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid environment backup ID')
     const handle = await fs.open(path.join(this.directory, `${id}.json`), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     try {
       const stat = await handle.stat()
-      if (!stat.isFile() || stat.nlink !== 1 || stat.size > 16 * 1024 * 1024 || (process.platform !== 'win32' && (stat.mode & 0o077))) throw new Error('环境变量备份不是受保护的普通文件')
+      if (!stat.isFile() || stat.nlink !== 1 || stat.size > 16 * 1024 * 1024 || (process.platform !== 'win32' && (stat.mode & 0o077))) throw new Error('Environment backup is not a protected regular file')
       const bytes = await handle.readFile()
-      if (bytes.length > 16 * 1024 * 1024) throw new Error('环境变量备份过大')
+      if (bytes.length > 16 * 1024 * 1024) throw new Error('Environment backup file is too large')
       const record: unknown = JSON.parse(bytes.toString('utf8'))
-      if (!environmentRecord(record) || record.version !== 1 || record.id !== id || !state(record.before) || !state(record.after) || record.source !== record.before.source || record.source !== record.after.source || record.before.location !== record.after.location || typeof record.summary !== 'string' || record.summary.length > 2048 || typeof record.createdAt !== 'string' || !Number.isFinite(Date.parse(record.createdAt)) || typeof record.checksum !== 'string') throw new Error('环境变量备份格式损坏，停止恢复')
+      if (!environmentRecord(record) || record.version !== 1 || record.id !== id || !state(record.before) || !state(record.after) || record.source !== record.before.source || record.source !== record.after.source || record.before.location !== record.after.location || typeof record.summary !== 'string' || record.summary.length > 2048 || typeof record.createdAt !== 'string' || !Number.isFinite(Date.parse(record.createdAt)) || typeof record.checksum !== 'string') throw new Error('Environment backup format is corrupted; restore aborted')
       const { checksum: saved, ...body } = record
-      if (checksum(body as Omit<EnvironmentBackup, 'checksum'>) !== saved) throw new Error('环境变量备份校验失败，停止恢复')
+      if (checksum(body as Omit<EnvironmentBackup, 'checksum'>) !== saved) throw new Error('Environment backup checksum verification failed; restore aborted')
       return record as unknown as EnvironmentBackup
     } finally { await handle.close() }
   }
   async list() {
     await this.#ensure()
     const names = (await fs.readdir(this.directory)).filter(name => name.endsWith('.json'))
-    if (names.length > 4096) throw new Error('环境变量备份数量超过限制，请先归档旧备份')
+    if (names.length > 4096) throw new Error('Environment backup count exceeds limit; archive old backups first')
     await assertPrivateWindowsPaths([this.directory, ...names.map(name => path.join(this.directory, name))])
     const records: Array<Pick<EnvironmentBackup, 'id' | 'source' | 'createdAt' | 'summary'> & { location: string }> = []
     for (const name of names) {
@@ -105,14 +105,14 @@ export class EnvironmentBackupStore {
     const handle = await fs.open(temporary, 'wx', 0o600)
     try { await handle.writeFile(contents, 'utf8'); await handle.sync() } finally { await handle.close() }
     const verify = await fs.open(temporary, constants.O_RDONLY | constants.O_NOFOLLOW)
-    try { if (await verify.readFile('utf8') !== contents) throw new Error('备份临时文件读回失败，未修改配置') } finally { await verify.close() }
+    try { if (await verify.readFile('utf8') !== contents) throw new Error('Backup temporary file read-back verification failed; configuration was not modified') } finally { await verify.close() }
     await fs.rename(temporary, final)
     if (process.platform !== 'win32') {
       const directory = await fs.open(this.directory, constants.O_RDONLY | constants.O_NOFOLLOW)
       try { await directory.sync() } finally { await directory.close() }
     }
     const saved = await this.load(backup.id)
-    if (environmentRevision(saved.before) !== environmentRevision(before) || environmentRevision(saved.after) !== environmentRevision(after)) throw new Error('环境变量备份读回不一致，未修改配置')
+    if (environmentRevision(saved.before) !== environmentRevision(before) || environmentRevision(saved.after) !== environmentRevision(after)) throw new Error('Environment backup read-back mismatch; configuration was not modified')
     return backup
   }
 }

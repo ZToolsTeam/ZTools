@@ -48,7 +48,19 @@
         "text diff",
         "patch",
         "unified diff"
+      ],
+      "screenshots": [
+        {
+          "file": "screenshots/en-US/01.png",
+          "title": "Main View"
+        }
       ]
     }
-  }
+  },
+  "screenshots": [
+    {
+      "path": "screenshots/01.png",
+      "title": "主界面"
+    }
+  ]
 }

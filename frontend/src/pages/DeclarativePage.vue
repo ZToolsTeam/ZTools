@@ -13,10 +13,26 @@
       }"
     >
       <!--
-        面包屑：插件名 / 子页面标题。返回入口只在底栏（「返回工作台 Esc」/「返回 Esc」），这里不再重复；
-        独立窗口的 Esc 提示也只在底栏显示一处。
+        面包屑：主窗口内嵌态展示「← 返回工作台 / 插件名 / 子页面标题」，强化主窗口子页心智，避免误点右上角系统关闭按钮；
+        独立窗口态只展示插件名 / 子页面标题，Esc 提示在底栏显示一处。
       -->
       <nav class="flex items-center gap-2 min-w-0" :aria-label="t('declarativePage.breadcrumbAria')" style="-webkit-app-region: no-drag">
+        <button
+          v-if="!effectiveIsPopout"
+          type="button"
+          class="declarative-header-back-btn flex items-center gap-1.5 px-2 py-1 -ml-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] transition-colors cursor-pointer flex-shrink-0 whitespace-nowrap"
+          :title="t('declarative.footer.backToWorkspaceTitle')"
+          data-decl-header-back
+          @click="goBack"
+        >
+          <ArrowLeftIcon class="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+          <span>{{ t('declarative.footer.backToWorkspace') }}</span>
+        </button>
+        <span
+          v-if="!effectiveIsPopout && headerPluginMeta"
+          class="text-[var(--rc-text-faint)] flex-shrink-0"
+          aria-hidden="true"
+        >/</span>
         <div v-if="headerPluginMeta" class="flex items-center gap-2 min-w-0">
           <RcSquircle :glyph="resolvePluginGlyph(headerPluginMeta.pluginId || headerPluginMeta.id || targetPluginId)" :fallback-glyph="resolveKeywordGlyph(getLocalizedPluginName(headerPluginMeta))" :size="22" />
           <span class="text-sm font-semibold text-[var(--rc-text-primary)] truncate" :title="headerPluginMeta.featureExplain || getLocalizedPluginName(headerPluginMeta)">{{ getLocalizedPluginName(headerPluginMeta) }}</span>
@@ -119,7 +135,7 @@
 </template>
 
 <script setup>
-import { ExternalLinkIcon, PinIcon, TriangleAlertIcon } from '@lucide/vue'
+import { ArrowLeftIcon, ExternalLinkIcon, PinIcon, TriangleAlertIcon } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getActivePinia } from 'pinia'
@@ -143,8 +159,9 @@ import { isHandoffId, requestPopoutWindow, takePopoutHandoff } from '@/declarati
 import { track } from '@edition'
 import { useAppI18n } from '@/i18n'
 import { getLocalizedPluginName } from '@/utils/pluginI18n'
+import { resolveErrorMessage } from '@/utils/errorMessage'
 
-const { t } = useAppI18n()
+const { t, locale } = useAppI18n()
 
 // 宿主窗口控制（弹出窗口调整尺寸、置顶），经 composable 访问，页面不直接依赖 api 层
 const nativeWin = useHostWindowApi()
@@ -170,7 +187,21 @@ const router = useRouter()
 const declarativeViewRef = ref(null)
 const dynamicPlugin = ref(null)
 const loadingDynamic = ref(false)
-const loadError = ref('')
+// 结构化记录加载异常，避免切语时固化旧语言的报错文案
+const loadErrorState = ref(null)
+const loadError = computed(() => {
+  void locale.value
+  const state = loadErrorState.value
+  if (!state) return ''
+  if (state.type === 'key') {
+    return state.params ? t(state.key, state.params) : t(state.key)
+  }
+  if (state.type === 'unsupported') {
+    const meta = getOfficialPlugin(state.id) || getBundledPluginEntry(state.id)
+    return t('declarativePage.unsupportedPluginDesc', { name: getLocalizedPluginName(meta) || state.id })
+  }
+  return resolveErrorMessage(state.rawError, state.fallbackKey || 'declarativePage.dynamicLoadFailed')
+})
 const isAlwaysOnTop = ref(false)
 const isMacPlatform = computed(() => isMacOS())
 const isWindowsPlatform = computed(() => isWindows())
@@ -196,8 +227,11 @@ const initialSnapshot = computed(() => {
   return { searchText, segmentedValue, dropdownValue, selectedId }
 })
 
-// 悬停提示展示当前平台规范键帽文案（Ctrl+Shift+P / ⌘⇧P）
-const popoutShortcutText = shortcutLabel(POPOUT_WINDOW_SHORTCUT)
+// 悬停提示展示当前平台规范键帽文案（Ctrl+Shift+P / ⌘⇧P），随语言热切换响应更新
+const popoutShortcutText = computed(() => {
+  void locale.value
+  return shortcutLabel(POPOUT_WINDOW_SHORTCUT)
+})
 
 // 宿主保留热键：优先于声明式插件自身的快捷键注册，防止插件冲突阻塞独立窗口弹出
 useKeymap(KEYMAP_SCOPES.HOST_RESERVED, {
@@ -256,7 +290,7 @@ useDeclarativePluginSession(plugin, {
     currentLoadToken += 1
     dynamicPlugin.value = null
     loadingDynamic.value = false
-    loadError.value = t('declarativePage.sessionInvalidated')
+    loadErrorState.value = { type: 'key', key: 'declarativePage.sessionInvalidated' }
   }
 })
 
@@ -284,6 +318,7 @@ const errorDescription = computed(() => {
 })
 
 const headerPluginMeta = computed(() => {
+  void locale.value
   if (unsupportedOfficial.value || hiddenPlugin.value) return null
   const bundled = getBundledPluginEntry(targetPluginId.value)
   if (!plugin.value) return bundled
@@ -388,20 +423,19 @@ watch(
   [targetPluginId, targetFeatureCode],
   async ([id, featureCode]) => {
     const token = ++currentLoadToken
-    loadError.value = ''
+    loadErrorState.value = null
 
     if (id && !isPluginVisible(id)) {
       dynamicPlugin.value = null
       loadingDynamic.value = false
-      loadError.value = t('declarativePage.errorHiddenTitle')
+      loadErrorState.value = { type: 'key', key: 'declarativePage.errorHiddenTitle' }
       return
     }
 
     if (unsupportedOfficial.value) {
       dynamicPlugin.value = null
       loadingDynamic.value = false
-      const meta = getOfficialPlugin(id) || getBundledPluginEntry(id)
-      loadError.value = t('declarativePage.unsupportedPluginDesc', { name: getLocalizedPluginName(meta) || id })
+      loadErrorState.value = { type: 'unsupported', id }
       return
     }
 
@@ -428,7 +462,11 @@ watch(
     } catch (err) {
       if (token === currentLoadToken) {
         dynamicPlugin.value = null
-        loadError.value = err?.message || String(err) || t('declarativePage.dynamicLoadFailed')
+        loadErrorState.value = {
+          type: 'error',
+          rawError: err,
+          fallbackKey: 'declarativePage.dynamicLoadFailed'
+        }
       }
     } finally {
       if (token === currentLoadToken) {
@@ -466,7 +504,7 @@ async function handlePopout() {
     if (result.outcome === 'kept') {
       // 主进程明确拒绝（窗口数上限等）：保持原样，内容不动
       if (result.error?.code !== 'CANCELLED') {
-        showViewToast(t('declarativePage.popoutFailed', { reason: result.error?.message || t('common.unknownError') }))
+        showViewToast(t('declarativePage.popoutFailed', { reason: resolveErrorMessage(result.error, 'common.unknownError') }))
       }
       return
     }

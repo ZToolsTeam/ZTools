@@ -145,6 +145,26 @@ if (window.ztools && window.ztools.fs) {
 
   client.nativeTooltipInterceptor?.start()
 
+  // 幂等订阅宿主语言热切换事件（不依赖 plugin-sdk.js，避免重复绑定）
+  if (
+    !window.__ztools_api_locale_hooked &&
+    client.events &&
+    typeof client.events.on === 'function'
+  ) {
+    window.__ztools_api_locale_hooked = true
+    client.events.on('system.LocaleChange', (envelope) => {
+      try {
+        const payload = envelope && (envelope.payload || envelope.data || envelope)
+        const nextLocale = typeof payload === 'string' ? payload : payload && payload.locale
+        if (typeof nextLocale === 'string' && nextLocale.trim().length > 0) {
+          applyApiLocaleChange(nextLocale)
+        }
+      } catch (err) {
+        console.error('[ztools] system.LocaleChange dispatch error:', err)
+      }
+    })
+  }
+
   // console.log('[ztools] API initialized, version:', client.getVersion())
   // console.log('[ztools] Environment:', environment.getInfo())
 }

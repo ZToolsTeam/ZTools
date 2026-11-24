@@ -2,7 +2,7 @@ import React from "@ztools/declarative-ui";
 import { Detail, Form, ActionPanel, Action, Icon, Color, showToast, Toast, Clipboard, useNavigation, useLocale } from "@ztools/declarative-ui";
 import { useMemo } from "@ztools/declarative-ui";
 import { t } from "./i18n.js";
-import { validateJson, formatJson, minifyJson, jsonToTsInterface, jsonToRustStruct, jsonToGoStruct, extractJsonPaths, fencedCode } from "./logic.js";
+import { validateJson, formatJson, minifyJson, escapeJson, unescapeJson, sortJsonKeys, jsonToTsInterface, jsonToRustStruct, jsonToGoStruct, extractJsonPaths, fencedCode } from "./logic.js";
 import { usePopoutValue } from "./popout-state.js";
 import { createCompatFileInputProps } from "./host-compat.js";
 let jsonFileSeq = 0;
@@ -55,9 +55,9 @@ function pathIndexBlock(paths) {
 /**
  * 查看转换结果的二级详情页 (展示 JSON、TypeScript、Rust、Go 及 JSONPath)
  */
-export function JsonDetailView({ formatted, tsInterface, rustStruct, goStruct, stats, jsonPaths, indentLabel }) {
+export function JsonDetailView({ formatted, tsInterface, rustStruct, goStruct, stats, jsonPaths, indent, indentLabel }) {
     useLocale();
-    const resolvedIndentLabel = indentLabel ?? t("indentSpaces", { n: 2 });
+    const resolvedIndentLabel = indentLabel ?? (indent === "tab" ? "Tab" : t("indentSpaces", { n: indent ?? 2 }));
     const rustCode = rustStruct || jsonToRustStruct(formatted);
     const goCode = goStruct || jsonToGoStruct(formatted);
     const paths = jsonPaths || extractJsonPaths(formatted);
@@ -77,8 +77,8 @@ export function JsonDetailView({ formatted, tsInterface, rustStruct, goStruct, s
     return (React.createElement(Detail, { markdown: markdown, navigationTitle: t("detailNavTitle"), metadata: stats ? (React.createElement(Detail.Metadata, null,
             React.createElement(Detail.Metadata.Label, { title: t("metaKeys"), text: t("metaKeysVal", { count: stats.keys }), icon: Icon.Key }),
             React.createElement(Detail.Metadata.Label, { title: t("metaDepth"), text: t("metaDepthVal", { depth: stats.depth }), icon: Icon.Pin }),
-            React.createElement(Detail.Metadata.Label, { title: t("metaRawSize"), text: `${stats.byteSize} Bytes`, icon: Icon.Document }),
-            React.createElement(Detail.Metadata.Label, { title: t("metaMinSize"), text: `${stats.minifiedSize} Bytes`, icon: Icon.Minus }),
+            React.createElement(Detail.Metadata.Label, { title: t("metaRawSize"), text: `${stats.byteSize} ${stats.byteSize === 1 ? "Byte" : "Bytes"}`, icon: Icon.Document }),
+            React.createElement(Detail.Metadata.Label, { title: t("metaMinSize"), text: `${stats.minifiedSize} ${stats.minifiedSize === 1 ? "Byte" : "Bytes"}`, icon: Icon.Minus }),
             React.createElement(Detail.Metadata.Label, { title: t("metaSaved"), text: `${stats.compressionRatio}%`, icon: Icon.Checkmark }),
             React.createElement(Detail.Metadata.Separator, null),
             React.createElement(Detail.Metadata.TagList, { title: t("metaSyntax") },
@@ -88,6 +88,8 @@ export function JsonDetailView({ formatted, tsInterface, rustStruct, goStruct, s
             React.createElement(Action.CopyToClipboard, { title: t("copyRust"), content: rustCode, icon: Icon.Terminal }),
             React.createElement(Action.CopyToClipboard, { title: t("copyGo"), content: goCode, icon: Icon.Globe }),
             React.createElement(Action.CopyToClipboard, { title: t("copyMinified"), content: minifyJson(formatted), icon: Icon.Document }),
+            React.createElement(Action.CopyToClipboard, { title: t("copySorted", { indent: resolvedIndentLabel }), content: sortJsonKeys(formatted, indent ?? 2), icon: Icon.List }),
+            React.createElement(Action.CopyToClipboard, { title: t("copyEscaped"), content: JSON.stringify(formatted), icon: Icon.Code }),
             paths.length > 0 && (React.createElement(Action.CopyToClipboard, { title: t("copyJsonPaths"), content: paths.map((p) => `${p.path} = ${p.displayValue}`).join("\n"), icon: Icon.List }))) }));
 }
 /**
@@ -119,7 +121,7 @@ const isIndentStyle = (v) => v === 2 || v === 4 || v === "tab";
  * JSON 格式化与校验主命令组件
  */
 export default function JsonFormatCommand(props = {}) {
-    useLocale();
+    const locale = useLocale();
     // json-codegen 命令：主动作直接生成类型代码并进入代码视图；其余入口是格式化
     const codegen = props?.featureCode === "json-codegen";
     // 输入与缩进风格随「独立窗口」一起带走；带来的值不合法（如旧版本存下的形状）时用默认值
@@ -149,8 +151,45 @@ export default function JsonFormatCommand(props = {}) {
             // 极深嵌套时缩进后的文本可能超过字符串上限（RangeError），如实提示而不是让整个页面崩溃
             return { validation, outputs: null, outputError: describeOutputError(err) };
         }
-    }, [jsonText]);
+    }, [jsonText, locale]);
     const { validation, outputs, outputError } = derived;
+    const unescaped = useMemo(() => (!codegen && jsonText.trim() ? unescapeJson(jsonText) : null), [codegen, jsonText, locale]);
+    const handleSortKeys = async () => {
+        const res = validateJson(jsonText);
+        if (!res.valid) {
+            await showToast(Toast.Style.Failure, t("syntaxErrorToast"), res.error);
+            return;
+        }
+        try {
+            const sorted = sortJsonKeys(jsonText, indent);
+            setJsonText(sorted);
+            await Clipboard.copy(sorted);
+            await showToast(Toast.Style.Success, t("sortKeysDoneToast"));
+        }
+        catch (err) {
+            await showToast(Toast.Style.Failure, t("formatErrorToast"), describeOutputError(err));
+        }
+    };
+    const handleEscape = async () => {
+        const res = escapeJson(jsonText);
+        if (!res.ok) {
+            await showToast(Toast.Style.Failure, t("escapeFailedToast"), res.error);
+            return;
+        }
+        setJsonText(res.value);
+        await Clipboard.copy(res.value);
+        await showToast(Toast.Style.Success, t("escapeDoneToast"));
+    };
+    const handleUnescape = async () => {
+        const res = unescapeJson(jsonText);
+        if (!res.ok) {
+            await showToast(Toast.Style.Failure, t("unescapeFailedToast"), res.error);
+            return;
+        }
+        setJsonText(res.value);
+        await Clipboard.copy(res.value);
+        await showToast(Toast.Style.Success, t("unescapeDoneToast"));
+    };
     const handleSubmit = async (values) => {
         const text = typeof values.jsonInput === "string" ? values.jsonInput : jsonText;
         const res = validateJson(text);
@@ -175,7 +214,7 @@ export default function JsonFormatCommand(props = {}) {
             return;
         }
         await showToast(Toast.Style.Success, t("formatDoneToast"));
-        push(() => (React.createElement(JsonDetailView, { formatted: fmt, tsInterface: ts, rustStruct: rust, goStruct: go, stats: res.stats, jsonPaths: paths, indentLabel: indent === "tab" ? "Tab" : t("indentSpaces", { n: indent }) })));
+        push(() => (React.createElement(JsonDetailView, { formatted: fmt, tsInterface: ts, rustStruct: rust, goStruct: go, stats: res.stats, jsonPaths: paths, indent: indent })));
     };
     const handleLoadClipboard = async () => {
         let text = "";
@@ -239,6 +278,9 @@ export default function JsonFormatCommand(props = {}) {
             !codegen && outputs && (React.createElement(Action.CopyToClipboard, { title: t("copyTs"), content: outputs.ts, icon: Icon.Code })),
             outputs && (React.createElement(Action.CopyToClipboard, { title: t("copyRust"), content: outputs.rust, icon: Icon.Terminal })),
             outputs && (React.createElement(Action.CopyToClipboard, { title: t("copyGo"), content: outputs.go, icon: Icon.Globe })),
+            !codegen && outputs && (React.createElement(Action, { title: t("sortKeysAction"), icon: Icon.List, onAction: handleSortKeys })),
+            !codegen && outputs && (React.createElement(Action, { title: t("escapeAction"), icon: Icon.Code, onAction: handleEscape })),
+            !codegen && unescaped?.ok && (React.createElement(Action, { title: t("unescapeAction"), icon: Icon.Document, onAction: handleUnescape })),
             React.createElement(Action, { title: t("pasteClipboard"), icon: Icon.Clipboard, onAction: handleLoadClipboard })) },
         React.createElement(Form.TextArea, { id: "jsonInput", title: t("inputTitle"), placeholder: codegen ? t("inputPlaceholderCodegen") : t("inputPlaceholderMain"), value: jsonText, onChange: (val) => setJsonText(val), error: outputError
                 ? outputError

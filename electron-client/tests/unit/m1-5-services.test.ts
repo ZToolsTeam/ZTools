@@ -19,6 +19,7 @@ import {
   WindowManagementService,
   WINDOW_ACTIONS
 } from '../../src/main/services/window-management-service.js'
+import { getLocaleSetting, setLocale } from '../../src/main/i18n/index.js'
 import type { SidecarManager } from '../../src/main/services/sidecar-manager.js'
 import type { HudService } from '../../src/main/services/hud-service.js'
 
@@ -327,12 +328,12 @@ test('FileSearchService: Streaming SHA-256 calculation and path validation', asy
   // 2. 异常场景：计算不存在的文件
   const resMissing = await service.calculateSha256(path.join(root, 'not-exists.dat'))
   assert.equal(resMissing.success, false)
-  assert.match(resMissing.error || '', /文件不存在/)
+  assert.match(resMissing.error || '', /File does not exist/)
 
   // 3. 异常场景：目标为目录而非单个文件
   const resDir = await service.calculateSha256(root)
   assert.equal(resDir.success, false)
-  assert.match(resDir.error || '', /目录/)
+  assert.match(resDir.error || '', /directory/i)
 
   // 4. 空白搜索词直接前置短路返回
   const emptySearch = await service.search('   ')
@@ -344,6 +345,7 @@ test('FileSearchService: Streaming SHA-256 calculation and path validation', asy
 // 4. WindowManagementService Integration & HUD Tests
 // =============================================================================
 test('WindowManagementService: 15+ Win32 Snapping Actions & HUD Notification Loop', async () => {
+  const previousLocale = getLocaleSetting()
   let hudMessage = ''
   let hudOptions: Record<string, unknown> | undefined
   const mockHudService: HudService = {
@@ -366,28 +368,45 @@ test('WindowManagementService: 15+ Win32 Snapping Actions & HUD Notification Loo
     hudService: mockHudService
   })
 
-  // 1. 获取全量动作元数据清单
-  const actions = service.listActions()
-  assert.ok(actions.length >= 15)
-  assert.ok(actions.some(a => a.name === 'left-half'))
-  assert.ok(actions.some(a => a.name === 'maximize'))
-  assert.ok(actions.some(a => a.name === 'center'))
+  try {
+    setLocale('zh-CN')
+    // 1. 获取全量动作元数据清单
+    const actions = service.listActions()
+    assert.ok(actions.length >= 15)
+    assert.ok(actions.some(a => a.name === 'left-half'))
+    assert.ok(actions.some(a => a.name === 'maximize'))
+    assert.ok(actions.some(a => a.name === 'center'))
 
-  // 2. 动作名称规范化（kebab-case 与 snake_case 互转）
-  assert.equal(service.normalizeActionName('left-half'), 'left-half')
-  assert.equal(service.normalizeActionName('left_half'), 'left-half')
-  assert.equal(service.normalizeActionName('MAXIMIZE'), 'maximize')
-  assert.equal(service.normalizeActionName('invalid-action-xyz'), null)
+    // 2. 动作名称规范化（kebab-case 与 snake_case 互转）
+    assert.equal(service.normalizeActionName('left-half'), 'left-half')
+    assert.equal(service.normalizeActionName('left_half'), 'left-half')
+    assert.equal(service.normalizeActionName('MAXIMIZE'), 'maximize')
+    assert.equal(service.normalizeActionName('invalid-action-xyz'), null)
 
-  // 3. 执行分屏吸附与 HUD 联动链路
-  const execLeft = await service.applyAction('left-half', { windowId: '98765', targetProcessId: process.pid + 1 })
-  assert.equal(execLeft.success, true)
-  assert.equal(calledSidecarAction, 'left-half')
-  assert.match(hudMessage, /左半屏/)
-  assert.equal(hudOptions?.icon, WINDOW_ACTIONS['left-half'].icon)
+    // 3. 执行分屏吸附与 HUD 联动链路（中文）
+    const execLeft = await service.applyAction('left-half', { windowId: '98765', targetProcessId: process.pid + 1 })
+    assert.equal(execLeft.success, true)
+    assert.equal(calledSidecarAction, 'left-half')
+    assert.match(hudMessage, /左半屏/)
+    assert.equal(hudOptions?.icon, WINDOW_ACTIONS['left-half'].icon)
 
-  // 4. 异常动作调用防御
-  const execBad = await service.applyAction('totally-unknown-action')
-  assert.equal(execBad.success, false)
-  assert.match(execBad.error || '', /不支持的窗口调度动作/)
+    // 4. 异常动作调用防御（中文）
+    const execBad = await service.applyAction('totally-unknown-action')
+    assert.equal(execBad.success, false)
+    assert.match(execBad.error || '', /不支持的窗口调度动作/)
+
+    // 5. 英文 locale 下动作列表、HUD 与错误提示均为英文
+    setLocale('en-US')
+    const enActions = service.listActions()
+    assert.equal(enActions.find(a => a.name === 'left-half')?.title, 'Left Half')
+    const execLeftEn = await service.applyAction('left-half', { windowId: '98765', targetProcessId: process.pid + 1 })
+    assert.equal(execLeftEn.success, true)
+    assert.equal(execLeftEn.title, 'Left Half')
+    assert.match(hudMessage, /Left Half/)
+    const execBadEn = await service.applyAction('totally-unknown-action')
+    assert.equal(execBadEn.success, false)
+    assert.match(execBadEn.error || '', /Unsupported window management action/)
+  } finally {
+    setLocale(previousLocale, 'zh-CN')
+  }
 })

@@ -6,7 +6,8 @@ import { message } from 'ant-design-vue'
 import { storeToRefs } from 'pinia'
 import { usePluginsStore } from '@/stores/plugins'
 import { useAppI18n } from '@/i18n'
-import { getHotkey, openPlugin as apiOpenPlugin } from '@/api/apiserver'
+import { resolveErrorMessage } from '@/utils/errorMessage'
+import { getHotkey, getLauncherHotkey, openPlugin as apiOpenPlugin } from '@/api/apiserver'
 import {
   getHotkeyHostCapabilities,
   getHotkeyRuleDescription,
@@ -26,7 +27,7 @@ import {
   isDeprecatedPluginFeatureHotkeyItem
 } from '@/utils/pluginFeatureHotkeys'
 
-const emit = defineEmits(['update:count'])
+const emit = defineEmits(['update:count', 'closed'])
 const { t, locale } = useAppI18n()
 
 const SCREENSHOT_SETTINGS_KEY = 'settings:preferences'
@@ -91,10 +92,10 @@ const openPlugin = async (pluginId) => {
   try {
     const result = await apiOpenPlugin(pluginId)
     if (!result?.success) {
-      message.error(t('hotkey.featureModal.openPluginFailed', { reason: result?.error || t('common.unknownError') }))
+      message.error(t('hotkey.featureModal.openPluginFailed', { reason: resolveErrorMessage(result, 'common.unknownError') }))
     }
   } catch (error) {
-    message.error(t('hotkey.featureModal.openPluginFailed', { reason: error?.message || t('common.unknownError') }))
+    message.error(t('hotkey.featureModal.openPluginFailed', { reason: resolveErrorMessage(error, 'common.unknownError') }))
   }
 }
 
@@ -295,6 +296,14 @@ const getGlobalWakeHotkey = async () => {
   }
 }
 
+const getGlobalLauncherHotkey = async () => {
+  try {
+    return typeof getLauncherHotkey === 'function' ? (await getLauncherHotkey()) || '' : ''
+  } catch {
+    return ''
+  }
+}
+
 const canApplyItem = () => true
 
 const hasSamePluginHotkeyConflict = async (item, hotkeyStr) => {
@@ -371,6 +380,15 @@ const registerHotkey = async (item, hotkeyStr) => {
       return false
     }
 
+    const globalLauncherHotkey = await getGlobalLauncherHotkey()
+    if (
+      globalLauncherHotkey &&
+      globalLauncherHotkey.toLowerCase() === hotkeyStr.toLowerCase()
+    ) {
+      message.warning(t('hotkey.featureModal.conflictGlobalLauncher'))
+      return false
+    }
+
     const currentTriggerId =
       featureHotkeyMap.value[item.id]?.triggerId || item.triggerId
 
@@ -427,7 +445,7 @@ const registerHotkey = async (item, hotkeyStr) => {
     }
     return true
   } catch (error) {
-    message.error(t('hotkey.featureModal.setFailed', { reason: error?.message || t('common.unknownError') }))
+    message.error(t('hotkey.featureModal.setFailed', { reason: resolveErrorMessage(error, 'common.unknownError') }))
     console.error('设置插件内功能快捷键失败:', error)
     return false
   } finally {
@@ -455,7 +473,7 @@ const clearHotkey = async (item) => {
     )
   } catch (error) {
     console.error('清除插件内功能快捷键失败:', error)
-    message.error(t('hotkey.featureModal.clearFailed', { reason: error?.message || t('common.unknownError') }))
+    message.error(t('hotkey.featureModal.clearFailed', { reason: resolveErrorMessage(error, 'common.unknownError') }))
   } finally {
     loadingItemId.value = ''
   }
@@ -490,6 +508,7 @@ defineExpose({ show, hide, configuredCount })
 <template>
   <RcDialog
     v-model:open="visible"
+    :after-close="() => emit('closed')"
     :title="t('hotkey.featureModal.title')"
     :width="720"
     @cancel="handleCancel"

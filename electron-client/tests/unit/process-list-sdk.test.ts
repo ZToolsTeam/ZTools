@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import vm from 'node:vm'
 import test from 'node:test'
+import { loadCefIpcSources } from '../helpers/cef-ipc-source.js'
 function fixture(call: (method:string,params:unknown)=>Promise<unknown>) {
- const source=fs.readFileSync('../frontend/public/js/cef-ipc/src/api/process.js','utf8').replace(/^export .+$/mg,'')
+ const source = loadCefIpcSources(['api/process'])
  const Api=vm.runInNewContext(source+String.fromCharCode(10)+'ProcessAPI',{window:{},console}) as new(transport:unknown)=>{list():Promise<unknown[]>}
  return new Api({call})
 }

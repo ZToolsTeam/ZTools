@@ -177,7 +177,7 @@ function validateRawPath(value: unknown): asserts value is string {
     value.length > 32 * 1024 ||
     FORBIDDEN_PATH_CHARACTERS.test(value)
   ) {
-    invalidMediaCall('媒体路径格式无效')
+    invalidMediaCall('Invalid media path format')
   }
 }
 
@@ -194,7 +194,7 @@ function validateOutputFileName(value: unknown): asserts value is string {
     /[ .]$/.test(value) ||
     /^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])$/i.test(deviceStem)
   ) {
-    invalidMediaCall('媒体输出文件名必须是当前输出目录下的普通文件名')
+    invalidMediaCall('Media output filename must be a plain filename in the output directory')
   }
 }
 
@@ -240,14 +240,14 @@ export class NativeMediaPathPolicy {
     if (!methods) return params
 
     if (!Object.hasOwn(methods, functionName)) {
-      throw new ZToolsError(errorCodes.methodNotFound, '媒体 DLL 方法未获宿主策略授权')
+      throw new ZToolsError(errorCodes.methodNotFound, 'Media DLL method is not authorized by host policy')
     }
     const method = methods[functionName]
-    if (!method) throw new ZToolsError(errorCodes.methodNotFound, '媒体 DLL 方法未获宿主策略授权')
+    if (!method) throw new ZToolsError(errorCodes.methodNotFound, 'Media DLL method is not authorized by host policy')
     if (method.unsupported) {
-      throw new ZToolsError(errorCodes.notSupported, '该媒体 DLL 方法暂未由宿主安全策略开放')
+      throw new ZToolsError(errorCodes.notSupported, 'This media DLL method is not enabled by host security policy')
     }
-    if (!isRecord(params)) invalidMediaCall('媒体 DLL 参数必须是对象')
+    if (!isRecord(params)) invalidMediaCall('Media DLL parameters must be an object')
     params = this.#parameterPolicy.normalize(dllId, functionName, params)
 
     const acceptedPathFields = new Set<string>([
@@ -259,7 +259,7 @@ export class NativeMediaPathPolicy {
     ])
     for (const key of PATH_FIELDS) {
       if (Object.hasOwn(params, key) && !acceptedPathFields.has(key)) {
-        invalidMediaCall('该媒体 DLL 方法不接受此路径参数')
+        invalidMediaCall('This media DLL method does not accept this path parameter')
       }
     }
 
@@ -270,39 +270,39 @@ export class NativeMediaPathPolicy {
     const resolveInput = async (value: unknown): Promise<string> => {
       validateRawPath(value)
       inputItems += 1
-      if (inputItems > MAX_INPUT_ITEMS) invalidMediaCall('媒体输入文件数量超过 100 项')
+      if (inputItems > MAX_INPUT_ITEMS) invalidMediaCall('Media input file count exceeds the limit of 100 items')
       const canonical = await this.paths.resolveAuthorizedPath(value, caller, 'read', false)
       let stats: NativeMediaStat
       try {
         stats = await this.#stat(canonical)
       } catch {
-        throw new ZToolsError(errorCodes.fileError, '媒体输入文件不可访问')
+        throw new ZToolsError(errorCodes.fileError, 'Media input file is not accessible')
       }
       if (!stats.isFile() || !Number.isSafeInteger(stats.size) || stats.size < 0) {
-        throw new ZToolsError(errorCodes.fileError, '媒体输入必须是普通文件')
+        throw new ZToolsError(errorCodes.fileError, 'Media input must be a regular file')
       }
       if (stats.size > MAX_INPUT_BYTES) {
-        throw new ZToolsError(errorCodes.fileTooLarge, '单个媒体输入超过 512 MiB 上限')
+        throw new ZToolsError(errorCodes.fileTooLarge, 'Single media input exceeds the 512 MiB limit')
       }
       totalInputBytes += stats.size
       if (totalInputBytes > MAX_TOTAL_INPUT_BYTES) {
-        throw new ZToolsError(errorCodes.fileTooLarge, '媒体输入总大小超过 2 GiB 上限')
+        throw new ZToolsError(errorCodes.fileTooLarge, 'Total media input size exceeds the 2 GiB limit')
       }
       return canonical
     }
 
     if (method.inputFiles) {
       if (!Array.isArray(params.files) || params.files.length === 0) {
-        invalidMediaCall('媒体方法需要非空 files 数组')
+        invalidMediaCall('Media method requires a non-empty files array')
       }
-      if (params.files.length > MAX_INPUT_ITEMS) invalidMediaCall('媒体输入文件数量超过 100 项')
+      if (params.files.length > MAX_INPUT_ITEMS) invalidMediaCall('Media input file count exceeds the limit of 100 items')
       const canonicalFiles: string[] = []
       for (const value of params.files) canonicalFiles.push(await resolveInput(value))
       sanitized.files = canonicalFiles
     }
 
     for (const field of method.requiredInputFields ?? []) {
-      if (!Object.hasOwn(params, field)) invalidMediaCall(`媒体方法缺少 ${field} 路径`)
+      if (!Object.hasOwn(params, field)) invalidMediaCall(`Media method is missing required ${field} path`)
     }
     for (const field of [...(method.requiredInputFields ?? []), ...(method.optionalInputFields ?? [])]) {
       if (!Object.hasOwn(params, field)) continue
@@ -310,7 +310,7 @@ export class NativeMediaPathPolicy {
     }
 
     if (functionName === 'BatchAddWatermark' && params.watermarkType !== 'text' && !Object.hasOwn(params, 'watermarkFile')) {
-      invalidMediaCall('图片水印方法需要 watermarkFile 路径')
+      invalidMediaCall('Image watermark method requires watermarkFile path')
     }
 
     if (method.outputDirectory) {
@@ -320,23 +320,23 @@ export class NativeMediaPathPolicy {
         canonicalOutput = await this.paths.resolveAuthorizedPath(params.outputDir, caller, 'write', false)
       } catch (error) {
         if (error instanceof ZToolsError) throw error
-        throw new ZToolsError(errorCodes.permissionDenied, '输出目录未获当前窗口写授权')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Output directory is not authorized for write access by the current window')
       }
       let outputStats: NativeMediaStat
       try {
         outputStats = await this.#stat(canonicalOutput)
       } catch {
-        throw new ZToolsError(errorCodes.fileError, '媒体输出目录不可访问')
+        throw new ZToolsError(errorCodes.fileError, 'Media output directory is not accessible')
       }
       if (!outputStats.isDirectory()) {
-        throw new ZToolsError(errorCodes.invalidRequest, '媒体输出路径必须是已存在目录')
+        throw new ZToolsError(errorCodes.invalidRequest, 'Media output path must be an existing directory')
       }
       const normalizedOutput = path.resolve(canonicalOutput)
       for (const field of ['files', ...(method.requiredInputFields ?? []), ...(method.optionalInputFields ?? [])]) {
         const input = sanitized[field]
         const inputPaths = Array.isArray(input) ? input : typeof input === 'string' ? [input] : []
         if (inputPaths.some((item) => typeof item === 'string' && this.#samePath(path.resolve(item), normalizedOutput))) {
-          invalidMediaCall('媒体输入路径不能与输出目录相同')
+          invalidMediaCall('Media input path must not be the same as the output directory')
         }
       }
       if (method.outputFileName) {
@@ -351,12 +351,12 @@ export class NativeMediaPathPolicy {
           ...(method.optionalInputFields ?? []).map((field) => sanitized[field])
         ].filter((value): value is string => typeof value === 'string')
         if (inputs.some((input) => this.#samePath(path.resolve(input), outputFilePath))) {
-          invalidMediaCall('媒体输出文件不能覆盖任何输入文件')
+          invalidMediaCall('Media output file must not overwrite any input file')
         }
       }
       sanitized.outputDir = canonicalOutput
     } else if (Object.hasOwn(params, 'outputDir')) {
-      invalidMediaCall('该媒体方法不接受输出目录')
+      invalidMediaCall('This media method does not accept an output directory')
     }
 
     return sanitized
@@ -366,10 +366,10 @@ export class NativeMediaPathPolicy {
     params: Record<string, unknown>,
     caller: CallerIdentity
   ): Promise<Record<string, unknown>> {
-    if (!isRecord(params)) invalidMediaCall('文件粉碎参数必须是对象')
+    if (!isRecord(params)) invalidMediaCall('File shredder parameters must be an object')
     const rawTarget = typeof params.path === 'string' ? params.path : params.targetPath
     validateRawPath(rawTarget)
-    if (!path.isAbsolute(rawTarget)) invalidMediaCall('文件粉碎路径必须为绝对路径')
+    if (!path.isAbsolute(rawTarget)) invalidMediaCall('File shredder path must be an absolute path')
 
     let canonical: string
     try {
@@ -379,17 +379,17 @@ export class NativeMediaPathPolicy {
     }
 
     if (this.#isProtectedWipePath(canonical)) {
-      throw new ZToolsError(errorCodes.permissionDenied, '禁止粉碎系统核心目录或受保护路径下的文件')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Shredding files in protected system directories is forbidden')
     }
 
     let stats: NativeMediaStat
     try {
       stats = await this.#stat(canonical)
     } catch {
-      throw new ZToolsError(errorCodes.fileError, '待粉碎文件不存在或不可访问')
+      throw new ZToolsError(errorCodes.fileError, 'Target file to shred does not exist or is not accessible')
     }
     if (!stats.isFile()) {
-      throw new ZToolsError(errorCodes.invalidRequest, '仅允许粉碎普通文件')
+      throw new ZToolsError(errorCodes.invalidRequest, 'Only regular files can be shredded')
     }
 
     const sanitized: Record<string, unknown> = { ...params }
@@ -406,17 +406,17 @@ export class NativeMediaPathPolicy {
       try {
         lstatResult = await fs.lstat(cursor)
       } catch {
-        throw new ZToolsError(errorCodes.permissionDenied, '待粉碎文件未获窗口授权且不在可信临时目录内')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Target file to shred is not authorized by the window and is outside trusted temporary directories')
       }
       if (lstatResult.isSymbolicLink()) {
-        throw new ZToolsError(errorCodes.permissionDenied, '待粉碎路径包含符号链接或重解析点')
+        throw new ZToolsError(errorCodes.permissionDenied, 'Target file path contains a symbolic link or reparse point')
       }
       const parent = path.dirname(cursor)
       if (parent === cursor) break
       cursor = parent
     }
     const real = await fs.realpath(resolved).catch(() => {
-      throw new ZToolsError(errorCodes.permissionDenied, '待粉碎文件未获窗口授权')
+      throw new ZToolsError(errorCodes.permissionDenied, 'Target file to shred is not authorized by the window')
     })
     const allowedTempRoots = [
       os.tmpdir(),
@@ -432,7 +432,7 @@ export class NativeMediaPathPolicy {
         return real
       }
     }
-    throw new ZToolsError(errorCodes.permissionDenied, '目标文件未由当前窗口授权，拒绝执行物理粉碎')
+    throw new ZToolsError(errorCodes.permissionDenied, 'Target file is not authorized by the current window; physical shredding denied')
   }
 
   #isProtectedWipePath(targetPath: string): boolean {
