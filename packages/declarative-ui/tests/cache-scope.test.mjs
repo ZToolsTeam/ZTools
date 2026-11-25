@@ -175,6 +175,54 @@ describe("Cache 作用域隔离", () => {
     assert.equal(root.getLatest().props.markdown, "fallback");
     root.unmount();
   });
+
+  test("[性能] useCachedState 与 useCachedPromise 仅首帧读取缓存，且异步完成只写一次缓存", async () => {
+    const scope = createCacheScope();
+    const customCache = new scope.Cache({ namespace: "perf-state" });
+    customCache.set("k", JSON.stringify("cached-v0"));
+    let stateGetCalls = 0;
+    const origGet = customCache.get.bind(customCache);
+    customCache.get = (k) => {
+      stateGetCalls += 1;
+      return origGet(k);
+    };
+
+    let setVal = null;
+    const stateRoot = renderDeclarativeRoot(() => {
+      const [val, setV] = scope.useCachedState("k", "init", { cache: customCache });
+      setVal = setV;
+      return detail(String(val));
+    });
+    assert.equal(stateRoot.getLatest().props.markdown, "cached-v0");
+    assert.equal(stateGetCalls, 1);
+    setVal("v1");
+    await flush();
+    setVal("v2");
+    await flush();
+    assert.equal(stateRoot.getLatest().props.markdown, "v2");
+    assert.equal(stateGetCalls, 1, "后续重渲染不应重复同步读取和 JSON.parse 缓存");
+    stateRoot.unmount();
+
+    // 验证 useCachedPromise 完成时仅写入缓存 1 次（消除双倍序列化写入）
+    let setCalls = 0;
+    const origSet = scope.Cache.prototype.set;
+    scope.Cache.prototype.set = function patchedSet(k, v) {
+      if (String(k).startsWith("fetchOnce:")) setCalls += 1;
+      return origSet.call(this, k, v);
+    };
+    try {
+      async function fetchOnce(id) {
+        return { id, ok: true };
+      }
+      const promiseRoot = renderDeclarativeRoot(() => detail(JSON.stringify(scope.useCachedPromise(fetchOnce, ["p1"]).data || null)));
+      await flush(40);
+      assert.equal(promiseRoot.getLatest().props.markdown, JSON.stringify({ id: "p1", ok: true }));
+      assert.equal(setCalls, 1, "useCachedPromise 完成一次请求只应写缓存一次");
+      promiseRoot.unmount();
+    } finally {
+      scope.Cache.prototype.set = origSet;
+    }
+  });
 });
 
 describe("未实现的接口已从 SDK 移除", () => {

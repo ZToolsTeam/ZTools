@@ -145,6 +145,12 @@ function lookupMessage(
 const ESCAPED_PIPE_SENTINEL = "\uE000ZTOOLS_PIPE\uE001";
 const ESCAPED_BRACE_PREFIX = "\uE000ZTOOLS_LBRACE:";
 const ESCAPED_BRACE_SUFFIX = ":ZTOOLS_RBRACE\uE001";
+const ESCAPED_PIPE_RE = /\\\|/g;
+const ESCAPED_BRACE_RE = /\{\{([A-Za-z0-9_.-]+)\}\}/g;
+const INLINE_PLURAL_RE = /\[\[([A-Za-z0-9_.-]+):([^\]]+)\]\]/g;
+const INTERPOLATION_RE = /\{([A-Za-z0-9_.-]+)\}/g;
+const RESTORE_BRACE_RE = new RegExp(`${ESCAPED_BRACE_PREFIX}([A-Za-z0-9_.-]+)${ESCAPED_BRACE_SUFFIX}`, "g");
+const RESTORE_PIPE_RE = new RegExp(ESCAPED_PIPE_SENTINEL, "g");
 
 function selectPluralForm(forms: string[], count: number): string {
   if (forms.length <= 1) {
@@ -193,13 +199,26 @@ function splitTopLevelPipeForms(template: string): string[] {
 }
 
 function formatTemplate(template: string, params?: TranslationParams): string {
+  // 纯静态文案（不含插值花括号、复数管道与内联复数段）快速零分配短路
+  if (!template.includes("{") && !template.includes("|") && !template.includes("[[")) {
+    return template;
+  }
+
   // 1. 先保护字面量转义：`\|` 与 `{{var}}`，避免与复数切分和 `{var}` 插值冲突
-  let working = template
-    .replace(/\\\|/g, ESCAPED_PIPE_SENTINEL)
-    .replace(
-      /\{\{([A-Za-z0-9_.-]+)\}\}/g,
+  let hasEscapedPipe = false;
+  let hasEscapedBrace = false;
+  let working = template;
+  if (working.includes("\\|")) {
+    hasEscapedPipe = true;
+    working = working.replace(ESCAPED_PIPE_RE, ESCAPED_PIPE_SENTINEL);
+  }
+  if (working.includes("{{")) {
+    hasEscapedBrace = true;
+    working = working.replace(
+      ESCAPED_BRACE_RE,
       (_match, token: string) => `${ESCAPED_BRACE_PREFIX}${token}${ESCAPED_BRACE_SUFFIX}`
     );
+  }
 
   // 2. 整串 `|` 分段复数（当 params.count 为有限数字且存在顶层未转义 `|` 时生效）
   const rawCount = params && Object.prototype.hasOwnProperty.call(params, "count") ? params.count : undefined;
@@ -213,7 +232,7 @@ function formatTemplate(template: string, params?: TranslationParams): string {
   // 3. 内联复数段 `[[param:singular|plural]]` 与 `[[param:zero|one|other]]`
   if (params && working.includes("[[")) {
     working = working.replace(
-      /\[\[([A-Za-z0-9_.-]+):([^\]]+)\]\]/g,
+      INLINE_PLURAL_RE,
       (match, token: string, body: string) => {
         if (!Object.prototype.hasOwnProperty.call(params, token)) {
           return match;
@@ -229,8 +248,8 @@ function formatTemplate(template: string, params?: TranslationParams): string {
   }
 
   // 4. 常规 `{var}` 插值（安全支持 0 / false / ""，忽略 null / undefined 与缺省参数）
-  if (params) {
-    working = working.replace(/\{([A-Za-z0-9_.-]+)\}/g, (match, token: string) => {
+  if (params && working.includes("{")) {
+    working = working.replace(INTERPOLATION_RE, (match, token: string) => {
       if (!Object.prototype.hasOwnProperty.call(params, token)) {
         return match;
       }
@@ -243,12 +262,13 @@ function formatTemplate(template: string, params?: TranslationParams): string {
   }
 
   // 5. 还原字面量转义：`{{var}}` -> `{var}`，`\|` -> `|`
-  return working
-    .replace(
-      new RegExp(`${ESCAPED_BRACE_PREFIX}([A-Za-z0-9_.-]+)${ESCAPED_BRACE_SUFFIX}`, "g"),
-      (_match, token: string) => `{${token}}`
-    )
-    .replace(new RegExp(ESCAPED_PIPE_SENTINEL, "g"), "|");
+  if (hasEscapedBrace) {
+    working = working.replace(RESTORE_BRACE_RE, (_match, token: string) => `{${token}}`);
+  }
+  if (hasEscapedPipe) {
+    working = working.replace(RESTORE_PIPE_RE, "|");
+  }
+  return working;
 }
 
 export type MessageCatalog<T extends Record<string, string>> = {

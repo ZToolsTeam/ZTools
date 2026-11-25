@@ -261,6 +261,58 @@ export interface UseI18nResult<K extends string = string> {
   formatDate: (value: Date | number | string, options?: Intl.DateTimeFormatOptions) => string;
 }
 
+const INTL_FORMATTER_CACHE_LIMIT = 64;
+const numberFormatCache = new Map<string, Intl.NumberFormat>();
+const dateTimeFormatCache = new Map<string, Intl.DateTimeFormat>();
+
+function buildIntlCacheKey(locale: string, options?: Record<string, unknown>): string {
+  if (!options) return locale;
+  const keys = Object.keys(options).sort();
+  if (keys.length === 0) return locale;
+  let key = locale;
+  for (const k of keys) {
+    const v = options[k];
+    if (v !== undefined) {
+      key += `|${k}=${String(v)}`;
+    }
+  }
+  return key;
+}
+
+function getCachedNumberFormat(
+  locale: string,
+  formatOptions?: Intl.NumberFormatOptions
+): Intl.NumberFormat {
+  const key = buildIntlCacheKey(locale, formatOptions as Record<string, unknown> | undefined);
+  let formatter = numberFormatCache.get(key);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(locale, formatOptions);
+    if (numberFormatCache.size >= INTL_FORMATTER_CACHE_LIMIT) {
+      const oldestKey = numberFormatCache.keys().next().value;
+      if (oldestKey !== undefined) numberFormatCache.delete(oldestKey);
+    }
+    numberFormatCache.set(key, formatter);
+  }
+  return formatter;
+}
+
+function getCachedDateTimeFormat(
+  locale: string,
+  formatOptions?: Intl.DateTimeFormatOptions
+): Intl.DateTimeFormat {
+  const key = buildIntlCacheKey(locale, formatOptions as Record<string, unknown> | undefined);
+  let formatter = dateTimeFormatCache.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, formatOptions);
+    if (dateTimeFormatCache.size >= INTL_FORMATTER_CACHE_LIMIT) {
+      const oldestKey = dateTimeFormatCache.keys().next().value;
+      if (oldestKey !== undefined) dateTimeFormatCache.delete(oldestKey);
+    }
+    dateTimeFormatCache.set(key, formatter);
+  }
+  return formatter;
+}
+
 /**
  * 声明式多语言组合 Hook: useI18n
  * 组合 useLocale() 与 createTranslator()，并提供绑定当前响应式 locale 的 Intl 数字/日期格式化函数。
@@ -283,7 +335,7 @@ export function useI18n<T extends Record<string, string> = Record<string, string
       if (typeof value !== "number" || !Number.isFinite(value)) {
         return String(value);
       }
-      return new Intl.NumberFormat(locale, formatOptions).format(value);
+      return getCachedNumberFormat(locale, formatOptions).format(value);
     };
 
     const formatDate = (
@@ -294,7 +346,7 @@ export function useI18n<T extends Record<string, string> = Record<string, string
       if (Number.isNaN(date.getTime())) {
         return "";
       }
-      return new Intl.DateTimeFormat(locale, formatOptions).format(date);
+      return getCachedDateTimeFormat(locale, formatOptions).format(date);
     };
 
     return {

@@ -445,6 +445,32 @@ describe("useI18n 组合 Hook 响应式热切换与 Intl 格式化", () => {
 
     root.unmount();
   });
+
+  test("useI18n 对 Intl 格式化器缓存复用且超出 64 条上限时安全淘汰不溢出", () => {
+    setRuntimeLocale("en-US");
+    const messages = { "en-US": { plain: "Plain Static Label" } };
+    let api = null;
+    const root = renderDeclarativeRoot(() => {
+      api = useI18n(messages);
+      return List({ navigationTitle: api.t("plain"), children: [] });
+    });
+
+    assert.equal(api.t("plain"), "Plain Static Label");
+    // 超过 64 种不同选项组合仍能正常格式化（触发有界 LRU/FIFO 淘汰）
+    for (let i = 0; i < 70; i += 1) {
+      const formatted = api.formatNumber(1234.5, {
+        minimumFractionDigits: i % 5,
+        maximumFractionDigits: Math.max(i % 5, (i % 7) + 1),
+        useGrouping: i % 2 === 0
+      });
+      assert.ok(formatted.length > 0);
+    }
+    const sample = new Date(Date.UTC(2026, 4, 15, 12, 0, 0));
+    const dateA = api.formatDate(sample, { year: "numeric", month: "short", timeZone: "UTC" });
+    const dateB = api.formatDate(sample, { timeZone: "UTC", month: "short", year: "numeric" });
+    assert.equal(dateA, dateB);
+    root.unmount();
+  });
 });
 
 describe("resolveHostErrorMessage 双语结构化错误对称防漏", () => {

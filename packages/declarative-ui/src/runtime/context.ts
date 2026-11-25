@@ -44,11 +44,87 @@ export interface CollectedPopoutState {
   rejected: string[];
 }
 
+const MAX_TREE_COMPARE_DEPTH = 128;
+
+function isOmittedJsonValue(value: unknown): boolean {
+  return value === undefined || typeof value === "function" || typeof value === "symbol";
+}
+
+function areJsonValuesEqual(a: unknown, b: unknown, depth: number): boolean {
+  if (a === b) return typeof a !== "bigint";
+  if (depth > MAX_TREE_COMPARE_DEPTH) return false;
+  if (typeof a === "bigint" || typeof b === "bigint") return false;
+
+  if (a && typeof a === "object" && typeof (a as { toJSON?: unknown }).toJSON === "function") {
+    a = (a as { toJSON: () => unknown }).toJSON();
+  }
+  if (b && typeof b === "object" && typeof (b as { toJSON?: unknown }).toJSON === "function") {
+    b = (b as { toJSON: () => unknown }).toJSON();
+  }
+
+  if (a === b) return typeof a !== "bigint";
+
+  if (typeof a === "number" && !Number.isFinite(a)) a = null;
+  if (typeof b === "number" && !Number.isFinite(b)) b = null;
+  if (a === b) return true;
+
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") {
+    return false;
+  }
+
+  const aIsArray = Array.isArray(a);
+  if (aIsArray !== Array.isArray(b)) return false;
+
+  if (aIsArray) {
+    const arrA = a as unknown[];
+    const arrB = b as unknown[];
+    const len = arrA.length;
+    if (len !== arrB.length) return false;
+    for (let i = 0; i < len; i++) {
+      const va = isOmittedJsonValue(arrA[i]) ? null : arrA[i];
+      const vb = isOmittedJsonValue(arrB[i]) ? null : arrB[i];
+      if (va === vb) {
+        if (typeof va === "bigint") return false;
+        continue;
+      }
+      if (!areJsonValuesEqual(va, vb, depth + 1)) return false;
+    }
+    return true;
+  }
+
+  const objA = a as Record<string, unknown>;
+  const objB = b as Record<string, unknown>;
+  let countA = 0;
+  for (const key in objA) {
+    if (!Object.prototype.hasOwnProperty.call(objA, key)) continue;
+    const va = objA[key];
+    if (isOmittedJsonValue(va)) continue;
+    countA++;
+    if (!Object.prototype.hasOwnProperty.call(objB, key)) return false;
+    const vb = objB[key];
+    if (isOmittedJsonValue(vb)) return false;
+    if (va === vb) {
+      if (typeof va === "bigint") return false;
+      continue;
+    }
+    if (!areJsonValuesEqual(va, vb, depth + 1)) return false;
+  }
+
+  let countB = 0;
+  for (const key in objB) {
+    if (!Object.prototype.hasOwnProperty.call(objB, key)) continue;
+    if (isOmittedJsonValue(objB[key])) continue;
+    countB++;
+    if (countB > countA) return false;
+  }
+  return countA === countB;
+}
+
 export function areViewTreesEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
   try {
-    return JSON.stringify(a) === JSON.stringify(b);
+    return areJsonValuesEqual(a, b, 0);
   } catch {
     return false;
   }

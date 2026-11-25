@@ -9,21 +9,31 @@
 import { useState as microUseState, useEffect as microUseEffect, useCallback as microUseCallback, useRef as microUseRef } from "../runtime/hooks.js";
 import { Cache, createScopedCacheClass } from "../api/cache.js";
 
-declare const require: any;
-
 interface HooksAdapter {
   useState: <T>(initial: T | (() => T)) => [T, (val: T | ((prev: T) => T)) => void];
-  useEffect: (effect: () => void | (() => void) | Promise<void>, deps?: any[]) => void;
-  useCallback: <T extends (...args: any[]) => any>(fn: T, deps?: any[]) => T;
+  useEffect: (effect: () => void | (() => void) | Promise<void>, deps?: readonly unknown[]) => void;
+  useCallback: <T extends (...args: never[]) => unknown>(fn: T, deps?: readonly unknown[]) => T;
   useRef: <T>(initial: T) => { current: T };
+}
+
+interface GlobalWithReact {
+  require?: (id: string) => unknown;
+  React?: Partial<HooksAdapter>;
 }
 
 // 探测是否处于标准 React 运行时环境
 function getHooks(): HooksAdapter {
   try {
-    const req = typeof (globalThis as any).require === "function" ? (globalThis as any).require : null;
-    const react = (globalThis as any).React || (req ? req("react") : null);
-    if (react && typeof react.useState === "function") {
+    const g = globalThis as unknown as GlobalWithReact;
+    const req = typeof g.require === "function" ? g.require : null;
+    const react = (g.React || (req ? req("react") : null)) as Partial<HooksAdapter> | null;
+    if (
+      react &&
+      typeof react.useState === "function" &&
+      typeof react.useEffect === "function" &&
+      typeof react.useCallback === "function" &&
+      typeof react.useRef === "function"
+    ) {
       return {
         useState: react.useState,
         useEffect: react.useEffect,
@@ -31,7 +41,10 @@ function getHooks(): HooksAdapter {
         useRef: react.useRef
       };
     }
-  } catch {}
+  } catch (err) {
+    // 非标准 React 环境或宿主未注入 require("react")，回落到声明式微运行时 hooks
+    void err;
+  }
   return {
     useState: microUseState,
     useEffect: microUseEffect,
@@ -52,10 +65,10 @@ export interface UsePromiseResult<T> {
   error: Error | undefined;
   isLoading: boolean;
   revalidate: () => Promise<T | undefined>;
-  mutate: (asyncUpdate?: Promise<any> | ((currentData: T | undefined) => Promise<T> | T), options?: { shouldRevalidate?: boolean }) => Promise<T | undefined>;
+  mutate: (asyncUpdate?: Promise<T> | ((currentData: T | undefined) => Promise<T> | T), options?: { shouldRevalidate?: boolean }) => Promise<T | undefined>;
 }
 
-export function usePromise<T, TArgs extends any[] = any[]>(
+export function usePromise<T, TArgs extends unknown[] = unknown[]>(
   fn: (...args: TArgs) => Promise<T>,
   args?: TArgs,
   options?: UsePromiseOptions<T>
@@ -80,12 +93,13 @@ export function usePromise<T, TArgs extends any[] = any[]>(
     setIsLoading(true);
     setError(undefined);
     try {
-      const result = await fnRef.current(...(args || [] as any));
+      const callArgs = (args || []) as TArgs;
+      const result = await fnRef.current(...callArgs);
       setData(result);
       setIsLoading(false);
       options?.onData?.(result);
       return result;
-    } catch (err: any) {
+    } catch (err: unknown) {
       const errorObj = err instanceof Error ? err : new Error(String(err));
       setError(errorObj);
       setIsLoading(false);
@@ -108,7 +122,7 @@ export function usePromise<T, TArgs extends any[] = any[]>(
 
   const mutate = hooks.useCallback(
     async (
-      asyncUpdate?: Promise<any> | ((currentData: T | undefined) => Promise<T> | T),
+      asyncUpdate?: Promise<T> | ((currentData: T | undefined) => Promise<T> | T),
       mutateOptions?: { shouldRevalidate?: boolean }
     ): Promise<T | undefined> => {
       if (!asyncUpdate) {
@@ -126,7 +140,7 @@ export function usePromise<T, TArgs extends any[] = any[]>(
           return revalidate();
         }
         return data;
-      } catch (err: any) {
+      } catch (err: unknown) {
         setError(err instanceof Error ? err : new Error(String(err)));
         return undefined;
       }
@@ -153,7 +167,7 @@ export interface UseCachedPromiseOptions<T> extends UsePromiseOptions<T> {
   keepPreviousData?: boolean;
 }
 
-export function useCachedPromise<T, TArgs extends any[] = any[]>(
+export function useCachedPromise<T, TArgs extends unknown[] = unknown[]>(
   fn: (...args: TArgs) => Promise<T>,
   args?: TArgs,
   options?: UseCachedPromiseOptions<T>
@@ -161,31 +175,33 @@ export function useCachedPromise<T, TArgs extends any[] = any[]>(
   return useCachedPromiseWith(internalPromiseCache, fn, args, options);
 }
 
-function useCachedPromiseWith<T, TArgs extends any[] = any[]>(
+function useCachedPromiseWith<T, TArgs extends unknown[] = unknown[]>(
   cache: Cache,
   fn: (...args: TArgs) => Promise<T>,
   args?: TArgs,
   options?: UseCachedPromiseOptions<T>
 ): UsePromiseResult<T> {
+  const hooks = getHooks();
   const cacheKey = `${fn.name || "anon"}:${JSON.stringify(args || [])}`;
+  const initializedRef = hooks.useRef(false);
 
-  // 尝试命中缓存初始化
+  // 仅首次渲染读取并反序列化缓存，避免后续每次重渲染重复同步 JSON.parse
   let cachedData = options?.initialData;
-  const rawCached = cache.get(cacheKey);
-  if (rawCached !== undefined) {
-    try {
-      cachedData = JSON.parse(rawCached);
-    } catch {}
+  if (!initializedRef.current) {
+    initializedRef.current = true;
+    const rawCached = cache.get(cacheKey);
+    if (rawCached !== undefined) {
+      try {
+        cachedData = JSON.parse(rawCached) as T;
+      } catch (err) {
+        // 缓存 JSON 损坏时安全回落 initialData
+        void err;
+      }
+    }
   }
 
   const result = usePromise(
-    async (...callArgs: TArgs) => {
-      const res = await fn(...callArgs);
-      try {
-        cache.set(cacheKey, JSON.stringify(res));
-      } catch {}
-      return res;
-    },
+    fn,
     args,
     {
       ...options,
@@ -193,7 +209,10 @@ function useCachedPromiseWith<T, TArgs extends any[] = any[]>(
       onData: (data) => {
         try {
           cache.set(cacheKey, JSON.stringify(data));
-        } catch {}
+        } catch (err) {
+          // 不可序列化数据跳过写入缓存，不影响本次结果展示
+          void err;
+        }
         options?.onData?.(data);
       }
     }
@@ -205,13 +224,13 @@ function useCachedPromiseWith<T, TArgs extends any[] = any[]>(
 export interface UseFetchOptions<T> {
   headers?: Record<string, string>;
   method?: string;
-  body?: any;
+  body?: unknown;
   execute?: boolean;
   initialData?: T;
   parseResponse?: (response: Response) => Promise<T>;
 }
 
-export function useFetch<T = any>(
+export function useFetch<T = unknown>(
   url: string | (() => string),
   options?: UseFetchOptions<T>
 ): UsePromiseResult<T> {
@@ -257,23 +276,29 @@ function useCachedStateWith<T>(
   const hooks = getHooks();
   const cache = options?.cache || defaultCache;
 
-  let startVal = initialValue;
-  const raw = cache.get(key);
-  if (raw !== undefined) {
-    try {
-      startVal = JSON.parse(raw);
-    } catch {}
-  }
-
-  const [state, setState] = hooks.useState<T>(startVal);
+  const [state, setState] = hooks.useState<T>(() => {
+    const raw = cache.get(key);
+    if (raw !== undefined) {
+      try {
+        return JSON.parse(raw) as T;
+      } catch (err) {
+        // 缓存 JSON 损坏时安全回落 initialValue
+        void err;
+      }
+    }
+    return initialValue;
+  });
 
   const setCachedState = hooks.useCallback(
     (newValOrFn: T | ((prev: T) => T)) => {
       setState((prev: T) => {
-        const next = typeof newValOrFn === "function" ? (newValOrFn as any)(prev) : newValOrFn;
+        const next = typeof newValOrFn === "function" ? (newValOrFn as (p: T) => T)(prev) : newValOrFn;
         try {
           cache.set(key, JSON.stringify(next));
-        } catch {}
+        } catch (err) {
+          // 不可序列化状态跳过缓存持久化
+          void err;
+        }
         return next;
       });
     },

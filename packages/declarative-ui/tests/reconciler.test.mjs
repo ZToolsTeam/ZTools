@@ -8,6 +8,7 @@ import {
   useRef,
   List
 } from "../dist/index.js";
+import { areViewTreesEqual } from "../dist/runtime/context.js";
 
 describe("Declarative Reactive Reconciler & Hooks", () => {
   test("视图树 JSON 不变、只有回调闭包变化时：不发 onUpdate，但发 onRenderEmpty 且 getLatest 返回新闭包", async () => {
@@ -152,5 +153,22 @@ describe("Declarative Reactive Reconciler & Hooks", () => {
     assert.equal(memoComputes, 1); // 记忆化保持，不重复计算
 
     root.unmount();
+  });
+
+  test("areViewTreesEqual 结构比较与 JSON 语义边界完全一致（忽略函数/undefined、支持 Date/NaN、安全拒绝 BigInt 与循环引用）", () => {
+    assert.equal(areViewTreesEqual({ a: 1, b: () => 1, c: undefined }, { a: 1, b: () => 2 }), true);
+    assert.equal(areViewTreesEqual({ a: 1, b: 2 }, { b: 2, a: 1 }), true);
+    assert.equal(areViewTreesEqual({ a: 1, b: () => 1 }, { a: 1, b: "fn" }), false);
+    assert.equal(areViewTreesEqual({ items: [1, () => 1, undefined] }, { items: [1, null, null] }), true);
+    assert.equal(areViewTreesEqual({ d: new Date("2026-01-01T00:00:00Z") }, { d: new Date("2026-01-01T00:00:00Z") }), true);
+    assert.equal(areViewTreesEqual({ d: new Date("2026-01-01T00:00:00Z") }, { d: new Date("2026-01-02T00:00:00Z") }), false);
+    assert.equal(areViewTreesEqual({ n: NaN }, { n: null }), true);
+    assert.equal(areViewTreesEqual({ big: 1n }, { big: 1n }), false);
+    const cycA = { name: "loop" };
+    cycA.self = cycA;
+    const cycB = { name: "loop" };
+    cycB.self = cycB;
+    assert.equal(areViewTreesEqual(cycA, cycB), false);
+    assert.equal(areViewTreesEqual(cycA, cycA), true);
   });
 });
