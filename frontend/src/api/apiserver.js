@@ -29,8 +29,6 @@ export {
   setAutostart,
   getHotkey,
   setHotkey,
-  getLauncherHotkey,
-  setLauncherHotkey,
   getMinimizeToTray,
   setMinimizeToTray,
   getShowTrayIcon,

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 import PluginFeatureHotkeyModal from '../PluginFeatureHotkeyModal.vue'
@@ -12,6 +12,7 @@ import {
 describe('PluginFeatureHotkeyModal 动态功能快捷键、焦点归还与冲突剔除', () => {
   let pinia
   let originalZtools
+  const body = () => new DOMWrapper(document.body)
 
   beforeEach(() => {
     pinia = createPinia()
@@ -41,6 +42,7 @@ describe('PluginFeatureHotkeyModal 动态功能快捷键、焦点归还与冲突
 
   afterEach(() => {
     window.ztools = originalZtools
+    document.body.replaceChildren()
   })
 
   it('同时展示内置功能与已安装插件动态 features[]，注册时携带 excludeTriggerId 并在 Esc 取消后归还焦点', async () => {
@@ -114,6 +116,49 @@ describe('PluginFeatureHotkeyModal 动态功能快捷键、焦点归还与冲突
         }
       })
     )
+    wrapper.unmount()
+  })
+
+  it('真实挂载 RcDialog 时支持渲染大量功能项并通过右上角关闭按钮关闭并退出录制态', async () => {
+    usePluginsStore().installedPlugins = Array.from({ length: 25 }, (_, index) => ({
+      pluginId: `plugin-${index}`,
+      name: `插件 ${index}`,
+      features: [
+        { code: `feat-a-${index}`, explain: `功能 A ${index}` },
+        { code: `feat-b-${index}`, explain: `功能 B ${index}` }
+      ]
+    }))
+
+    const wrapper = mount(PluginFeatureHotkeyModal, {
+      attachTo: document.body,
+      global: {
+        plugins: [pinia]
+      }
+    })
+
+    await wrapper.vm.show()
+    await flushPromises()
+
+    const dialog = body().find('.rc-dialog')
+    const closeButton = body().find('.rc-dialog-close')
+    const list = body().find('.feature-hotkey-list')
+
+    expect(dialog.exists()).toBe(true)
+    expect(closeButton.exists()).toBe(true)
+    expect(list.exists()).toBe(true)
+    expect(body().findAll('.feature-hotkey-item').length).toBe(52)
+
+    // 进入录制态后直接点击关闭按钮，应清理录制态并关闭弹窗
+    await body().find('.hotkey-recorder').trigger('click')
+    await flushPromises()
+    expect(body().find('.hotkey-recorder.recording').exists()).toBe(true)
+
+    await closeButton.trigger('click')
+    await flushPromises()
+
+    expect(body().find('.hotkey-recorder.recording').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'RcDialog' }).props('open')).toBe(false)
+
     wrapper.unmount()
   })
 })

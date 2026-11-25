@@ -4,12 +4,12 @@
     @mouseenter="handleMouseEnter"
     @mouseleave="handleMouseLeave"
   >
-    <!-- 切到悬浮条：图标按钮（Ctrl+U 快捷键在全局保留，按钮本身不再展示快捷键提示） -->
+    <!-- 切到悬浮条：图标按钮 -->
     <button
       ref="triggerBtnRef"
       type="button"
       class="launcher-trigger"
-      :title="t('geekTrigger.switchTitle', { shortcut: switchLabel })"
+      :title="t('geekTrigger.switchTitle')"
       :aria-label="t('geekTrigger.switchAria')"
       @click="triggerGeekMode"
     >
@@ -57,10 +57,6 @@
                 <span v-else class="guide-key-off">{{ t('geekTrigger.wakeDisabled') }}</span>
               </dd>
             </div>
-            <div class="guide-key-row">
-              <dt>{{ t('geekTrigger.backToWorkspace') }}</dt>
-              <dd><ShortcutKeys :combo="TOGGLE_MODE_SHORTCUT" /></dd>
-            </div>
           </dl>
 
           <RcButton variant="primary" size="md" class="guide-btn" @click="triggerGeekMode">{{ t('geekTrigger.switchBtn') }}</RcButton>
@@ -77,8 +73,6 @@ import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { RcButton } from '@/components/base'
 import BrandMark from './BrandMark.vue'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
-import { shortcutLabel } from '@/utils/platform'
-import { TOGGLE_MODE_SHORTCUT } from '@/utils/shellShortcuts'
 import { currentGlobalWakeHotkey, refreshCurrentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
 import { useAppI18n } from '@/i18n'
 
@@ -86,7 +80,6 @@ const { t } = useAppI18n()
 
 // 显示用户实际设置的唤醒键，而不是写死的默认值
 const wakeHotkey = currentGlobalWakeHotkey
-const switchLabel = shortcutLabel(TOGGLE_MODE_SHORTCUT)
 onMounted(() => { refreshCurrentGlobalWakeHotkey() })
 
 const triggerBtnRef = ref(null)

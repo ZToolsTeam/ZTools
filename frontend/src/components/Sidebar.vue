@@ -20,7 +20,7 @@ import { BrandGlyph } from '@/components/base'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { getCategoryGlyph } from '@/utils/brandIcons'
 import { shortcutLabel } from '@/utils/platform'
-import { OPEN_SETTINGS_SHORTCUT, SHELL_SHORTCUTS } from '@/utils/shellShortcuts'
+import { SHELL_SHORTCUTS } from '@/utils/shellShortcuts'
 import { useAppI18n } from '@/i18n'
 import { getLocalizedCategoryName } from '@/utils/pluginI18n'
 import {
@@ -42,8 +42,14 @@ const { hasUnread: hasUnreadFeedback } = useFeedbackIndicator()
 
 const isCollapsed = computed(() => uiStore.isSidebarCollapsed)
 const toggleSidebar = () => uiStore.toggleSidebar()
-const settingsKey = OPEN_SETTINGS_SHORTCUT
-const toggleSidebarHint = shortcutLabel(SHELL_SHORTCUTS.TOGGLE_SIDEBAR)
+const settingsKey = computed(() => SHELL_SHORTCUTS.OPEN_SETTINGS)
+const toggleSidebarHint = computed(() =>
+  SHELL_SHORTCUTS.TOGGLE_SIDEBAR ? shortcutLabel(SHELL_SHORTCUTS.TOGGLE_SIDEBAR) : ''
+)
+const toggleSidebarTitle = computed(() => {
+  const base = isCollapsed.value ? t('nav.expandSidebar') : t('nav.collapseSidebar')
+  return toggleSidebarHint.value ? `${base} (${toggleSidebarHint.value})` : base
+})
 
 // 响应式路由与即时操作融合的高亮判断：点击瞬间即时高亮反馈，彻底消除假死与卡顿感
 const isMyActive = computed(() => {
@@ -367,7 +373,7 @@ const handleSidebarKeydown = (event) => {
           <SettingsIcon class="w-4 h-4" />
           <template v-if="!isCollapsed">
             <span class="sidebar-label flex-1 truncate">{{ t('nav.settings') }}</span>
-            <ShortcutKeys :combo="settingsKey" class="sidebar-kbd" />
+            <ShortcutKeys v-if="settingsKey" :combo="settingsKey" class="sidebar-kbd" />
           </template>
         </div>
 
@@ -394,7 +400,7 @@ const handleSidebarKeydown = (event) => {
       class="sidebar-toggle-btn"
       :aria-label="isCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')"
       :aria-expanded="!isCollapsed"
-      :title="isCollapsed ? `${t('nav.expandSidebar')} (${toggleSidebarHint})` : `${t('nav.collapseSidebar')} (${toggleSidebarHint})`"
+      :title="toggleSidebarTitle"
       @click="toggleSidebar"
     >
       <ChevronRightIcon v-if="isCollapsed" class="w-3.5 h-3.5" />

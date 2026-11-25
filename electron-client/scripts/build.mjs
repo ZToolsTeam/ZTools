@@ -9,6 +9,7 @@ import { buildDevelopmentDisplay } from './build-macos-display.mjs'
 import { buildDevelopmentDns } from './build-macos-dns.mjs'
 import { buildDevelopmentInputLock } from './build-macos-input-lock.mjs'
 import { buildDevelopmentClipboard } from './build-macos-clipboard.mjs'
+import { buildDevelopmentWindowsSidecars } from './build-sidecars.mjs'
 import { spawnSync } from 'node:child_process'
 import { readNativeHostManifest } from './native-host-manifest.mjs'
 import { buildRuntimeCapabilityPromptPreload, buildSandboxPreload } from './build-sandbox-preload.mjs'
@@ -61,6 +62,7 @@ buildDevelopmentNetwork(root)
 buildDevelopmentHotkeys(root)
 buildDevelopmentVision(root)
 buildDevelopmentPathAccess(root)
+buildDevelopmentWindowsSidecars()
 
 // 官方构建：闭源主进程产物原地压缩并去掉注释与源码映射
 if (hasCommercialMainSource(root)) {

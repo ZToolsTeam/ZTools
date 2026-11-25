@@ -56,15 +56,19 @@
     "backToHome": "返回主页",
     "mockTooltip": "当前使用 Mock 接口（浏览器开发模式），数据为模拟数据"
   },
+  "wakeGuide": {
+    "prefix": "随时按",
+    "suffix": "呼出悬浮条，快速搜索工具与文件",
+    "changeHotkey": "修改快捷键"
+  },
   "geekTrigger": {
-    "switchTitle": "切到悬浮条 {shortcut}",
+    "switchTitle": "切到悬浮条",
     "switchAria": "切到悬浮条",
     "label": "悬浮条",
     "guideTitle": "悬浮搜索条",
     "guideSubtitle": "收起工作台，只留屏幕中央一条搜索框",
     "wakeEverywhere": "随处唤起",
     "wakeDisabled": "未开启，可在设置中开启",
-    "backToWorkspace": "回到工作台",
     "switchBtn": "切到悬浮条"
   },
   "launcher": {
@@ -74,7 +78,7 @@
     "backToSearch": "返回搜索",
     "placeholder": "搜索插件、本地软件、系统工具或文件",
     "workbenchBtn": "工作台",
-    "workbenchTooltip": "展开为工作台 {shortcut}",
+    "workbenchTooltip": "展开为工作台",
     "pinnedSectionAria": "固定常用",
     "pinnedTitle": "固定常用 ({count})",
     "pinnedHintFocused": "方向键选择 · Enter 打开 · {reorder} 调整顺序 · {pin} 取消固定",
@@ -406,6 +410,7 @@
     "editionOss": "开源版",
     "unknownPlatform": "未识别平台",
     "license": "开源核心协议",
+    "website": "官方网站",
     "clientRepo": "客户端仓库",
     "pluginRepo": "插件仓库",
     "footerOfficial": "官方版包含闭源账号与云服务组件",
@@ -420,6 +425,7 @@
     "breadcrumbAria": "当前位置",
     "popout": "独立窗口",
     "popoutTooltip": "弹出为独立常驻窗口，自动携带当前搜索与选中状态 ({shortcut})",
+    "popoutTooltipNoShortcut": "弹出为独立常驻窗口，自动携带当前搜索与选中状态",
     "alwaysOnTopTooltip": "切换独立窗口始终置顶 (Always on Top)",
     "pinnedTop": "已置顶",
     "pinTop": "置顶",
@@ -471,7 +477,6 @@
     },
     "hotkeyConflict": {
       "globalWake": "全局唤醒快捷键",
-      "globalLauncher": "显示悬浮条快捷键",
       "mouseWake": "鼠标快捷唤醒",
       "systemHotkey": "系统快捷键",
       "unknownTrigger": "未知触发器",
@@ -493,6 +498,9 @@
       "tagSystem": "系统占用",
       "tagDuplicate": "快捷键重复",
       "conflictWith": "与「{name}」冲突",
+      "quickSwitchLabel": "一键换用可用热键：",
+      "quickSwitchSuccess": "全局唤醒快捷键已切换为 {key}",
+      "quickSwitchFailed": "切换快捷键失败：{reason}",
       "goSettings": "去设置"
     }
   },
@@ -653,6 +661,7 @@
         "rollbackFailedSuffix": "；恢复原快捷键也失败，请重新设置",
         "saved": "全局唤醒快捷键已保存",
         "disabled": "已关闭全局唤醒快捷键",
+        "inactiveHint": "当前快捷键未在系统生效（可能已被其他程序占用），请重新录制或更换组合键",
         "reasons": {
           "trigger_unavailable": "快捷键服务暂不可用",
           "trigger_list_failed": "读取已有快捷键失败",
@@ -660,16 +669,6 @@
           "trigger_unregister_failed": "注销快捷键失败",
           "default": "快捷键服务返回失败"
         }
-      },
-      "launcherHotkey": {
-        "label": "显示悬浮条快捷键",
-        "desc": "独立全局组合键，随时切换极客悬浮条显示或隐藏（不影响全局唤醒快捷键）",
-        "loadFailed": "读取显示悬浮条快捷键失败",
-        "conflict": "显示悬浮条快捷键与「{names}」冲突，请更换其他组合键",
-        "saveFailed": "显示悬浮条快捷键保存失败",
-        "syncFailed": "显示悬浮条快捷键同步失败：{reason}",
-        "saved": "显示悬浮条快捷键已保存",
-        "disabled": "已关闭显示悬浮条快捷键"
       },
       "mouseWake": {
         "label": "鼠标快捷唤醒",
@@ -722,10 +721,19 @@
         "configuredCount": "已配置 {count} 个快捷键"
       },
       "commonTitle": "常用快捷键",
+      "common": {
+        "restoreDefault": "恢复默认",
+        "emptyText": "未设置",
+        "saved": "常用快捷键「{label}」已更新",
+        "cleared": "已清空常用快捷键「{label}」",
+        "restored": "已恢复常用快捷键默认设置",
+        "saveFailed": "常用快捷键保存失败",
+        "conflict": "该快捷键与常用快捷键「{label}」冲突，请更换其他组合键",
+        "globalOverlapWarning": "该快捷键与{target}重名，全局热键会优先触发"
+      },
       "builtins": {
         "focus-search": "聚焦搜索",
         "action-panel": "动作面板",
-        "toggle-mode": "工作台与悬浮条切换",
         "toggle-sidebar": "展开 / 收起侧栏",
         "popout-window": "弹出为独立常驻窗口",
         "open-settings": "打开设置",
@@ -770,7 +778,8 @@
       "primaryTitle": "执行首要动作 ({shortcut})",
       "secondaryTitle": "执行次要动作 ({shortcut})",
       "actionPanel": "动作面板 ({count})",
-      "actionPanelTitle": "动作面板 (Ctrl+K)"
+      "actionPanelTitle": "动作面板 ({shortcut})",
+      "actionPanelTitleNoShortcut": "动作面板"
     },
     "empty": {
       "noContentTitle": "没有可显示的内容",
@@ -885,6 +894,8 @@
       "unsupportedWin": "仅支持 Ctrl、Shift、Alt 与 A-Z / Space / ` / ~ / F1-F24 组合",
       "unsupportedWinDouble": "仅支持 Ctrl、Shift、Alt 与 A-Z / Space / ` / ~ / F1-F24 组合，或双击 Ctrl / Alt / Shift",
       "unsupportedMac": "仅支持 ⌘ / ⌃ / ⌥ / ⇧ 与 A-Z / Space / ` / ~ / F1-F24 组合",
+      "unsupportedShellWin": "请使用 Ctrl / Alt 与字母、数字、常用符号、Space 或 F1-F24 的组合",
+      "unsupportedShellMac": "请使用 ⌘ / ⌃ / ⌥ 与字母、数字、常用符号、Space 或 F1-F24 的组合",
       "unknownPlatformUnsupported": "无法识别宿主平台，快捷键录制暂不可用",
       "unknownPlatformRule": "无法识别宿主平台，暂不能录制快捷键。",
       "ruleMac": "支持 ⌘ / ⌃ / ⌥ / ⇧ + A-Z、Space、反引号（`）、波浪号（~）或 F1-F24；不支持双击修饰键、方向键或数字。",
@@ -940,7 +951,6 @@
       "conflictOther": "该快捷键与 {plugin} 的其他快捷键冲突",
       "unavailable": "全局快捷键功能不可用",
       "conflictGlobalWake": "该快捷键与全局唤醒快捷键冲突",
-      "conflictGlobalLauncher": "该快捷键与显示悬浮条快捷键冲突",
       "conflictPlugins": "该快捷键与插件「{names}」冲突",
       "registerOccupied": "快捷键注册失败，可能被其他程序占用",
       "setSuccess": "已设置「{plugin} - {feature}」快捷键",

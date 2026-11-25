@@ -412,9 +412,10 @@ describe('getHotkeyHostCapabilities', () => {
       expect(blocked.text).toContain('系统')
     }
 
-    // 壳层保留快捷键温和提醒
+    // 壳层保留快捷键温和提醒（已下线的 Ctrl+U 不再触发保留提醒）
     expect(getShellReserveWarning('Ctrl+,')).toContain('打开设置')
-    expect(getShellReserveWarning('Ctrl+U')).toContain('工作台与悬浮条切换')
+    expect(getShellReserveWarning('Ctrl+B')).toContain('侧栏')
+    expect(getShellReserveWarning('Ctrl+U')).toBe('')
     expect(getShellReserveWarning('Ctrl+Alt+Z')).toBe('')
 
     // 禁止把中文提示文案传入 <ShortcutKeys>

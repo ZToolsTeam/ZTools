@@ -49,7 +49,7 @@
           v-if="!effectiveIsPopout && headerPluginMeta"
           type="button"
           class="declarative-popout-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] transition-all cursor-pointer whitespace-nowrap"
-          :title="t('declarativePage.popoutTooltip', { shortcut: popoutShortcutText })"
+          :title="popoutTooltip"
           @click="handlePopout"
         >
           <ExternalLinkIcon class="w-3.5 h-3.5" aria-hidden="true" />
@@ -145,7 +145,7 @@ import { getOfficialPlugin } from '@/utils/officialPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
 import { isPluginSupportedOnCurrentPlatform, isMacOS, isWindows, shortcutLabel } from '@/utils/platform'
 import { useKeymap, KEYMAP_SCOPES, isModalOpen } from '@/utils/keymap'
-import { POPOUT_WINDOW_SHORTCUT } from '@/utils/shellShortcuts'
+import { SHELL_SHORTCUTS, matchesShellShortcut } from '@/utils/shellShortcuts'
 import { getCachedDeclarativePlugin, loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 import DeclarativeView from '@/declarative/DeclarativeView.vue'
 import DeclEmptyState from '@/declarative/components/DeclEmptyState.vue'
@@ -227,15 +227,21 @@ const initialSnapshot = computed(() => {
   return { searchText, segmentedValue, dropdownValue, selectedId }
 })
 
-// 悬停提示展示当前平台规范键帽文案（Ctrl+Shift+P / ⌘⇧P），随语言热切换响应更新
+// 悬停提示展示当前平台规范键帽文案，随语言与常用快捷键修改/清空响应更新
 const popoutShortcutText = computed(() => {
   void locale.value
-  return shortcutLabel(POPOUT_WINDOW_SHORTCUT)
+  return SHELL_SHORTCUTS.POPOUT_WINDOW ? shortcutLabel(SHELL_SHORTCUTS.POPOUT_WINDOW) : ''
 })
+const popoutTooltip = computed(() =>
+  popoutShortcutText.value
+    ? t('declarativePage.popoutTooltip', { shortcut: popoutShortcutText.value })
+    : t('declarativePage.popoutTooltipNoShortcut')
+)
 
 // 宿主保留热键：优先于声明式插件自身的快捷键注册，防止插件冲突阻塞独立窗口弹出
 useKeymap(KEYMAP_SCOPES.HOST_RESERVED, {
-  [POPOUT_WINDOW_SHORTCUT]: () => {
+  onKeyDown: (_event, { combo }) => {
+    if (!matchesShellShortcut(combo, 'POPOUT_WINDOW')) return false
     if (isModalOpen()) return false
     if (effectiveIsPopout.value) return true
     if (!plugin.value) return false

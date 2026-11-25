@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import Header from '../Header.vue'
@@ -113,6 +113,15 @@ describe('工作台窗口默认焦点', () => {
     window.dispatchEvent(event)
     await settleFocus()
     expect(document.activeElement).toBe(logo())
+  })
+
+  it('左上角 Logo 展示品牌名与 www.ztools.cn 小字，点击可返回主页', async () => {
+    expect(logo().textContent).toContain('ZTools')
+    expect(logo().textContent).toContain('www.ztools.cn')
+    await router.push('/settings')
+    await wrapper.get('.header-brand-domain').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('my')
   })
 
   it('卸载取消任务并移除全局入口与窗口监听', async () => {

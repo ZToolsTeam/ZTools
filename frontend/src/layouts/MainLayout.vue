@@ -5,14 +5,14 @@ import { useRoute, useRouter } from 'vue-router'
 
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
+import WakeHotkeyGuideBanner from '@/components/WakeHotkeyGuideBanner.vue'
 
 import { useNavStore, isWorkbenchRouteName } from '@/stores/nav'
 import { useUIStore } from '@/stores/ui'
 import { useCategoriesStore } from '@/stores/categories'
 import { usePluginsStore } from '@/stores/plugins'
 import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
-import { OPEN_SETTINGS_SHORTCUT, SHELL_SHORTCUTS, TOGGLE_MODE_SHORTCUT } from '@/utils/shellShortcuts'
-import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
+import { SHELL_SHORTCUTS, matchesShellShortcut } from '@/utils/shellShortcuts'
 import { layoutExtraComponents } from '@edition'
 import { ROUTES } from '@/router/routes'
 import { useAppI18n } from '@/i18n'
@@ -39,12 +39,12 @@ function onMainScroll(event) {
   }
 }
 
-// 插件市场页只换搜索词、设置页只换查询参数时均复用同一页面实例，避免清理一次性深链参数时被 keep-alive 切回旧状态
+// 工作台核心页按路由名单实例复用，避免按分类/插件 ID/无害查询参数堆叠多个 keep-alive 实例
 const routeViewKey = computed(() => {
+  if (route.name === ROUTES.LIST.name) return ROUTES.LIST.name
+  if (route.name === ROUTES.DETAILS.name) return ROUTES.DETAILS.name
   if (route.name === ROUTES.ADVANCED_SETTINGS.name) return ROUTES.ADVANCED_SETTINGS.name
-  if (route.name !== ROUTES.LIST.name) return route.fullPath
-  const { q: _q, ...rest } = route.query
-  return router.resolve({ name: ROUTES.LIST.name, params: route.params, query: rest }).fullPath
+  return String(route.name || route.path)
 })
 
 // 启动后预取分类与插件目录：分类给插件市场用；目录统计会同时同步下架状态，主页上已安装插件的「已下架」标记依赖它
@@ -123,32 +123,8 @@ const goBackFromDetails = () => {
 const showCardActions = computed(() => route.name === 'my' || (route.name === 'list' && activePage.value?.hasCardActions))
 const isDetails = computed(() => route.name === 'details')
 
-// 全局基础快捷键调度 (GLOBAL 作用域)
+// 全局基础快捷键调度 (GLOBAL 作用域)：通过 onKeyDown 动态匹配当前常用快捷键配置，修改与清空即时生效
 useKeymap(KEYMAP_SCOPES.GLOBAL, {
-  [SHELL_SHORTCUTS.FOCUS_SEARCH]: () => {
-    openSearchOrActions()
-    return true
-  },
-  [SHELL_SHORTCUTS.ACTION_PANEL]: () => {
-    if (!showCardActions.value) return false
-    openGlobalActions()
-    return true
-  },
-  [SHELL_SHORTCUTS.TOGGLE_SIDEBAR]: () => {
-    uiStore.toggleSidebar()
-    return true
-  },
-  [OPEN_SETTINGS_SHORTCUT]: () => {
-    nav.setPage('advanced-settings')
-    if (route.name !== 'advanced-settings') router.push(ROUTES.ADVANCED_SETTINGS)
-    return true
-  },
-  [TOGGLE_MODE_SHORTCUT]: () => {
-    Promise.resolve(switchWindowMode(WINDOW_MODES.LAUNCHER)).catch((err) =>
-      console.warn('[MainLayout] 切换极客条模式失败:', err)
-    )
-    return true
-  },
   'Escape': () => {
     if (route.name === 'declarative') {
       nav.exitDeclarativeToWorkbench(router)
@@ -161,6 +137,27 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     }
     if (route.name !== 'my') {
       handleBackToHome()
+      return true
+    }
+    return false
+  },
+  onKeyDown: (_event, { combo }) => {
+    if (matchesShellShortcut(combo, 'FOCUS_SEARCH')) {
+      openSearchOrActions()
+      return true
+    }
+    if (matchesShellShortcut(combo, 'ACTION_PANEL')) {
+      if (!showCardActions.value) return false
+      openGlobalActions()
+      return true
+    }
+    if (matchesShellShortcut(combo, 'TOGGLE_SIDEBAR')) {
+      uiStore.toggleSidebar()
+      return true
+    }
+    if (matchesShellShortcut(combo, 'OPEN_SETTINGS')) {
+      nav.setPage('advanced-settings')
+      if (route.name !== 'advanced-settings') router.push(ROUTES.ADVANCED_SETTINGS)
       return true
     }
     return false
@@ -186,6 +183,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
         }"
         @scroll.passive="onMainScroll"
       >
+        <WakeHotkeyGuideBanner v-if="!isDeclarativeView" />
         <router-view v-slot="{ Component }">
           <keep-alive :exclude="['DeclarativePage']" :max="8">
             <component :is="Component" :key="routeViewKey" ref="activePage" />
@@ -215,11 +213,11 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
       <div class="flex items-center gap-1">
         <button v-if="showCardActions" type="button" class="action-btn" @click="openGlobalActions">
           {{ t('nav.actions') }}
-          <ShortcutKeys :combo="SHELL_SHORTCUTS.ACTION_PANEL" />
+          <ShortcutKeys v-if="SHELL_SHORTCUTS.ACTION_PANEL" :combo="SHELL_SHORTCUTS.ACTION_PANEL" />
         </button>
         <button type="button" class="action-btn" @click="openSearchOrActions">
           {{ t('common.search') }}
-          <ShortcutKeys :combo="SHELL_SHORTCUTS.FOCUS_SEARCH" />
+          <ShortcutKeys v-if="SHELL_SHORTCUTS.FOCUS_SEARCH" :combo="SHELL_SHORTCUTS.FOCUS_SEARCH" />
         </button>
       </div>
     </footer>

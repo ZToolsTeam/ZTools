@@ -24,7 +24,7 @@ const STORAGE_KEY_FIRST_GEEK_DISCOVERED = 'ztools_geek_mode_discovered'
 
 const state = reactive({
   currentMode: WINDOW_MODES.DASHBOARD,
-  wakePreference: WAKE_PREFERENCES.DASHBOARD, // 默认新用户友好：大窗口
+  wakePreference: WAKE_PREFERENCES.LAUNCHER, // 新用户按全局热键默认呼出悬浮条（双击图标冷启动仍先展示工作台）
   isTransitioning: false,
   geekModeDiscovered: false,
   launcherInitialQuery: ''
@@ -56,26 +56,35 @@ let unsubscribeHotkey = null
  * 初始化偏好设置与热键联动
  */
 export function initWindowMode() {
-  const savedPref = readStorage(STORAGE_KEY_PREFERENCE, WAKE_PREFERENCES.DASHBOARD)
+  const savedPref = readStorage(STORAGE_KEY_PREFERENCE, WAKE_PREFERENCES.LAUNCHER)
   state.wakePreference = [WAKE_PREFERENCES.DASHBOARD, WAKE_PREFERENCES.LAUNCHER].includes(savedPref)
     ? savedPref
-    : WAKE_PREFERENCES.DASHBOARD
+    : WAKE_PREFERENCES.LAUNCHER
 
   const discovered = readStorage(STORAGE_KEY_FIRST_GEEK_DISCOVERED, 'false')
   state.geekModeDiscovered = discovered === 'true'
 
-  if (typeof window !== 'undefined' && window.ztools?.config?.set) {
-    window.ztools.config.set('ui.wake_preference', state.wakePreference, true, 'user_settings.json').catch(() => {})
-  }
-
-  const isDedicatedLauncherWindow = typeof window !== 'undefined' && (
-    window.location?.search?.includes('mode=launcher') ||
-    window.location?.hash?.startsWith('#/launcher')
-  )
-
-  // 如果用户偏好是 launcher（且当前并非后台静默预热的独立 launcher 窗口），初次初始化为 launcher
-  if (state.wakePreference === WAKE_PREFERENCES.LAUNCHER && !isDedicatedLauncherWindow) {
-    switchWindowMode(WINDOW_MODES.LAUNCHER).catch(() => {})
+  // 以宿主 user_settings.json 为权威信源：若已有显式配置则优先回填，绝不用空 localStorage 覆盖老用户偏好
+  if (typeof window !== 'undefined' && window.ztools?.config) {
+    if (typeof window.ztools.config.get === 'function') {
+      Promise.resolve(window.ztools.config.get('ui.wake_preference', '__UNSET__'))
+        .then((hostPref) => {
+          const normalized = typeof hostPref === 'string' ? hostPref.trim() : ''
+          if (normalized === WAKE_PREFERENCES.DASHBOARD || normalized === WAKE_PREFERENCES.LAUNCHER) {
+            state.wakePreference = normalized
+            writeStorage(STORAGE_KEY_PREFERENCE, normalized)
+            return
+          }
+          if (typeof window.ztools?.config?.set === 'function') {
+            window.ztools.config
+              .set('ui.wake_preference', state.wakePreference, true, 'user_settings.json')
+              .catch(() => {})
+          }
+        })
+        .catch(() => {})
+    } else if (typeof window.ztools.config.set === 'function') {
+      window.ztools.config.set('ui.wake_preference', state.wakePreference, true, 'user_settings.json').catch(() => {})
+    }
   }
 
   if (typeof unsubscribeHotkey === 'function') {
@@ -113,7 +122,7 @@ export function _resetWindowModeForTesting() {
     unsubscribeHotkey = null
   }
   state.currentMode = WINDOW_MODES.DASHBOARD
-  state.wakePreference = WAKE_PREFERENCES.DASHBOARD
+  state.wakePreference = WAKE_PREFERENCES.LAUNCHER
   state.isTransitioning = false
   state.geekModeDiscovered = false
   state.launcherInitialQuery = ''

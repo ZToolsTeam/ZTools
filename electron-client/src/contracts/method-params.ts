@@ -1654,11 +1654,7 @@ function validateTriggerRegister(params: Record<string, unknown>): void {
   const action = hasNestedAction ? params.action as Record<string, unknown> : {
     mode: params.actionMode, target: params.actionTarget, params: params.actionParams
   }
-  if (
-    action.mode === 'builtin' &&
-    action.target !== 'toggle_main_window' &&
-    action.target !== 'toggle_launcher'
-  ) {
+  if (action.mode === 'builtin' && action.target !== 'toggle_main_window') {
     throw new ZToolsError(errorCodes.invalidRequest, 'Unsupported built-in trigger action')
   }
   requirePluginIdentifier(params, 'pluginId')

@@ -3,6 +3,7 @@ import { usePluginsStore } from './plugins'
 import { useUIStore } from './ui'
 import { useThemeStore } from './theme'
 import { useLocaleStore } from './locale'
+import { applyExternalShellShortcuts } from '@/utils/shellShortcuts'
 import { resolveErrorMessage } from '@/utils/errorMessage'
 import { t } from '@/i18n'
 
@@ -40,6 +41,9 @@ export const useEventsStore = defineStore('events', {
             .subscribe('system.LocaleChange')
             .catch((err) => console.warn('[EventsStore] 订阅 system.LocaleChange 失败:', err))
           window.ztools.events
+            .subscribe('system.ShellShortcutsChange')
+            .catch((err) => console.warn('[EventsStore] 订阅 system.ShellShortcutsChange 失败:', err))
+          window.ztools.events
             .subscribe('plugin_not_installed')
             .catch((err) => console.warn('[EventsStore] 订阅 plugin_not_installed 失败:', err))
 
@@ -66,6 +70,10 @@ export const useEventsStore = defineStore('events', {
           window.ztools.events.on(
             'system.LocaleChange',
             this.handleLocaleChange
+          )
+          window.ztools.events.on(
+            'system.ShellShortcutsChange',
+            this.handleShellShortcutsChange
           )
           window.ztools.events.on(
             'plugin_not_installed',
@@ -105,6 +113,10 @@ export const useEventsStore = defineStore('events', {
         window.ztools.events.off(
           'system.LocaleChange',
           this.handleLocaleChange
+        )
+        window.ztools.events.off(
+          'system.ShellShortcutsChange',
+          this.handleShellShortcutsChange
         )
         window.ztools.events.off(
           'plugin_not_installed',
@@ -170,6 +182,14 @@ export const useEventsStore = defineStore('events', {
         localeStore.applyHostLocale(envelope)
       } catch (e) {
         console.error('[EventsStore] 处理系统语言变更失败:', e)
+      }
+    },
+
+    handleShellShortcutsChange(envelope) {
+      try {
+        applyExternalShellShortcuts(envelope?.payload)
+      } catch (e) {
+        console.error('[EventsStore] 处理常用快捷键变更失败:', e)
       }
     },
 

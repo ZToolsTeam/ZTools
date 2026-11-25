@@ -12,11 +12,105 @@ const originalConsole = {
   warn: console.warn.bind(console)
 }
 
+interface PendingLogEntry {
+  file: string
+  text: string
+}
+
 let activeLogFile: string | undefined
 let consoleHooked = false
 let processHooked = false
+const pendingEntries: PendingLogEntry[] = []
+let flushScheduled = false
+let activeFlush: Promise<void> | undefined
+let inFlightBatch: PendingLogEntry | undefined
 
 const MAX_LOG_FILE_ATTEMPTS = 1000
+
+function takeNextBatch(): { file: string; text: string } | undefined {
+  const first = pendingEntries[0]
+  if (!first) return undefined
+  const targetFile = first.file
+  const parts: string[] = []
+  let count = 0
+  while (count < pendingEntries.length && pendingEntries[count]!.file === targetFile) {
+    parts.push(pendingEntries[count]!.text)
+    count += 1
+  }
+  pendingEntries.splice(0, count)
+  return { file: targetFile, text: parts.join('') }
+}
+
+function scheduleFlush(): void {
+  if (flushScheduled || activeFlush) return
+  flushScheduled = true
+  queueMicrotask(() => {
+    flushScheduled = false
+    startAsyncDrain()
+  })
+}
+
+function startAsyncDrain(): Promise<void> {
+  if (activeFlush) return activeFlush
+  if (pendingEntries.length === 0) return Promise.resolve()
+  const run = (async () => {
+    try {
+      while (pendingEntries.length > 0) {
+        const batch = takeNextBatch()
+        if (!batch) break
+        inFlightBatch = batch
+        try {
+          await fs.promises.appendFile(batch.file, batch.text, 'utf8')
+        } catch (err) {
+          // Logging must never make the application fail to start or shut down.
+          void err
+        } finally {
+          if (inFlightBatch === batch) inFlightBatch = undefined
+        }
+      }
+    } finally {
+      activeFlush = undefined
+      if (pendingEntries.length > 0) {
+        scheduleFlush()
+      }
+    }
+  })()
+  activeFlush = run
+  return run
+}
+
+export function flushRuntimeLogSync(options?: { includeInFlight?: boolean }): void {
+  if (options?.includeInFlight && inFlightBatch) {
+    const batch = inFlightBatch
+    inFlightBatch = undefined
+    try {
+      fs.appendFileSync(batch.file, batch.text, 'utf8')
+    } catch (err) {
+      // Logging must never make the application fail to start or shut down.
+      void err
+    }
+  }
+  while (pendingEntries.length > 0) {
+    const batch = takeNextBatch()
+    if (!batch) break
+    try {
+      fs.appendFileSync(batch.file, batch.text, 'utf8')
+    } catch (err) {
+      // Logging must never make the application fail to start or shut down.
+      void err
+    }
+  }
+}
+
+export async function flushRuntimeLog(): Promise<void> {
+  while (activeFlush || pendingEntries.length > 0) {
+    if (activeFlush) {
+      await activeFlush
+    } else {
+      await startAsyncDrain()
+    }
+  }
+}
 
 function formatLogTimestamp(now: Date): string {
   return now.toISOString().replace(/[:.]/g, '-')
@@ -52,11 +146,11 @@ function append(level: RuntimeLogLevel, scope: string, values: unknown[]): void 
   if (!activeLogFile) return
   const prefix = `${new Date().toISOString()} [pid:${process.pid}] [${level}] [${scope}] `
   const message = formatMessage(values).replaceAll('\n', `\n${prefix}`)
-  try {
-    fs.appendFileSync(activeLogFile, `${prefix}${message}\n`, 'utf8')
-  } catch {
-    // Logging must never make the application fail to start or shut down.
-  }
+  pendingEntries.push({
+    file: activeLogFile,
+    text: `${prefix}${message}\n`
+  })
+  scheduleFlush()
 }
 
 function hookConsole(): void {
@@ -89,6 +183,7 @@ function hookProcessErrors(): void {
   processHooked = true
   process.on('uncaughtExceptionMonitor', (error, origin) => {
     append('ERROR', 'process', [`Uncaught exception (${origin})`, error])
+    flushRuntimeLogSync({ includeInFlight: true })
   })
   // 移除 Node 默认的 onWarning（其内部走 console.error 导致 DeprecationWarning 在日志中被误记为 [ERROR]），
   // 改为统一路由到 [WARN] 日志并通过 originalConsole.warn 保留终端可见性
@@ -107,6 +202,7 @@ function hookProcessErrors(): void {
   })
   process.on('exit', (code) => {
     append('INFO', 'process', ['Process exiting', { code }])
+    flushRuntimeLogSync({ includeInFlight: true })
   })
 }
 
@@ -116,6 +212,7 @@ export function initializeRuntimeLogging(logDirectory: string): string | undefin
       originalConsole.error('Runtime file logging initialization failed: logDirectory is empty')
       return undefined
     }
+    flushRuntimeLogSync()
     fs.mkdirSync(logDirectory, { recursive: true })
     activeLogFile = createUniqueLogFile(logDirectory, new Date(), process.pid)
     hookConsole()

@@ -21,6 +21,7 @@ import { routeUtils, ROUTES } from '@/router/routes'
 import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { useKeymap, KEYMAP_SCOPES, isInteractiveControlTarget } from '@/utils/keymap'
+import { matchesShellShortcut } from '@/utils/shellShortcuts'
 import { useAppI18n } from '@/i18n'
 import { getLocalizedCategoryName, getLocalizedPluginName } from '@/utils/pluginI18n'
 import {
@@ -53,9 +54,12 @@ const page = ref(1)
 const pageSize = ref(PAGE_SIZE)
 const category = ref(normalizeCategoryRouteParam(route.params.category || ''))
 const loading = ref(false)
+const isFetching = ref(false)
 const loadingLocalPlugins = ref(false)
 const error = ref('')
+const isPageActive = ref(true)
 let loadRequestId = 0
+let needsReloadOnActivate = false
 
 // 是否为"全部"分类视图（需要分组展示）
 const isAllCategory = computed(() => !category.value || category.value === '')
@@ -159,6 +163,134 @@ const cardProps = (p, index) => {
   }
 }
 
+const buildPreviewGroups = (categories) =>
+  categories.map((item) => {
+    const key = resolveCategoryKey(item)
+    return {
+      ...item,
+      id: key || item.id,
+      icon: getCategoryIcon(key || item.name)
+    }
+  })
+
+const fetchCategoryOverview = async (categoriesPromise, requestId) => {
+  const nextGroups = []
+  let catalogTotal = 0
+
+  if (typeof pluginsStore.loadCategoryOverview === 'function') {
+    const categories = await categoriesPromise
+    if (requestId !== loadRequestId) return null
+
+    const groups = buildPreviewGroups(categories)
+    const overview = await pluginsStore.loadCategoryOverview(groups, CATEGORY_PREVIEW_LIMIT)
+    if (requestId !== loadRequestId) return null
+
+    let runningStartIndex = 0
+    if (Array.isArray(overview?.groups)) {
+      for (const rawGroup of overview.groups) {
+        const key = resolveCategoryKey(rawGroup)
+        const rawPlugins = Array.isArray(rawGroup?.plugins)
+          ? rawGroup.plugins
+          : Array.isArray(rawGroup?.list)
+            ? rawGroup.list
+            : []
+        const plugins = rawPlugins.filter(isPluginSupportedOnCurrentPlatform)
+        const groupTotal = Number(rawGroup?.total ?? rawGroup?.pluginsCount ?? plugins.length)
+        if (groupTotal > 0 || plugins.length > 0) {
+          nextGroups.push({
+            ...rawGroup,
+            id: key || rawGroup.id,
+            icon: rawGroup.icon || getCategoryIcon(key || rawGroup.name),
+            plugins,
+            total: groupTotal,
+            startIndex: runningStartIndex
+          })
+          runningStartIndex += plugins.length
+        }
+      }
+    } else {
+      const byCategory = overview?.byCategory || overview?.groups || {}
+      for (const group of groups) {
+        const entry = byCategory instanceof Map
+          ? (byCategory.get(group.id) || byCategory.get(group.name))
+          : (byCategory[group.id] || byCategory[group.name])
+        const rawPlugins = Array.isArray(entry?.list)
+          ? entry.list
+          : Array.isArray(entry?.plugins)
+            ? entry.plugins
+            : []
+        const plugins = rawPlugins.filter(isPluginSupportedOnCurrentPlatform)
+        const groupTotal = Number(entry?.total ?? plugins.length)
+        if (groupTotal > 0 || plugins.length > 0) {
+          nextGroups.push({
+            ...group,
+            plugins,
+            total: groupTotal,
+            startIndex: runningStartIndex
+          })
+          runningStartIndex += plugins.length
+        }
+      }
+    }
+    catalogTotal = Number(overview?.total ?? 0)
+    return { nextGroups, catalogTotal }
+  }
+
+  const [categories, catalogResult] = await Promise.all([
+    categoriesPromise,
+    pluginsStore.loadWithCache({ sourceType: 'all', page: 1, per_page: 1 })
+  ])
+  if (requestId !== loadRequestId) return null
+
+  const groups = buildPreviewGroups(categories)
+  const results = await Promise.allSettled(
+    groups.map((group) =>
+      pluginsStore.loadWithCache({
+        category: group.id || group.name,
+        page: 1,
+        per_page: CATEGORY_PREVIEW_LIMIT
+      })
+    )
+  )
+  if (requestId !== loadRequestId) return null
+
+  let failedCount = 0
+  let runningStartIndex = 0
+  for (let index = 0; index < groups.length; index += 1) {
+    const result = results[index]
+    if (result.status === 'rejected') {
+      failedCount += 1
+      console.warn(`[List] 分类“${groups[index].name}”预览加载失败:`, result.reason)
+      continue
+    }
+
+    const plugins = (Array.isArray(result.value?.list)
+      ? result.value.list
+      : []).filter(isPluginSupportedOnCurrentPlatform)
+    const groupTotal = Number(
+      result.value?.total ?? groups[index].pluginsCount ?? plugins.length
+    )
+    if (groupTotal > 0 || plugins.length > 0) {
+      nextGroups.push({
+        ...groups[index],
+        plugins,
+        total: groupTotal,
+        startIndex: runningStartIndex
+      })
+      runningStartIndex += plugins.length
+    }
+  }
+
+  if (failedCount === groups.length && groups.length > 0) {
+    throw new Error(t('market.categoryPreviewFailed'))
+  }
+  if (failedCount > 0) {
+    toastWarning(t('market.partialCategoryFailed', { count: failedCount }, failedCount))
+  }
+  catalogTotal = catalogResult.total
+  return { nextGroups, catalogTotal }
+}
+
 const load = async () => {
   const requestId = ++loadRequestId
   const requestCategory = category.value || ''
@@ -167,7 +299,13 @@ const load = async () => {
   const requestKeyword = searchKeyword.value
   const requestIsCategoryOverview =
     requestCategory === '' && requestKeyword === '' && selectedSourceType.value === 'all'
-  loading.value = true
+  const hasWarmCache =
+    Boolean(pluginsStore.hasFreshCatalog?.()) &&
+    (categoriesStore.loaded || Boolean(categoriesStore.error))
+  if (!hasWarmCache) {
+    loading.value = true
+  }
+  isFetching.value = true
   error.value = ''
   try {
     const isFav = requestCategory === FAVORITES_CATEGORY_ID
@@ -201,73 +339,19 @@ const load = async () => {
     }
 
     if (requestIsCategoryOverview) {
-      const [categories, catalogResult] = await Promise.all([
-        categoriesPromise,
-        pluginsStore.loadWithCache({ sourceType: 'all', page: 1, per_page: 1 })
-      ])
-      if (requestId !== loadRequestId) return
+      const overviewResult = await fetchCategoryOverview(categoriesPromise, requestId)
+      if (!overviewResult || requestId !== loadRequestId) return
 
-      const groups = categories.map((item) => {
-        const key = resolveCategoryKey(item)
-        return {
-          ...item,
-          id: key || item.id,
-          icon: getCategoryIcon(key || item.name)
-        }
-      })
-      const results = await Promise.allSettled(
-        groups.map((group) =>
-          pluginsStore.loadWithCache({
-            category: group.id || group.name,
-            page: 1,
-            per_page: CATEGORY_PREVIEW_LIMIT
-          })
-        )
-      )
-      if (requestId !== loadRequestId) return
-
-      const nextGroups = []
-      let failedCount = 0
-      for (let index = 0; index < groups.length; index += 1) {
-        const result = results[index]
-        if (result.status === 'rejected') {
-          failedCount += 1
-          console.warn(`[List] 分类“${groups[index].name}”预览加载失败:`, result.reason)
-          continue
-        }
-
-        const plugins = (Array.isArray(result.value?.list)
-          ? result.value.list
-          : []).filter(isPluginSupportedOnCurrentPlatform)
-        const groupTotal = Number(
-          result.value?.total ?? groups[index].pluginsCount ?? plugins.length
-        )
-        if (groupTotal > 0 || plugins.length > 0) {
-          nextGroups.push({
-            ...groups[index],
-            plugins,
-            total: groupTotal
-          })
-        }
-      }
-
-      if (failedCount === groups.length && groups.length > 0) {
-        throw new Error(t('market.categoryPreviewFailed'))
-      }
-      if (failedCount > 0) {
-        toastWarning(t('market.partialCategoryFailed', { count: failedCount }, failedCount))
-      }
-
-      previewGroups.value = nextGroups
+      previewGroups.value = overviewResult.nextGroups
       items.value = []
       // 一个插件可以属于多个分类；总数取当前系统目录的去重结果，不累加分类或预览数量。
-      total.value = catalogResult.total
+      total.value = overviewResult.catalogTotal
     } else if (isFav) {
-      previewGroups.value = []
       // 收藏页：通过 IDs 批量获取，支持分页
       const favIds = Array.from(pluginsStore.favorites)
       if (!favIds || favIds.length === 0) {
         if (requestId !== loadRequestId) return
+        previewGroups.value = []
         items.value = []
         total.value = 0
         return
@@ -281,10 +365,10 @@ const load = async () => {
       })
 
       if (requestId !== loadRequestId) return
+      previewGroups.value = []
       items.value = result.list
       total.value = result.total
     } else {
-      previewGroups.value = []
       // 普通列表（走内存缓存，3分钟内不重复请求）
       const result = await pluginsStore.loadWithCache({
         category: requestCategory,
@@ -294,6 +378,7 @@ const load = async () => {
         keyword: requestKeyword
       })
       if (requestId !== loadRequestId) return
+      previewGroups.value = []
       items.value = result.list
       total.value = result.total
     }
@@ -304,28 +389,36 @@ const load = async () => {
   } finally {
     if (requestId === loadRequestId) {
       loading.value = false
+      isFetching.value = false
     }
   }
+}
+
+function syncRouteFilterAndReload(rawCategory, rawQuery) {
+  const nextCategory = normalizeCategoryRouteParam(rawCategory || '')
+  const nextKeyword = String(rawQuery || '').trim()
+  if (nextCategory === category.value && nextKeyword === searchKeyword.value) return false
+  const previousCategory = category.value
+  category.value = nextCategory
+  searchKeyword.value = nextKeyword
+
+  page.value = 1
+  resetListFocus()
+  if (nextCategory !== previousCategory) {
+    // 埋点：市场分类筛选
+    track('market_filter', '', { category: nextCategory || 'all' })
+  }
+  needsReloadOnActivate = false
+  load()
+  return true
 }
 
 watch(
   [() => route.name, () => route.params.category, () => route.query.q],
   ([name, v, q]) => {
+    if (!isPageActive.value) return
     if (name && name !== ROUTES.LIST.name) return
-    const nextCategory = normalizeCategoryRouteParam(v || '')
-    const nextKeyword = String(q || '').trim()
-    if (nextCategory === category.value && nextKeyword === searchKeyword.value) return
-    const previousCategory = category.value
-    category.value = nextCategory
-    searchKeyword.value = nextKeyword
-
-    page.value = 1
-    resetListFocus()
-    if (nextCategory !== previousCategory) {
-      // 埋点：市场分类筛选
-      track('market_filter', '', { category: nextCategory || 'all' })
-    }
-    load()
+    syncRouteFilterAndReload(v, q)
   }
 )
 
@@ -416,7 +509,6 @@ const openDevGuide = () => {
 const listContainerRef = ref(null)
 const focusedCardIndex = ref(0)
 const actionPanelVisible = ref(false)
-const isPageActive = ref(true)
 
 // 分类概览模式下键盘焦点按页面上实际展示的顺序（各分类前 8 个）移动
 const isPreviewVisible = computed(() => isCategoryOverview.value && previewGroups.value.length > 0)
@@ -433,6 +525,10 @@ const currentDisplayList = computed(() => {
 })
 
 function previewFlatIndex(groupIndex, index) {
+  const group = previewGroups.value[groupIndex]
+  if (typeof group?.startIndex === 'number') {
+    return group.startIndex + index
+  }
   let offset = 0
   for (let i = 0; i < groupIndex; i++) {
     offset += Array.isArray(previewGroups.value[i]?.plugins) ? previewGroups.value[i].plugins.length : 0
@@ -504,7 +600,7 @@ watch(
 const focusedPlugin = computed(() => currentDisplayList.value[focusedCardIndex.value] || null)
 
 const hasCardActions = computed(() => !isInitialLoading.value && !error.value && !!focusedPlugin.value)
-const emptySearch = computed(() => !!searchKeyword.value && !isInitialLoading.value && !error.value && !currentDisplayList.value.length)
+const emptySearch = computed(() => !!searchKeyword.value && !isInitialLoading.value && !isFetching.value && !error.value && !currentDisplayList.value.length)
 defineExpose({ hasCardActions })
 
 const activePluginActions = computed(() => {
@@ -650,20 +746,21 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     }
     return false
   },
-  'Ctrl+K': () => {
+  'Escape': () => {
+    if (actionPanelVisible.value) {
+      actionPanelVisible.value = false
+      return true
+    }
+    return false
+  },
+  onKeyDown: (_event, { combo }) => {
+    if (!matchesShellShortcut(combo, 'ACTION_PANEL')) return false
     if (actionPanelVisible.value) {
       actionPanelVisible.value = false
       return true
     }
     if (hasCardActions.value) {
       actionPanelVisible.value = true
-      return true
-    }
-    return false
-  },
-  'Escape': () => {
-    if (actionPanelVisible.value) {
-      actionPanelVisible.value = false
       return true
     }
     return false
@@ -689,6 +786,10 @@ const handleFavoriteChanged = async (envelope) => {
   try {
     // 如果当前在收藏页面，重新加载列表
     if (category.value === 'favorites') {
+      if (!isPageActive.value) {
+        needsReloadOnActivate = true
+        return
+      }
       console.debug('[List] 收藏状态变化，重新加载列表')
       await load()
     }
@@ -703,6 +804,13 @@ const handleInstallComplete = async (envelope) => {
     const payload = envelope?.payload || {}
     if (!pluginsStore.acceptsInstallEvent(payload)) return
     const pid = payload.pluginId
+
+    if (!isPageActive.value) {
+      if (payload.success && payload.isUpdate) {
+        needsReloadOnActivate = true
+      }
+      return
+    }
 
     if (payload.success) {
       console.debug('[List] 插件安装完成:', pid)
@@ -758,6 +866,12 @@ onMounted(() => {
 
 onActivated(() => {
   isPageActive.value = true
+  if (route.name && route.name !== ROUTES.LIST.name) return
+  const synced = syncRouteFilterAndReload(route.params.category, route.query.q)
+  if (!synced && needsReloadOnActivate) {
+    needsReloadOnActivate = false
+    load()
+  }
 })
 
 onDeactivated(() => {
@@ -832,7 +946,7 @@ onBeforeUnmount(() => {
       "
     >
       <div
-        v-for="(group, groupIndex) in previewGroups"
+        v-for="group in previewGroups"
         :key="group.id || group.name"
         style="margin-bottom: 16px"
       >
@@ -870,12 +984,12 @@ onBeforeUnmount(() => {
             v-for="(p, index) in group.plugins"
             :key="getPluginId(p)"
             class="transition-all rounded-[var(--rc-radius-lg)]"
-            :class="{ 'is-list-card-focused': !uiStore.isSearchInputActive && focusedCardIndex === previewFlatIndex(groupIndex, index) }"
-            :data-nav-index="previewFlatIndex(groupIndex, index)"
+            :class="{ 'is-list-card-focused': !uiStore.isSearchInputActive && focusedCardIndex === group.startIndex + index }"
+            :data-nav-index="group.startIndex + index"
             :data-nav-group="group.id || group.name"
-            v-bind="cardProps(p, previewFlatIndex(groupIndex, index))"
-            @click="handleCardFocus(previewFlatIndex(groupIndex, index))"
-            @focusin="handleCardFocus(previewFlatIndex(groupIndex, index))"
+            v-bind="cardProps(p, group.startIndex + index)"
+            @click="handleCardFocus(group.startIndex + index)"
+            @focusin="handleCardFocus(group.startIndex + index)"
             @toggle-favorite="toggleFavorite"
             @open="goDetails"
             @open-app="openApp"
@@ -888,7 +1002,7 @@ onBeforeUnmount(() => {
 
     <!-- 空结果提供直接返回完整目录的入口 -->
     <RcEmpty
-      v-else-if="categoriesReady && !loading && !error && items.length === 0"
+      v-else-if="categoriesReady && !loading && !isFetching && !error && items.length === 0"
       :icon="SearchIcon"
       :title="route.query.q ? t('market.emptySearchTitle', { keyword: route.query.q }) : t('market.emptyTitle')"
       :description="route.query.q ? t('market.emptySearchDesc') : t('market.emptyDesc')"

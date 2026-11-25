@@ -1716,6 +1716,8 @@ export function useCommandSearch(options = {}) {
     const targets = items.filter(
       (item) => item?.isApplication && item.available !== false && !item.icon && item.path && !failedIconPaths.has(item.path)
     )
+    if (targets.length === 0) return
+    let updated = false
     await Promise.all(targets.map(async (item) => {
       try {
         let pending = applicationIcons.get(item.path)
@@ -1732,7 +1734,7 @@ export function useCommandSearch(options = {}) {
             resolvedApplicationIcons.delete(resolvedApplicationIcons.keys().next().value)
           }
           resolvedApplicationIcons.set(item.path, icon)
-          iconVersion.value++
+          updated = true
         } else {
           failedIconPaths.add(item.path)
         }
@@ -1742,6 +1744,9 @@ export function useCommandSearch(options = {}) {
         console.warn('[useCommandSearch] 应用图标读取失败:', error)
       }
     }))
+    if (!disposed && updated) {
+      iconVersion.value++
+    }
   }
 
   /**

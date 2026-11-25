@@ -1221,3 +1221,36 @@ test('原生目标或发键权限拒绝经完整服务保留原因，准备失�
     } finally { await harness.service.stop(); harness.events.stop(); await session.stop() }
   }
 })
+
+test('文件剪贴板指纹未变化时轮询绝不重复调用 readFiles，仅在变化后读取一次', async () => {
+  const registry = new FakeRegistry()
+  const events = new EventService(registry as unknown as WindowRegistry)
+  const clipboard = new FakeClipboard()
+  const fileClipboard = new FakeFileClipboard()
+  let readFilesCount = 0
+  fileClipboard.readFiles = async () => {
+    readFilesCount += 1
+    return fileClipboard.paths
+  }
+  const { files } = createFiles()
+  const service = new ClipboardService(files, events, clipboard, createImages(), fileClipboard, 10)
+
+  try {
+    clipboard.fileDrop = true
+    clipboard.formats = ['FileNameW']
+    clipboard.fileUrlData = Buffer.from('initial-file-buffer')
+    fileClipboard.paths = ['C:\\initial.txt']
+
+    events.subscribe({ key: 'clipboard_change' }, caller)
+    await wait(60)
+    assert.equal(readFilesCount, 0, '订阅启动已记住初始文件指纹，未变化期间不应调用 readFiles')
+
+    clipboard.fileUrlData = Buffer.from('updated-file-buffer')
+    fileClipboard.paths = ['C:\\updated.txt']
+    await wait(60)
+    assert.equal(readFilesCount, 1, '指纹变化后仅应调用一次 readFiles，后续空转轮询不得重复拉起')
+  } finally {
+    await service.stop()
+    events.stop()
+  }
+})

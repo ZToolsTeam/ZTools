@@ -112,22 +112,37 @@ test('ConfigService supports setFeature and persists updates to user_settings.js
   )
 })
 
-test('ConfigService.setFeatures batch updates multiple flags', async (t) => {
+test('ConfigService.setFeatures batch updates multiple flags in a single store update', async (t) => {
   const root = await createTestRoot(t, 'batch-set')
   const store = new JsonFileStore(root, ConfigService.allowedStoreFiles)
   const config = new ConfigService(store)
 
+  let updateCalls = 0
+  const originalUpdate = store.update.bind(store)
+  store.update = async (fileName, mutate) => {
+    updateCalls += 1
+    return originalUpdate(fileName, mutate)
+  }
+
   const result = await config.setFeatures({
     commandPalette: true,
-    scriptCommands: true
+    scriptCommands: true,
+    extensionTools: true
   })
 
+  assert.equal(updateCalls, 1, '批量设置多个特性开关应合并为单次写盘')
   assert.equal(result.commandPalette, true)
   assert.equal(result.scriptCommands, true)
+  assert.equal(result.extensionTools, true)
   assert.equal(result.unifiedKeymap, false)
+
+  // 无有效布尔更新时不得触发无意义写盘
+  await config.setFeatures({})
+  assert.equal(updateCalls, 1)
 
   const reread = await config.getFeatures()
   assert.equal(reread.commandPalette, true)
   assert.equal(reread.scriptCommands, true)
+  assert.equal(reread.extensionTools, true)
   assert.equal(reread.unifiedKeymap, false)
 })

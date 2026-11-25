@@ -12,7 +12,7 @@ import {
   isInteractiveControlTarget,
   isModalOpen
 } from '../keymap.js'
-import { POPOUT_WINDOW_SHORTCUT, TOGGLE_MODE_SHORTCUT } from '../shellShortcuts.js'
+import { POPOUT_WINDOW_SHORTCUT } from '../shellShortcuts.js'
 
 describe('keymap 统一快捷键分发器测试套件', () => {
   beforeEach(() => {
@@ -134,7 +134,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
     expect(audit).toEqual(['declarative_esc_passthrough', 'global_esc'])
   })
 
-  it('3. [核心设计键位规范匹配] Enter, Ctrl+Enter, Ctrl+K, Esc, Ctrl+U, Ctrl+F, Ctrl+Shift+P, Alt+Space', () => {
+  it('3. [核心设计键位规范匹配] Enter, Ctrl+Enter, Ctrl+K, Esc, Ctrl+B, Ctrl+F, Ctrl+Shift+P, Alt+Space', () => {
     const triggered = []
 
     registerKeyHandler(KEYMAP_SCOPES.GLOBAL, {
@@ -142,7 +142,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       'Ctrl+Enter': () => { triggered.push('ctrl_enter'); return true },
       'Ctrl+K': () => { triggered.push('ctrl_k'); return true },
       'Escape': () => { triggered.push('esc'); return true },
-      [TOGGLE_MODE_SHORTCUT]: () => { triggered.push('ctrl_u'); return true },
+      'Ctrl+B': () => { triggered.push('ctrl_b'); return true },
       [POPOUT_WINDOW_SHORTCUT]: () => { triggered.push('ctrl_shift_p'); return true },
       'Ctrl+F': () => { triggered.push('ctrl_f'); return true },
       'Alt+Space': () => { triggered.push('alt_space'); return true }
@@ -152,7 +152,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
     dispatchKeyEvent({ key: 'Enter', ctrlKey: true })
     dispatchKeyEvent({ key: 'k', ctrlKey: true })
     dispatchKeyEvent({ key: 'Escape' })
-    dispatchKeyEvent({ key: 'u', ctrlKey: true })
+    dispatchKeyEvent({ key: 'b', ctrlKey: true })
     dispatchKeyEvent({ key: 'p', ctrlKey: true, shiftKey: true })
     dispatchKeyEvent({ key: 'f', ctrlKey: true })
     dispatchKeyEvent({ key: ' ', altKey: true, code: 'Space' })
@@ -162,7 +162,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       'ctrl_enter',
       'ctrl_k',
       'esc',
-      'ctrl_u',
+      'ctrl_b',
       'ctrl_shift_p',
       'ctrl_f',
       'alt_space'
@@ -366,22 +366,21 @@ describe('keymap 统一快捷键分发器测试套件', () => {
 
     it('[打开设置单一信源与中文输入法字母键兼容] OPEN_SETTINGS_SHORTCUT 为 Ctrl+,，非组字 IME 229/KeyU 命中 Ctrl+U，组字中与 Ctrl+Shift+U 绝不误触', () => {
       expect(OPEN_SETTINGS_SHORTCUT).toBe('Ctrl+,')
-      expect(TOGGLE_MODE_SHORTCUT).toBe('Ctrl+U')
 
-      const toggleModeHandler = vi.fn(() => true)
-      registerKeyHandler(KEYMAP_SCOPES.GLOBAL, { [TOGGLE_MODE_SHORTCUT]: toggleModeHandler })
+      const letterShortcutHandler = vi.fn(() => true)
+      registerKeyHandler(KEYMAP_SCOPES.GLOBAL, { 'Ctrl+U': letterShortcutHandler })
 
       // 1. 常规 Ctrl+u / macOS Cmd+U
       const normalCtrl = new KeyboardEvent('keydown', { key: 'u', code: 'KeyU', ctrlKey: true, cancelable: true })
       expect(dispatchKeyEvent(normalCtrl)).toBe(true)
       expect(normalCtrl.defaultPrevented).toBe(true)
-      expect(toggleModeHandler).toHaveBeenCalledTimes(1)
+      expect(letterShortcutHandler).toHaveBeenCalledTimes(1)
 
       globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'darwin'
       try {
         const normalMeta = new KeyboardEvent('keydown', { key: 'U', code: 'KeyU', metaKey: true, cancelable: true })
         expect(dispatchKeyEvent(normalMeta)).toBe(true)
-        expect(toggleModeHandler).toHaveBeenCalledTimes(2)
+        expect(letterShortcutHandler).toHaveBeenCalledTimes(2)
       } finally {
         delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
       }
@@ -401,7 +400,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
         expect(dispatchKeyEvent(imeLetterEvt)).toBe(true)
         expect(imeLetterEvt.defaultPrevented).toBe(true)
       }
-      expect(toggleModeHandler).toHaveBeenCalledTimes(5)
+      expect(letterShortcutHandler).toHaveBeenCalledTimes(5)
 
       // 3. [异常/边界] 正在拼音组字（isComposing: true 或 target.composing: true）或无修饰键 229 时绝不误触
       const activeComposing = new KeyboardEvent('keydown', {
@@ -464,7 +463,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       expect(dispatchKeyEvent(imeCtrlShiftU)).toBe(false)
 
       expect(normalizeEventKeyCombo({ key: 'c', code: 'KeyU', ctrlKey: true })).toBe('Ctrl+C')
-      expect(toggleModeHandler).toHaveBeenCalledTimes(5)
+      expect(letterShortcutHandler).toHaveBeenCalledTimes(5)
     })
 
     it('[统一 Esc 先失焦] 普通输入框聚焦时按 Esc 不穿透至 GLOBAL，优先异步失焦；已消费时不强行失焦', async () => {

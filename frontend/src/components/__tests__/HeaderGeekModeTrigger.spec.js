@@ -5,9 +5,10 @@ import HeaderGeekModeTrigger from '../HeaderGeekModeTrigger.vue'
 import * as windowMode from '@/utils/windowMode'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { currentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
-import { TOGGLE_MODE_SHORTCUT } from '@/utils/shellShortcuts'
 
-const apiMock = vi.hoisted(() => ({ getHotkey: vi.fn().mockResolvedValue('') }))
+const apiMock = vi.hoisted(() => ({
+  getHotkey: vi.fn().mockResolvedValue('Alt+Space')
+}))
 vi.mock('@/api/apiserver', () => apiMock)
 
 describe('HeaderGeekModeTrigger 交互与全异常覆盖测试套件', () => {
@@ -134,7 +135,7 @@ describe('HeaderGeekModeTrigger 交互与全异常覆盖测试套件', () => {
     }).not.toThrow()
   })
 
-  it('[回归] 按钮本身不再显示 Ctrl+U 快捷键，悬停说明仍展示用户实际设置的唤醒键与切回键', async () => {
+  it('[回归] 按钮本身不显示任何快捷键徽标，悬停说明聚焦唯一全局唤醒键且不含 Ctrl+U', async () => {
     apiMock.getHotkey.mockResolvedValueOnce('Ctrl+Shift+Z')
     const wrapper = mount(HeaderGeekModeTrigger)
     await vi.waitFor(() => expect(currentGlobalWakeHotkey.value).toBe('Ctrl+Shift+Z'))
@@ -142,19 +143,21 @@ describe('HeaderGeekModeTrigger 交互与全异常覆盖测试套件', () => {
     // 顶部按钮本身不再渲染快捷键徽标，但仍保留「悬浮条」入口文字
     expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys)).toHaveLength(0)
     expect(wrapper.find('.launcher-trigger').text()).toContain('悬浮条')
-    expect(TOGGLE_MODE_SHORTCUT).toBe('Ctrl+U')
-    // 全局唤醒键与切回工作台快捷键仍在悬停说明里展示
+    expect(wrapper.find('.launcher-trigger').attributes('title')).not.toContain('Ctrl+U')
+    // 悬停说明只突出用户实际设置的唯一全局唤醒键，不再展示 Ctrl+U
     await wrapper.trigger('mouseenter')
     vi.advanceTimersByTime(150)
     await wrapper.vm.$nextTick()
     const guideKeys = wrapper.find('.guide-card').findAllComponents(ShortcutKeys).map((c) => c.props('combo'))
-    expect(guideKeys).toContain('Ctrl+Shift+Z')
-    expect(guideKeys).toContain(TOGGLE_MODE_SHORTCUT)
+    expect(guideKeys).toEqual(['Ctrl+Shift+Z'])
+    expect(guideKeys).not.toContain('Ctrl+U')
     expect(guideKeys).not.toContain('Alt+Space')
     wrapper.unmount()
+    currentGlobalWakeHotkey.value = 'Alt+Space'
   })
 
-  it('全局唤醒关闭时按钮不显示快捷键徽标，引导文案提示去设置里开启', async () => {
+  it('全局唤醒快捷键关闭时按钮不显示快捷键徽标，引导文案提示去设置里开启', async () => {
+    apiMock.getHotkey.mockResolvedValueOnce('')
     const wrapper = mount(HeaderGeekModeTrigger)
     await vi.waitFor(() => expect(apiMock.getHotkey).toHaveBeenCalled())
     currentGlobalWakeHotkey.value = ''

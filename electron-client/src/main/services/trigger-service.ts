@@ -58,6 +58,8 @@ export interface HotkeyConflictItem {
   key: string
   pluginId: string
   triggerId: string
+  /** 针对全局唤醒冲突时，经底层操作系统实测当前未被占用的备选快捷键 */
+  suggestions?: string[]
 }
 
 export interface TriggerDocumentStore {
@@ -70,8 +72,6 @@ export interface TriggerServiceOptions {
   shortcuts: GlobalShortcutAdapter
   events: Pick<EventService, 'publishHost'> & Partial<Pick<EventService, 'onSubscriptionChanged'>>
   toggleMainWindow(): void
-  /** 独立悬浮条快捷键触发的显示/隐藏回调（与 toggleMainWindow 完全解耦） */
-  toggleLauncher?(): void
   openPlugin(params: PluginOpenParams): Promise<unknown>
   forwardHotkeyToRecorder?(accelerator: string): Promise<boolean> | boolean
   store?: TriggerDocumentStore
@@ -80,8 +80,6 @@ export interface TriggerServiceOptions {
   mouse?: MouseTriggerAdapter
   /** 冷启动时若 triggers.json 尚未建立任何记录，则用该值自动初始化全局唤醒触发器 */
   initialWakeHotkey?: string
-  /** 冷启动或老版本升级且未显式关闭悬浮条快捷键时，用于自动初始化独立悬浮条触发器 */
-  initialLauncherHotkey?: string
   /** 运行平台（测试中可覆盖为 darwin/win32 验证跨平台规则） */
   platform?: NodeJS.Platform
 }
@@ -264,17 +262,19 @@ const DOUBLE_MODIFIER_ACCELERATORS: Record<NativeKeyboardModifier, string> = {
 
 /** 冲突提示里展示占用者：系统内置触发器用功能名，其余显示插件 ID */
 const SYSTEM_TRIGGER_NAME_KEYS: Record<string, string> = {
-  global_wake_hotkey: 'trigger.owner.globalWake',
-  global_launcher_hotkey: 'trigger.owner.globalLauncher'
+  global_wake_hotkey: 'trigger.owner.globalWake'
 }
 
-/** 旧超级面板键盘热键的触发器 ID：超级面板已移除，加载时清理遗留记录 */
+/** 旧超级面板与已下线独立悬浮条键盘热键的触发器 ID：加载时自动跳过并清理 */
 const RETIRED_SUPER_PANEL_TRIGGER_ID = 'super_panel_keyboard_hotkey'
+const RETIRED_LAUNCHER_HOTKEY_TRIGGER_ID = 'global_launcher_hotkey'
 
-/** 判定已下线功能的遗留触发器记录（旧超级面板热键、旧本地软件热键），启动读取时跳过并清理 */
+/** 判定已下线功能的遗留触发器记录（旧超级面板热键、独立悬浮条热键、旧本地软件热键），启动读取时跳过并清理 */
 function isRetiredTrigger(trigger: StoredTrigger): boolean {
   return (
     trigger.id === RETIRED_SUPER_PANEL_TRIGGER_ID ||
+    trigger.id === RETIRED_LAUNCHER_HOTKEY_TRIGGER_ID ||
+    trigger.action.target === 'toggle_launcher' ||
     trigger.action.target === 'launch_local_app' ||
     /^localapp:/i.test(trigger.pluginId)
   )
@@ -291,10 +291,7 @@ function triggerOwnerName(trigger: StoredTrigger): string {
 
 function hasRuntimeAction(trigger: StoredTrigger): boolean {
   if (trigger.action.mode === 'window') return isIdentifier(trigger.action.target)
-  return (
-    trigger.action.mode === 'builtin' &&
-    (trigger.action.target === 'toggle_main_window' || trigger.action.target === 'toggle_launcher')
-  )
+  return trigger.action.mode === 'builtin' && trigger.action.target === 'toggle_main_window'
 }
 
 /**
@@ -405,25 +402,21 @@ export class TriggerService {
     }
   }
 
-  getGlobalLauncherHotkey(): { exists: boolean; enabled: boolean; key: string } {
-    const trigger = this.#triggers.get('global_launcher_hotkey')
-    if (!trigger) return { exists: false, enabled: false, key: '' }
-    return {
-      exists: true,
-      enabled: trigger.enabled,
-      key: acceleratorOf(trigger) ?? ''
-    }
-  }
-
   getStartupConflicts(): HotkeyConflictItem[] {
-    return this.#lastStartupConflicts.map((item) => ({ ...item }))
+    return this.#lastStartupConflicts.map((item) => ({
+      ...item,
+      ...(item.suggestions ? { suggestions: [...item.suggestions] } : {})
+    }))
   }
 
   flushStartupConflicts(): void {
     if (this.#stopping || this.#pendingStartupConflicts.length === 0) return
     try {
       const result = this.options.events.publishHost('hotkey_conflicts_detected', {
-        conflicts: this.#pendingStartupConflicts.map((item) => ({ ...item }))
+        conflicts: this.#pendingStartupConflicts.map((item) => ({
+          ...item,
+          ...(item.suggestions ? { suggestions: [...item.suggestions] } : {})
+        }))
       })
       if (result.delivered > 0) {
         this.#pendingStartupConflicts = []
@@ -800,49 +793,9 @@ export class TriggerService {
         }
       }
     }
-    let seededDefaultLauncher = false
-    if (typeof this.options.initialLauncherHotkey === 'string') {
-      const launcherKey = this.options.initialLauncherHotkey.trim()
-      if (launcherKey && !loaded.has('global_launcher_hotkey')) {
-        const launcherValid = isDoubleModifier(launcherKey)
-          ? this.#keyboardAdapter !== undefined
-          : isValidElectronAccelerator(launcherKey) &&
-            getGlobalHotkeyBlacklistPlatform(launcherKey, this.#platform) === null
-        if (launcherValid) {
-          const launcherModifier = doubleModifierOf(launcherKey)
-          const launcherNormalized = normalizedAccelerator(launcherKey, this.#platform)
-          // 老用户升级或冷启动播种时避让任何已有启用触发器，避免强行占用或破坏用户既有配置
-          const conflictsExisting = [...loaded.values()].some((existing) => {
-            if (!existing.enabled) return false
-            const existingKey = acceleratorOf(existing)
-            if (!existingKey) return false
-            return launcherModifier !== undefined
-              ? doubleModifierOf(existingKey) === launcherModifier
-              : normalizedAccelerator(existingKey, this.#platform) === launcherNormalized
-          })
-          if (!conflictsExisting) {
-            const defaultLauncherTrigger: StoredTrigger = {
-              id: 'global_launcher_hotkey',
-              pluginId: 'system',
-              type: 'hotkey',
-              config: { key: launcherKey },
-              action: { mode: 'builtin', target: 'toggle_launcher', params: {} },
-              enabled: true,
-              priority: 0,
-              createTime: new Date().toISOString(),
-              raw: {},
-              actionShape: 'nested'
-            }
-            loaded.set(defaultLauncherTrigger.id, defaultLauncherTrigger)
-            order.push({ triggerId: defaultLauncherTrigger.id })
-            seededDefaultLauncher = true
-          }
-        }
-      }
-    }
     this.#document = document
     this.#order = order
-    if (retiredFound || seededDefaultWake || seededDefaultLauncher) {
+    if (retiredFound || seededDefaultWake) {
       try {
         await this.#persist(loaded)
       } catch (error) {
@@ -891,20 +844,28 @@ export class TriggerService {
       try {
         if (!this.#register(trigger.id, accelerator)) {
           console.warn(`Global shortcut unavailable: ${trigger.id}`)
+          const suggestions = trigger.id === 'global_wake_hotkey'
+            ? this.#probeWakeHotkeySuggestions(accelerator)
+            : undefined
           conflicts.push({
             type: 'system',
             key: accelerator,
             pluginId: trigger.pluginId,
-            triggerId: trigger.id
+            triggerId: trigger.id,
+            ...(suggestions && suggestions.length > 0 ? { suggestions } : {})
           })
         }
       } catch {
         console.warn(`Global shortcut registration failed: ${trigger.id}`)
+        const suggestions = trigger.id === 'global_wake_hotkey'
+          ? this.#probeWakeHotkeySuggestions(accelerator)
+          : undefined
         conflicts.push({
           type: 'system',
           key: accelerator,
           pluginId: trigger.pluginId,
-          triggerId: trigger.id
+          triggerId: trigger.id,
+          ...(suggestions && suggestions.length > 0 ? { suggestions } : {})
         })
       }
     }
@@ -915,8 +876,82 @@ export class TriggerService {
     return conflicts
   }
 
+  /**
+   * 针对全局唤醒冲突，实测探针挑选最多 3 个未被本地触发器与操作系统占用的顺手备选热键。
+   * 普通组合键通过真实 register + 立即 unregister 探测，确保用户一键替换零失败。
+   */
+  #probeWakeHotkeySuggestions(occupiedAccelerator: string): string[] {
+    const candidates = this.#platform === 'darwin'
+      ? ['Alt+Q', 'Alt+Shift+Space', 'Control+Space', 'Ctrl+Shift+Space']
+      : [
+          ...(this.#keyboardAdapter ? ['DoubleAlt'] : []),
+          'Alt+Q',
+          'Alt+Shift+Space',
+          'Ctrl+Shift+Space',
+          'Ctrl+Alt+Space'
+        ]
+    const occupiedNormalized = normalizedAccelerator(occupiedAccelerator, this.#platform)
+    const occupiedDouble = doubleModifierOf(occupiedAccelerator)
+    const localNormalized = new Set<string>()
+    const localDouble = new Set<NativeKeyboardModifier>()
+    for (const trigger of this.#triggers.values()) {
+      if (!trigger.enabled) continue
+      const key = acceleratorOf(trigger)
+      if (!key) continue
+      const dm = doubleModifierOf(key)
+      if (dm) localDouble.add(dm)
+      else {
+        const norm = normalizedAccelerator(key, this.#platform)
+        if (norm) localNormalized.add(norm)
+      }
+    }
+
+    const available: string[] = []
+    for (const candidate of candidates) {
+      if (available.length >= 3) break
+      const dm = doubleModifierOf(candidate)
+      if (dm) {
+        if (!this.#keyboardAdapter || dm === occupiedDouble || localDouble.has(dm)) continue
+        available.push(candidate)
+        continue
+      }
+      if (!isValidElectronAccelerator(candidate)) continue
+      if (getGlobalHotkeyBlacklistPlatform(candidate, this.#platform) !== null) continue
+      const norm = normalizedAccelerator(candidate, this.#platform)
+      if (!norm || norm === occupiedNormalized || localNormalized.has(norm)) continue
+      if (
+        typeof this.options.shortcuts.isRegistered === 'function' &&
+        this.options.shortcuts.isRegistered(candidate)
+      ) {
+        continue
+      }
+      let probedRegistered = false
+      try {
+        probedRegistered = this.options.shortcuts.register(candidate, () => undefined)
+      } catch {
+        probedRegistered = false
+      } finally {
+        if (probedRegistered) {
+          try {
+            this.options.shortcuts.unregister(candidate)
+          } catch {
+            // 探测注销异常不阻断主流程
+          }
+        }
+      }
+      if (probedRegistered) {
+        available.push(candidate)
+      }
+    }
+    return available
+  }
+
   #publishDetectedConflicts(conflicts: readonly HotkeyConflictItem[], deferIfUndelivered: boolean): void {
-    const payload = { conflicts: conflicts.map((item) => ({ ...item })) }
+    const cloneConflict = (item: HotkeyConflictItem): HotkeyConflictItem => ({
+      ...item,
+      ...(item.suggestions ? { suggestions: [...item.suggestions] } : {})
+    })
+    const payload = { conflicts: conflicts.map(cloneConflict) }
     let delivered = 0
     try {
       delivered = this.options.events.publishHost('hotkey_conflicts_detected', payload).delivered
@@ -930,7 +965,7 @@ export class TriggerService {
       this.#removeConflictSubscriptionListener = undefined
       return
     }
-    this.#pendingStartupConflicts = conflicts.map((item) => ({ ...item }))
+    this.#pendingStartupConflicts = conflicts.map(cloneConflict)
     if (!this.#removeConflictSubscriptionListener && this.options.events.onSubscriptionChanged) {
       this.#removeConflictSubscriptionListener = this.options.events.onSubscriptionChanged(
         'hotkey_conflicts_detected',
@@ -1463,8 +1498,6 @@ export class TriggerService {
     }
     if (trigger.action.mode === 'builtin' && trigger.action.target === 'toggle_main_window') {
       this.options.toggleMainWindow()
-    } else if (trigger.action.mode === 'builtin' && trigger.action.target === 'toggle_launcher') {
-      this.options.toggleLauncher?.()
     } else if (trigger.action.mode === 'window') {
       try {
         void this.options.openPlugin({

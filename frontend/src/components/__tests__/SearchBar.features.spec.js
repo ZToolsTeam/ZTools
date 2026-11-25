@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 
 const candidates = ref([])
 const filteredCandidates = ref(null)
-const mocks = vi.hoisted(() => ({ load: vi.fn(), noView: vi.fn(), error: vi.fn(), success: vi.fn(), setItemPinned: vi.fn(), keys: {} }))
+const mocks = vi.hoisted(() => ({ load: vi.fn(), noView: vi.fn(), error: vi.fn(), success: vi.fn(), setItemPinned: vi.fn(), highlightParts: vi.fn(item => [{ text: item?.name || '', hit: false }]), keys: {} }))
 vi.mock('@/composables/useCommandSearch', async (importOriginal) => ({
   ...(await importOriginal()),
   useCommandSearch: () => ({
@@ -16,7 +16,7 @@ vi.mock('@/composables/useCommandSearch', async (importOriginal) => ({
     clearSearch: vi.fn(),
     recordUsage: vi.fn(),
     setItemPinned: (...args) => mocks.setItemPinned(...args),
-    highlightParts: item => [{ text: item?.name || '', hit: false }]
+    highlightParts: item => mocks.highlightParts(item)
   })
 }))
 vi.mock('@/utils/keymap', async (importOriginal) => {
@@ -47,6 +47,9 @@ import router from '@/router'
 import { usePluginsStore } from '@/stores/plugins'
 import SearchBar from '../SearchBar.vue'
 import { registerKeyHandler, dispatchKeyEvent, KEYMAP_SCOPES, _resetKeymapForTesting } from '@/utils/keymap'
+import {
+  currentGlobalWakeHotkey
+} from '@/utils/globalWakeHotkey'
 
 let wrapper
 let store
@@ -332,7 +335,56 @@ describe('工作台搜索子命令到宿主加载链路', () => {
     expect(wrapper.findAllComponents({ name: 'ShortcutKeys' })).toHaveLength(0)
     expect(wrapper.html()).not.toContain('Ctrl+F')
     // 全局 Ctrl+F 快捷键仍可触发输入框聚焦
-    expect(mocks.keys.global['Ctrl+F']()).toBe(true)
+    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true }))).toBe(true)
     expect(focusSpy).toHaveBeenCalledOnce()
+  })
+
+  it('[性能] 下拉列表切换 activeIndex（方向键或鼠标悬停）不会重复计算 highlightParts', async () => {
+    await prepare()
+    mocks.highlightParts.mockClear()
+
+    // 多次切换选中项，不应重新调用 highlightParts
+    expect(mocks.keys.search.ArrowDown()).toBe(true)
+    await flushPromises()
+    expect(mocks.keys.search.ArrowUp()).toBe(true)
+    await flushPromises()
+    expect(mocks.highlightParts).not.toHaveBeenCalled()
+  })
+
+  it('搜索情境提示展示唯一全局唤醒快捷键，关闭后自动隐藏', async () => {
+    const prevWake = currentGlobalWakeHotkey.value
+    try {
+      currentGlobalWakeHotkey.value = 'Alt+Space'
+      wrapper = mount(SearchBar, {
+        global: {
+          plugins: [router],
+          stubs: {
+            RcSquircle: true,
+            ShortcutKeys: { name: 'ShortcutKeys', props: ['combo'], template: '<kbd>{{ combo }}</kbd>' },
+            'a-input': {
+              props: ['value'],
+              emits: ['update:value', 'focus'],
+              template: '<input :value="value" @input="$emit(\'update:value\', $event.target.value)" @focus="$emit(\'focus\')" />'
+            }
+          }
+        }
+      })
+
+      await wrapper.find('input').trigger('focus')
+      // 输入空格使 localValue 非空且下拉不展开，触发引导唤起悬浮条的情境提示
+      await wrapper.find('input').setValue(' ')
+      await wrapper.vm.$nextTick()
+
+      const hint = wrapper.find('.search-hint')
+      expect(hint.exists()).toBe(true)
+      expect(hint.findComponent({ name: 'ShortcutKeys' }).props('combo')).toBe('Alt+Space')
+
+      // 关闭全局唤醒快捷键后情境提示隐藏
+      currentGlobalWakeHotkey.value = ''
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.search-hint').exists()).toBe(false)
+    } finally {
+      currentGlobalWakeHotkey.value = prevWake
+    }
   })
 })

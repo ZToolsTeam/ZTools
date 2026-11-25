@@ -1,5 +1,5 @@
 import { Menu, Tray, type MenuItemConstructorOptions } from 'electron'
-import { isDoubleModifier, SHELL_SHORTCUTS } from '../../contracts/hotkey-rules.js'
+import { isDoubleModifier, SHELL_SHORTCUTS, toMenuAccelerator } from '../../contracts/hotkey-rules.js'
 import { toElectronAccelerator } from '../platform/common/electron-global-shortcut.js'
 import { getResolvedLocale, t } from '../i18n/index.js'
 
@@ -21,6 +21,8 @@ export interface TrayControllerDependencies {
 export interface TrayControllerState {
   /** 全局唤醒快捷键显示文案（默认 Alt+Space） */
   wakeAccelerator?: string
+  /** 偏好设置快捷键显示文案（默认 SHELL_SHORTCUTS.OPEN_SETTINGS，空串表示已清空） */
+  settingsAccelerator?: string
 }
 
 export interface TrayControllerOptions extends TrayControllerState {
@@ -77,6 +79,8 @@ function invokeSafely(label: string, action: () => void | Promise<void>): void {
 
 export interface BuildTrayMenuContext {
   wakeAccelerator: string
+  /** 偏好设置快捷键显示文案（未传回退默认值，空串表示已清空） */
+  settingsAccelerator?: string
   platform: NodeJS.Platform
   onOpenLauncher(): void
   onShowMainWindow(): void
@@ -89,9 +93,10 @@ export interface BuildTrayMenuContext {
 export function buildTrayMenuTemplate(
   context: BuildTrayMenuContext
 ): MenuItemConstructorOptions[] {
-  const settingsAccelerator = context.platform === 'darwin'
-    ? SHELL_SHORTCUTS.OPEN_SETTINGS.replace(/^Ctrl\+/i, 'Command+')
-    : SHELL_SHORTCUTS.OPEN_SETTINGS
+  const rawSettingsAccelerator = context.settingsAccelerator === undefined
+    ? SHELL_SHORTCUTS.OPEN_SETTINGS
+    : context.settingsAccelerator
+  const settingsAccelerator = toMenuAccelerator(rawSettingsAccelerator, context.platform)
   // 双击修饰键不是合法 Electron Menu Accelerator，不能传给 Menu.buildFromTemplate 以免报错
   const wakeAccelerator = context.wakeAccelerator && !isDoubleModifier(context.wakeAccelerator)
     ? toElectronAccelerator(context.wakeAccelerator)
@@ -113,7 +118,7 @@ export function buildTrayMenuTemplate(
     {
       id: 'open-settings',
       label: t('tray.preferences'),
-      accelerator: settingsAccelerator,
+      ...(settingsAccelerator ? { accelerator: settingsAccelerator } : {}),
       click: () => context.onOpenSettings()
     },
     {
@@ -144,16 +149,22 @@ export function buildTrayMenuTemplate(
 export class TrayController {
   #tray: TrayAdapter | null = null
   #wakeAccelerator: string
+  #settingsAccelerator: string
   #locale: string = getResolvedLocale()
   #stopped = false
 
   constructor(private readonly options: TrayControllerOptions) {
     this.#wakeAccelerator = normalizeTrayAccelerator(options.wakeAccelerator)
+    this.#settingsAccelerator = normalizeTrayAccelerator(
+      options.settingsAccelerator,
+      SHELL_SHORTCUTS.OPEN_SETTINGS
+    )
   }
 
   get state(): Required<TrayControllerState> {
     return {
-      wakeAccelerator: this.#wakeAccelerator
+      wakeAccelerator: this.#wakeAccelerator,
+      settingsAccelerator: this.#settingsAccelerator
     }
   }
 
@@ -195,6 +206,16 @@ export class TrayController {
         changed = true
       }
     }
+    if (patch.settingsAccelerator !== undefined) {
+      const normalized = normalizeTrayAccelerator(
+        patch.settingsAccelerator,
+        SHELL_SHORTCUTS.OPEN_SETTINGS
+      )
+      if (normalized !== this.#settingsAccelerator) {
+        this.#settingsAccelerator = normalized
+        changed = true
+      }
+    }
     const currentLocale = getResolvedLocale()
     if (currentLocale !== this.#locale) {
       this.#locale = currentLocale
@@ -210,6 +231,7 @@ export class TrayController {
     const buildMenu = this.options.deps?.buildMenu ?? ((tpl) => Menu.buildFromTemplate(tpl))
     const template = buildTrayMenuTemplate({
       wakeAccelerator: this.#wakeAccelerator,
+      settingsAccelerator: this.#settingsAccelerator,
       platform: this.options.platform ?? process.platform,
       onOpenLauncher: () => invokeSafely('open-launcher', () => {
         if (typeof this.options.openLauncher === 'function') {

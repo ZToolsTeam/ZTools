@@ -15,7 +15,7 @@ import { resolveErrorMessage } from '@/utils/errorMessage'
 import { getLocalizedPluginName, getLocalizedPluginAltNames } from '@/utils/pluginI18n'
 import { storeToRefs } from 'pinia'
 import { message } from 'ant-design-vue'
-import { getHotkey, getLauncherHotkey } from '@/api/apiserver'
+import { getHotkey } from '@/api/apiserver'
 import { getPluginFeatureHotkeyItemByTrigger } from '@/utils/pluginFeatureHotkeys'
 import {
   buildLaunchHotkeyMap,
@@ -268,16 +268,10 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
   loadingPluginId.value = target.id
 
   try {
-    // 1. 本地检测：与全局唤醒快捷键 / 独立悬浮条快捷键冲突
+    // 1. 本地检测：与全局唤醒快捷键冲突
     const globalHotkey = await getGlobalWakeHotkey()
     if (globalHotkey && globalHotkey.toLowerCase() === hotkeyStr.toLowerCase()) {
       message.warning(t('hotkey.featureModal.conflictGlobalWake'))
-      cancelRecording()
-      return
-    }
-    const launcherHotkey = await getGlobalLauncherHotkey()
-    if (launcherHotkey && launcherHotkey.toLowerCase() === hotkeyStr.toLowerCase()) {
-      message.warning(t('hotkey.featureModal.conflictGlobalLauncher'))
       cancelRecording()
       return
     }
@@ -348,15 +342,6 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
 async function getGlobalWakeHotkey() {
   try {
     return await getHotkey() || ''
-  } catch {
-    return ''
-  }
-}
-
-/** 获取独立悬浮条全局快捷键 */
-async function getGlobalLauncherHotkey() {
-  try {
-    return typeof getLauncherHotkey === 'function' ? (await getLauncherHotkey()) || '' : ''
   } catch {
     return ''
   }
@@ -563,8 +548,9 @@ defineExpose({ show, hide, updateMap, configuredCount })
 
 <style scoped>
 .plugin-hotkey-list {
-  max-height: 400px;
+  max-height: min(400px, calc(100vh - 280px));
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 4px;

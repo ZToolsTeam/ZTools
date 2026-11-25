@@ -92,9 +92,14 @@ export async function getHotkeyHostCapabilities() {
   }
 }
 
-export function getHotkeyUnsupportedText(platform = 'unknown', allowDoubleTap = false) {
+export function getHotkeyUnsupportedText(platform = 'unknown', allowDoubleTap = false, allowShellKeys = false) {
   if (platform !== 'windows' && platform !== 'macos') {
     return t('hotkey.recorder.unknownPlatformUnsupported')
+  }
+  if (allowShellKeys) {
+    return platform === 'macos'
+      ? t('hotkey.recorder.unsupportedShellMac')
+      : t('hotkey.recorder.unsupportedShellWin')
   }
   if (platform === 'macos') {
     return t('hotkey.recorder.unsupportedMac')
@@ -234,29 +239,26 @@ export function getSystemHotkeyBlacklistReason(hotkey, platform = 'windows') {
   return ''
 }
 
-const SHELL_SHORTCUT_LABEL_KEYS = (() => {
-  const map = new Map()
-  for (const hint of BUILTIN_SHORTCUT_HINTS) {
-    const key = canonicalizeHotkeyForCompare(hint.combo, 'windows')
-    if (key && hint.id) map.set(key, `settings.shortcuts.builtins.${hint.id}`)
-  }
-  const pinKey = canonicalizeHotkeyForCompare(SHELL_SHORTCUTS.PIN_ITEM, 'windows')
-  if (pinKey && !map.has(pinKey)) {
-    map.set(pinKey, 'hotkey.recorder.pinItemLabel')
-  }
-  return map
-})()
-
 /**
- * 检测快捷键是否与 ZTools 壳层内置快捷键（SHELL_SHORTCUTS）重名，返回温和提示文案（空字符串表示无重叠）
+ * 检测快捷键是否与 ZTools 壳层内置快捷键（SHELL_SHORTCUTS）重名，返回温和提示文案（空字符串表示无重叠）。
+ * 动态读取 BUILTIN_SHORTCUT_HINTS 与 SHELL_SHORTCUTS，确保用户修改或清空常用快捷键后告警即时同步。
  */
 export function getShellReserveWarning(hotkey) {
   if (typeof hotkey !== 'string' || !hotkey.trim()) return ''
   const canonical = canonicalizeHotkeyForCompare(hotkey, 'windows')
   if (!canonical) return ''
-  const labelKey = SHELL_SHORTCUT_LABEL_KEYS.get(canonical)
-  if (!labelKey) return ''
-  return t('hotkey.recorder.shellReserveWarning', { label: t(labelKey) })
+  for (const hint of BUILTIN_SHORTCUT_HINTS) {
+    if (!hint.combo) continue
+    const hintKey = canonicalizeHotkeyForCompare(hint.combo, 'windows')
+    if (hintKey && hintKey === canonical && hint.id) {
+      return t('hotkey.recorder.shellReserveWarning', { label: t(`settings.shortcuts.builtins.${hint.id}`) })
+    }
+  }
+  const pinKey = canonicalizeHotkeyForCompare(SHELL_SHORTCUTS.PIN_ITEM, 'windows')
+  if (pinKey && pinKey === canonical) {
+    return t('hotkey.recorder.shellReserveWarning', { label: t('hotkey.recorder.pinItemLabel') })
+  }
+  return ''
 }
 
 const SAFE_SHORTCUT_MODIFIER_TOKENS = new Set([
@@ -414,6 +416,21 @@ export const isSupportedMainKey = (key) =>
   /^[a-z]$/i.test(key) || isSupportedSpaceKey(key) || isSupportedFunctionKey(key) ||
   key === '`' || key === '~'
 
+const SHELL_PUNCTUATION_KEYS = new Set([',', '.', '/', ';', '[', ']', '-', '='])
+const SHELL_PUNCTUATION_CODE_MAP = Object.freeze({
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+  Semicolon: ';',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Minus: '-',
+  Equal: '='
+})
+
+export const isSupportedShellMainKey = (key) =>
+  isSupportedMainKey(key) || /^[0-9]$/.test(key) || SHELL_PUNCTUATION_KEYS.has(key)
+
 export const resetHotkeyRecorderState = () => {
   lastModifierTap = {
     key: '',
@@ -431,51 +448,71 @@ const isStandaloneModifierTap = (event, modifiers) =>
 
 const normalizeMainKey = (key) => (isSupportedSpaceKey(key) ? 'Space' : key.toUpperCase())
 
-const getMainKeyFromCode = (event) => {
+const getMainKeyFromCode = (event, allowShellKeys = false) => {
   const code = event?.code || ''
   if (code === 'Space') return 'Space'
   const codeMatch = /^Key([A-Z])$/.exec(code)
   if (codeMatch) return codeMatch[1]
-  if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(code)) return code
+  if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(code)) return code.toUpperCase()
   if (code === 'Backquote') return event?.shiftKey ? '~' : '`'
+  if (allowShellKeys) {
+    const digitMatch = /^Digit([0-9])$/.exec(code)
+    if (digitMatch) return digitMatch[1]
+    if (!event?.shiftKey && Object.hasOwn(SHELL_PUNCTUATION_CODE_MAP, code)) {
+      return SHELL_PUNCTUATION_CODE_MAP[code]
+    }
+  }
   return ''
 }
 
-const getMainKey = (event, platform) => {
+const getMainKey = (event, platform, allowShellKeys = false) => {
   if (event?.code === 'Space' || isSupportedSpaceKey(event?.key) || event?.keyCode === 32) {
     return 'Space'
   }
+  // 中文输入法全角逗号兼容（常用快捷键如 Ctrl+,）
+  if (allowShellKeys && !event?.shiftKey && (event?.key === '，' || event?.code === 'Comma')) {
+    return ','
+  }
+  const checkMainKey = allowShellKeys ? isSupportedShellMainKey : isSupportedMainKey
   // Option 可能把字母键变成 `、~ 等支持的字符，先还原物理字母键，避免录成另一颗键。
   if (platform === 'macos' && event?.altKey) {
     const codeMatch = /^Key([A-Z])$/.exec(event?.code || '')
     if (codeMatch) return codeMatch[1]
-    if (isSupportedMainKey(event?.key)) return event.key
-    const codeKey = getMainKeyFromCode(event)
+    if (allowShellKeys) {
+      const digitMatch = /^Digit([0-9])$/.exec(event?.code || '')
+      if (digitMatch) return digitMatch[1]
+      if (!event?.shiftKey && Object.hasOwn(SHELL_PUNCTUATION_CODE_MAP, event?.code || '')) {
+        return SHELL_PUNCTUATION_CODE_MAP[event.code]
+      }
+    }
+    if (checkMainKey(event?.key)) return event.key
+    const codeKey = getMainKeyFromCode(event, allowShellKeys)
     if (codeKey) return codeKey
   }
-  if (isSupportedMainKey(event?.key)) return event.key
+  if (checkMainKey(event?.key)) return event.key
   // Windows 中文输入法（IME）下按 Ctrl+Space / Shift+Space / Ctrl+字母 等可能产生 key='Process' (229)，从物理键码还原
-  const fallbackCodeKey = getMainKeyFromCode(event)
+  const fallbackCodeKey = getMainKeyFromCode(event, allowShellKeys)
   if (fallbackCodeKey) return fallbackCodeKey
   return event?.key
 }
 
 export const parseSupportedHotkeyEvent = (event, options = {}) => {
   const platform = options.platform ?? 'windows'
-  const allowDoubleTap = options.allowDoubleTap === true && platform === 'windows'
+  const allowShellKeys = options.allowShellKeys === true
+  const allowDoubleTap = !allowShellKeys && options.allowDoubleTap === true && platform === 'windows'
   const isMacOS = platform === 'macos'
   if (platform !== 'windows' && platform !== 'macos') {
     resetHotkeyRecorderState()
     return {
       status: 'invalid',
-      text: getHotkeyUnsupportedText(platform)
+      text: getHotkeyUnsupportedText(platform, false, allowShellKeys)
     }
   }
   if (!event || typeof event !== 'object') {
     resetHotkeyRecorderState()
     return {
       status: 'invalid',
-      text: getHotkeyUnsupportedText(platform, allowDoubleTap)
+      text: getHotkeyUnsupportedText(platform, allowDoubleTap, allowShellKeys)
     }
   }
 
@@ -487,7 +524,7 @@ export const parseSupportedHotkeyEvent = (event, options = {}) => {
     if (!allowDoubleTap) {
       return {
         status: 'invalid',
-        text: getHotkeyUnsupportedText(platform, allowDoubleTap)
+        text: getHotkeyUnsupportedText(platform, allowDoubleTap, allowShellKeys)
       }
     }
     return {
@@ -503,7 +540,7 @@ export const parseSupportedHotkeyEvent = (event, options = {}) => {
     resetHotkeyRecorderState()
     return {
       status: 'invalid',
-      text: getHotkeyUnsupportedText(platform, allowDoubleTap)
+      text: getHotkeyUnsupportedText(platform, allowDoubleTap, allowShellKeys)
     }
   }
 
@@ -563,7 +600,8 @@ export const parseSupportedHotkeyEvent = (event, options = {}) => {
     }
   }
 
-  const mainKey = getMainKey(event, platform)
+  const mainKey = getMainKey(event, platform, allowShellKeys)
+  const checkMainKey = allowShellKeys ? isSupportedShellMainKey : isSupportedMainKey
   if (modifiers.length > 0) {
     const candidateSpecialKey =
       event.key === 'Tab' || event.code === 'Tab'
@@ -572,7 +610,7 @@ export const parseSupportedHotkeyEvent = (event, options = {}) => {
           ? 'Escape'
           : /^[0-9]$/.test(String(event.key || ''))
             ? String(event.key)
-            : isSupportedMainKey(mainKey)
+            : checkMainKey(mainKey)
               ? normalizeMainKey(mainKey)
               : ''
     if (candidateSpecialKey) {
@@ -590,11 +628,24 @@ export const parseSupportedHotkeyEvent = (event, options = {}) => {
     }
   }
 
-  if (!isSupportedMainKey(mainKey) || (modifiers.length === 0 && !isSupportedFunctionKey(mainKey))) {
+  // 应用内常用快捷键不允许纯 Shift + 非 F 键（会破坏输入框大小写与符号输入）
+  const hasPrimaryOrAlt =
+    modifiers.includes('Ctrl') || modifiers.includes('Control') || modifiers.includes('Alt')
+  const isShellShiftOnlyInvalid =
+    allowShellKeys && !isSupportedFunctionKey(mainKey) && !hasPrimaryOrAlt
+  const isShellPunctuationWithShift =
+    allowShellKeys && event.shiftKey && SHELL_PUNCTUATION_KEYS.has(mainKey)
+
+  if (
+    !checkMainKey(mainKey) ||
+    (modifiers.length === 0 && !isSupportedFunctionKey(mainKey)) ||
+    isShellShiftOnlyInvalid ||
+    isShellPunctuationWithShift
+  ) {
     resetHotkeyRecorderState()
     return {
       status: 'invalid',
-      text: getHotkeyUnsupportedText(platform, allowDoubleTap)
+      text: getHotkeyUnsupportedText(platform, allowDoubleTap, allowShellKeys)
     }
   }
 

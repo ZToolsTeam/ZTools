@@ -25,8 +25,6 @@ const LAUNCHER_SIZE = { width: 750, height: 480 }
 export interface LauncherShowOptions {
   trigger?: 'keyboard_hotkey' | 'mouse_hotkey'
   position?: 'center' | 'cursor'
-  /** 是否更新主进程记录的「最近活动窗口形态」（默认 true；独立悬浮条快捷键设为 false 避免影响主唤醒热键偏好） */
-  updateLastActiveSurface?: boolean
 }
 
 export interface LauncherPanelBridge {
@@ -289,9 +287,7 @@ export class LauncherController {
   }
 
   show(showOptions?: LauncherShowOptions): void {
-    if (showOptions?.updateLastActiveSurface !== false) {
-      this.options.onShow?.()
-    }
+    this.options.onShow?.()
     const window = this.#ensureWindow()
     this.#positionWindow(window, showOptions?.position)
     if (this.#frameSyncManager) {

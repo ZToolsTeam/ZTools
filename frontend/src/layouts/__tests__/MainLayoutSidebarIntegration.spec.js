@@ -275,7 +275,7 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     wrapper.unmount()
   })
 
-  it('[快捷键] Ctrl+U 触发工作台与悬浮条切换，原 Ctrl+M 不再误触', async () => {
+  it('[快捷键] 工作台内不再拦截 Ctrl+U 与 Ctrl+M 切悬浮条', async () => {
     const windowMode = await import('@/utils/windowMode')
     const switchSpy = vi.spyOn(windowMode, 'switchWindowMode').mockImplementation(() => {})
     const wrapper = mount(MainLayout, {
@@ -287,10 +287,8 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     await flushPromises()
 
     expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'm', ctrlKey: true }))).toBe(false)
+    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'u', ctrlKey: true }))).toBe(false)
     expect(switchSpy).not.toHaveBeenCalled()
-
-    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'u', ctrlKey: true }))).toBe(true)
-    expect(switchSpy).toHaveBeenCalledWith(windowMode.WINDOW_MODES.LAUNCHER)
 
     switchSpy.mockRestore()
     wrapper.unmount()
@@ -349,7 +347,7 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     await flushPromises()
     expect(searchRouter.currentRoute.value.name).toBe('my', '筛选只替换地址，返回直接回到进入插件市场之前的页面')
 
-    // 清空搜索词时去掉 q；换分类等其它参数照常重建页面
+    // 清空搜索词时去掉 q；换分类同样复用同一列表页实例，不再按分类堆叠 keep-alive 多实例
     await searchRouter.push({ name: 'list', query: { q: 'a' } })
     await flushPromises()
     const before = listMounts
@@ -361,7 +359,7 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     expect(listMounts).toBe(before)
     await searchRouter.push({ name: 'list', params: { category: '工具' } })
     await flushPromises()
-    expect(listMounts).toBe(before + 1)
+    expect(listMounts).toBe(before)
 
     await searchRouter.push({ name: 'list', query: { q: '无匹配' } })
     expect(input.element.value).toBe('无匹配')
@@ -564,5 +562,109 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     expect(wrapper.find('[data-testid="settings-probe"]').attributes('data-tab')).toBe('bundled')
 
     wrapper.unmount()
+  })
+
+  it('8. [KeepAlive 单实例收敛] 列表页跨分类、详情页跨 pluginId 均只保留单一实例不堆叠重建', async () => {
+    let listMounts = 0
+    let detailsMounts = 0
+    const singleRouter = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'my', component: { template: '<div />' } },
+        {
+          path: '/list/:category?',
+          name: 'list',
+          component: defineComponent({
+            name: 'ListProbe',
+            mounted() { listMounts += 1 },
+            template: '<div class="list-probe">{{ $route.params.category }}</div>'
+          })
+        },
+        {
+          path: '/plugin/:pluginId',
+          name: 'details',
+          component: defineComponent({
+            name: 'DetailsProbe',
+            mounted() { detailsMounts += 1 },
+            template: '<div class="details-probe">{{ $route.params.pluginId }}</div>'
+          })
+        }
+      ]
+    })
+    await singleRouter.push('/')
+    await singleRouter.isReady()
+
+    const wrapper = mount(MainLayout, {
+      global: {
+        plugins: [pinia, singleRouter],
+        stubs: { SearchBar: true, HeaderGeekModeTrigger: true }
+      }
+    })
+    await flushPromises()
+
+    for (const category of ['', 'system', 'productivity', 'developer', 'network']) {
+      await singleRouter.push({ name: 'list', params: { category } })
+      await flushPromises()
+    }
+    expect(listMounts).toBe(1)
+
+    for (const pluginId of ['p-1', 'p-2', 'p-3', 'p-4']) {
+      await singleRouter.push({ name: 'details', params: { pluginId } })
+      await flushPromises()
+    }
+    expect(detailsMounts).toBe(1)
+    expect(wrapper.find('.details-probe').text()).toBe('p-4')
+
+    wrapper.unmount()
+  })
+
+  it('9. [常用快捷键修改与清空联动] 修改与清空常用快捷键后，MainLayout 底栏/侧栏键帽提示与全局按键监听同步生效', async () => {
+    const { saveShellShortcut, _resetShellShortcutsForTesting } = await import('@/utils/shellShortcuts')
+    _resetShellShortcutsForTesting()
+    const wrapper = mount(MainLayout, {
+      global: {
+        plugins: [pinia, router],
+        stubs: { SearchBar: true, HeaderGeekModeTrigger: true }
+      }
+    })
+    await flushPromises()
+
+    try {
+      const actionBarBtns = () => wrapper.findAll('footer.action-bar .action-btn')
+      expect(actionBarBtns()[0].findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', 'K'])
+      expect(actionBarBtns()[1].findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', 'F'])
+
+      // 修改「聚焦搜索」为 Ctrl+J、「打开设置」为 Ctrl+.、「展开/收起侧栏」为 Alt+B
+      await saveShellShortcut('focus-search', 'Ctrl+J')
+      await saveShellShortcut('open-settings', 'Ctrl+.')
+      await saveShellShortcut('toggle-sidebar', 'Alt+B')
+      await flushPromises()
+
+      expect(actionBarBtns()[1].findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', 'J'])
+      expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true }))).toBe(false)
+      expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'b', altKey: true }))).toBe(true)
+      await flushPromises()
+      expect(wrapper.find('aside.sidebar-root').classes()).toContain('is-collapsed')
+
+      expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true }))).toBe(false)
+      expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: '.', ctrlKey: true }))).toBe(true)
+      await flushPromises()
+      expect(router.currentRoute.value.name).toBe('advanced-settings')
+
+      // 清空「动作面板」与「聚焦搜索」：底栏隐藏键帽且旧快捷键不再触发
+      await router.push('/')
+      await flushPromises()
+      await saveShellShortcut('action-panel', '')
+      await saveShellShortcut('focus-search', '')
+      await flushPromises()
+
+      expect(actionBarBtns()[0].findAll('kbd')).toHaveLength(0)
+      expect(actionBarBtns()[1].findAll('kbd')).toHaveLength(0)
+      expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))).toBe(false)
+      expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'j', ctrlKey: true }))).toBe(false)
+    } finally {
+      wrapper.unmount()
+      _resetShellShortcutsForTesting()
+    }
   })
 })

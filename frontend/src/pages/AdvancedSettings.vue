@@ -20,7 +20,6 @@ import { ROUTES } from '@/router/routes'
 import { useAppPreferencesApi } from '@/composables/useAppPreferencesApi'
 import {
   DEFAULT_GLOBAL_WAKE_HOTKEY,
-  DEFAULT_GLOBAL_LAUNCHER_HOTKEY,
   DEFAULT_MOUSE_LONG_PRESS_MS,
   MAX_MOUSE_LONG_PRESS_MS,
   MIN_MOUSE_LONG_PRESS_MS,
@@ -28,7 +27,6 @@ import {
   parseMouseWakeTrigger,
   syncFullscreenDndToTriggers,
   syncGlobalWakeHotkey,
-  syncGlobalLauncherHotkey,
   syncMouseWakeHook
 } from '@/utils/globalWakeHotkey'
 import { isMacOS } from '@/utils/platform'
@@ -58,7 +56,14 @@ import {
   resetHotkeyRecorderState
 } from '@/utils/hotkeyRecorder'
 import { buildLaunchHotkeyMap } from '@/utils/launchHotkeyTargets'
-import { BUILTIN_SHORTCUT_HINTS } from '@/utils/shellShortcuts'
+import {
+  BUILTIN_SHORTCUT_HINTS,
+  canonicalizeShellShortcut,
+  hasCustomizedShellShortcuts,
+  refreshShellShortcuts,
+  resetAllShellShortcuts,
+  saveShellShortcut
+} from '@/utils/shellShortcuts'
 import { LOCALE_OPTIONS } from '@/utils/locale'
 import { useLocaleStore } from '@/stores/locale'
 import { useAppI18n } from '@/i18n'
@@ -93,8 +98,6 @@ const {
   setAutostart,
   getHotkey,
   setHotkey,
-  getLauncherHotkey,
-  setLauncherHotkey,
   getMinimizeToTray,
   setMinimizeToTray,
   getShowTrayIcon,
@@ -174,8 +177,7 @@ const pluginHotkeyMapCache = ref({})
 const settings = reactive({
   autostart: false,
   hotkey: DEFAULT_GLOBAL_WAKE_HOTKEY,
-  launcherHotkey: DEFAULT_GLOBAL_LAUNCHER_HOTKEY,
-  wakePreference: windowModeState.wakePreference || 'dashboard',
+  wakePreference: windowModeState.wakePreference || 'launcher',
   minimizeToTray: true,
   showTrayIcon: true,
   closeConfirm: true,
@@ -188,11 +190,19 @@ const hotkeyRecording = ref(false)
 const hotkeyRecordingText = ref('')
 const hotkeyRecordingIsKeys = ref(false)
 const hotkeySaving = ref(false)
-const launcherHotkeyFieldRef = ref(null)
-const launcherHotkeyRecording = ref(false)
-const launcherHotkeyRecordingText = ref('')
-const launcherHotkeyRecordingIsKeys = ref(false)
-const launcherHotkeySaving = ref(false)
+const wakeHotkeyInactive = ref(false)
+const activeShellShortcutId = ref('')
+const shellShortcutRecordingText = ref('')
+const shellShortcutRecordingIsKeys = ref(false)
+const savingShellShortcutId = ref('')
+const restoringShellShortcuts = ref(false)
+const shellShortcutFieldRefs = new Map()
+const effectiveShellPlatform = computed(() =>
+  hotkeyPlatform.value === 'windows' || hotkeyPlatform.value === 'macos'
+    ? hotkeyPlatform.value
+    : (isMacOS() ? 'macos' : 'windows')
+)
+const hasShellShortcutChanges = computed(() => hasCustomizedShellShortcuts())
 const mouseWakeSaving = ref(false)
 const fullscreenDndSaving = ref(false)
 
@@ -214,14 +224,28 @@ const loadAutostart = async () => {
   }
 }
 
-/** 从原生触发器列表同步鼠标快捷唤醒与全屏免打扰状态 */
-const loadTriggerWakePreferences = async () => {
+/** 单次拉取原生触发器列表，供多个子配置加载器复用，避免重复 IPC */
+const fetchTriggersList = async () => {
   try {
-    if (!window.ztools?.trigger?.list) return
+    if (!window.ztools?.trigger?.list) return null
     const result = await window.ztools.trigger.list()
-    if (isUnmounted) return
+    if (isUnmounted) return null
     const triggers = result?.data || result || []
-    if (!Array.isArray(triggers)) return
+    return Array.isArray(triggers) ? triggers : null
+  } catch (e) {
+    console.warn('[AdvancedSettings] 读取触发器列表失败:', e)
+    return null
+  }
+}
+
+/** 从原生触发器列表同步鼠标快捷唤醒与全屏免打扰状态 */
+const loadTriggerWakePreferences = async (prefetchedTriggers) => {
+  try {
+    let triggers = prefetchedTriggers
+    if (triggers === undefined) {
+      triggers = await fetchTriggersList()
+    }
+    if (isUnmounted || !Array.isArray(triggers)) return
 
     const mouseConfig = parseMouseWakeTrigger(triggers)
     settings.mouseWakeMode = mouseConfig.mode
@@ -246,40 +270,75 @@ const loadTriggerWakePreferences = async () => {
 }
 
 const loadSettings = async () => {
+  let sharedTriggers = null
   try {
-    await loadAutostart()
-    // 空串表示用户已关闭全局唤醒，按原样显示「点击设置」，不能套默认值
-    try {
-      settings.hotkey = await getHotkey()
-    } catch (e) {
-      console.error('Failed to load wake hotkey:', e)
-      error(t('settings.shortcuts.wakeHotkey.loadFailed'))
+    await Promise.all([
+      loadAutostart(),
+      // 空串表示用户已关闭全局唤醒，按原样显示「点击设置」，不能套默认值
+      (async () => {
+        try {
+          const val = await getHotkey()
+          if (!isUnmounted) settings.hotkey = val
+        } catch (e) {
+          console.error('Failed to load wake hotkey:', e)
+          error(t('settings.shortcuts.wakeHotkey.loadFailed'))
+        }
+      })(),
+      // 以下两项读取失败时保留默认值，开关仍可操作并重新保存
+      (async () => {
+        try {
+          const val = await getMinimizeToTray()
+          if (!isUnmounted) settings.minimizeToTray = val
+        } catch (e) {
+          console.warn('读取最小化到托盘设置失败，使用默认值:', e)
+        }
+      })(),
+      (async () => {
+        try {
+          const val = await getCloseConfirm()
+          if (!isUnmounted) settings.closeConfirm = val
+        } catch (e) {
+          console.warn('读取退出确认设置失败，使用默认值:', e)
+        }
+      })(),
+      // getShowTrayIcon 读取失败时返回默认值 true，不会抛错
+      (async () => {
+        const val = await getShowTrayIcon()
+        if (!isUnmounted) settings.showTrayIcon = val
+      })(),
+      (async () => {
+        sharedTriggers = await fetchTriggersList()
+        if (!isUnmounted && sharedTriggers !== null) {
+          await loadTriggerWakePreferences(sharedTriggers)
+        }
+      })(),
+      refreshShellShortcuts()
+    ])
+    if (!isUnmounted) {
+      settings.wakePreference = windowModeState.wakePreference || 'launcher'
+      // 以 TriggerService 真实注册态为准，避免配置有键但底层未生效时产生假生效错觉
+      if (Array.isArray(sharedTriggers)) {
+        const wakeTrigger = sharedTriggers.find((item) => item?.id === 'global_wake_hotkey')
+        if (wakeTrigger) {
+          const triggerKey = typeof wakeTrigger.config?.key === 'string' ? wakeTrigger.config.key.trim() : ''
+          settings.hotkey = wakeTrigger.enabled !== false ? triggerKey : ''
+          wakeHotkeyInactive.value = Boolean(
+            wakeTrigger.enabled !== false &&
+            triggerKey &&
+            wakeTrigger.effectiveEnabled === false
+          )
+        } else {
+          wakeHotkeyInactive.value = Boolean(settings.hotkey)
+        }
+      } else {
+        wakeHotkeyInactive.value = false
+      }
     }
-    try {
-      settings.launcherHotkey = await getLauncherHotkey()
-    } catch (e) {
-      console.error('Failed to load launcher hotkey:', e)
-      error(t('settings.shortcuts.launcherHotkey.loadFailed'))
-    }
-    // 以下两项读取失败时保留默认值，开关仍可操作并重新保存
-    try {
-      settings.minimizeToTray = await getMinimizeToTray()
-    } catch (e) {
-      console.warn('读取最小化到托盘设置失败，使用默认值:', e)
-    }
-    try {
-      settings.closeConfirm = await getCloseConfirm()
-    } catch (e) {
-      console.warn('读取退出确认设置失败，使用默认值:', e)
-    }
-    // getShowTrayIcon 读取失败时返回默认值 true，不会抛错
-    settings.showTrayIcon = await getShowTrayIcon()
-    settings.wakePreference = windowModeState.wakePreference || 'dashboard'
-    await loadTriggerWakePreferences()
   } catch (e) {
     console.error('Failed to load settings:', e)
     error(t('settings.loadFailed'))
   }
+  return sharedTriggers
 }
 
 const wakeOptions = computed(() => [
@@ -294,10 +353,22 @@ const mouseWakeOptions = computed(() =>
 )
 const builtinShortcutHints = computed(() =>
   BUILTIN_SHORTCUT_HINTS.map((item) => ({
-    ...item,
+    id: item.id,
+    key: item.key,
+    editable: item.editable,
+    defaultCombo: item.defaultCombo,
+    combo: item.combo,
     label: item.id ? t(`settings.shortcuts.builtins.${item.id}`) : item.label
   }))
 )
+
+const registerShellShortcutFieldRef = (id, el) => {
+  if (el) {
+    shellShortcutFieldRefs.set(id, el)
+  } else {
+    shellShortcutFieldRefs.delete(id)
+  }
+}
 const onWakePreferenceChange = (val) => {
   try {
     settings.wakePreference = val
@@ -384,11 +455,15 @@ const saveWakeHotkey = async (nextHotkey = settings.hotkey) => {
         fullscreenDnd: settings.fullscreenDnd
       })
     } catch (err) {
+      settings.hotkey = previousHotkey
+      await setHotkey(previousHotkey)
       console.error('同步全局快捷键失败:', err)
       error(t('settings.shortcuts.wakeHotkey.registerFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }))
       return false
     }
     if (!result.success) {
+      settings.hotkey = previousHotkey
+      await setHotkey(previousHotkey)
       const reasonMessages = {
         trigger_unavailable: t('settings.shortcuts.wakeHotkey.reasons.trigger_unavailable'),
         trigger_list_failed: t('settings.shortcuts.wakeHotkey.reasons.trigger_list_failed'),
@@ -407,6 +482,7 @@ const saveWakeHotkey = async (nextHotkey = settings.hotkey) => {
       error(t('settings.shortcuts.wakeHotkey.syncFailed', { reason: message }))
       return false
     }
+    wakeHotkeyInactive.value = false
     await reloadHostHotkeys()
     success(targetHotkey ? t('settings.shortcuts.wakeHotkey.saved') : t('settings.shortcuts.wakeHotkey.disabled'))
     const reserveWarning = getShellReserveWarning(targetHotkey)
@@ -423,92 +499,6 @@ const saveWakeHotkey = async (nextHotkey = settings.hotkey) => {
 /** 恢复全局唤醒快捷键为默认 Alt+Space */
 const restoreDefaultHotkey = async () => {
   await saveWakeHotkey(DEFAULT_GLOBAL_WAKE_HOTKEY)
-}
-
-/** 独立保存显示悬浮条快捷键（与全局唤醒快捷键完全解耦，互不影响） */
-const saveLauncherHotkey = async (nextHotkey = settings.launcherHotkey) => {
-  if (launcherHotkeySaving.value) return false
-  const previousHotkey = settings.launcherHotkey
-  const targetHotkey = typeof nextHotkey === 'string' ? nextHotkey : ''
-  launcherHotkeySaving.value = true
-  try {
-    // 双向冲突预检：检查是否与全局唤醒快捷键、插件启动/功能快捷键冲突
-    if (targetHotkey && window.ztools?.trigger?.checkConflict) {
-      const conflictResult = await window.ztools.trigger.checkConflict(
-        targetHotkey,
-        'system',
-        'global_launcher_hotkey'
-      )
-      const conflictData = conflictResult?.data || conflictResult || {}
-      if (conflictData.hasConflict && conflictData.conflicts?.length > 0) {
-        const names = conflictData.conflicts
-          .map((item) => item.pluginName || item.pluginId || t('settings.shortcuts.wakeHotkey.builtinFallbackName'))
-          .join(t('settings.shortcuts.wakeHotkey.listSeparator'))
-        error(t('settings.shortcuts.launcherHotkey.conflict', { names }))
-        return false
-      }
-    }
-
-    settings.launcherHotkey = targetHotkey
-    if (!(await setLauncherHotkey(targetHotkey))) {
-      settings.launcherHotkey = previousHotkey
-      error(t('settings.shortcuts.launcherHotkey.saveFailed'))
-      return false
-    }
-    let result
-    try {
-      result = await syncGlobalLauncherHotkey({
-        hotkey: targetHotkey,
-        fullscreenDnd: settings.fullscreenDnd
-      })
-    } catch (err) {
-      settings.launcherHotkey = previousHotkey
-      await setLauncherHotkey(previousHotkey)
-      console.error('同步悬浮条快捷键失败:', err)
-      error(t('settings.shortcuts.wakeHotkey.registerFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }))
-      return false
-    }
-    if (!result.success) {
-      settings.launcherHotkey = previousHotkey
-      await setLauncherHotkey(previousHotkey)
-      const reasonMessages = {
-        trigger_unavailable: t('settings.shortcuts.wakeHotkey.reasons.trigger_unavailable'),
-        trigger_list_failed: t('settings.shortcuts.wakeHotkey.reasons.trigger_list_failed'),
-        trigger_register_failed: t('settings.shortcuts.wakeHotkey.reasons.trigger_register_failed'),
-        trigger_unregister_failed: t('settings.shortcuts.wakeHotkey.reasons.trigger_unregister_failed')
-      }
-      let message = reasonMessages[result.reason] || t('settings.shortcuts.wakeHotkey.reasons.default')
-      if (result.message) {
-        const detail = resolveErrorMessage({ error: result.message }, 'common.unknownError')
-        if (detail && detail !== t('common.unknownError')) {
-          message += `：${detail}`
-        }
-      }
-      if (result.rollbackFailed) message += t('settings.shortcuts.wakeHotkey.rollbackFailedSuffix')
-      console.warn('悬浮条快捷键同步失败:', result)
-      error(t('settings.shortcuts.launcherHotkey.syncFailed', { reason: message }))
-      return false
-    }
-    await reloadHostHotkeys()
-    success(
-      targetHotkey
-        ? t('settings.shortcuts.launcherHotkey.saved')
-        : t('settings.shortcuts.launcherHotkey.disabled')
-    )
-    const reserveWarning = getShellReserveWarning(targetHotkey)
-    if (reserveWarning) {
-      warning(reserveWarning)
-    }
-    track('settings_change', '', { type: 'launcher_hotkey' })
-    return true
-  } finally {
-    launcherHotkeySaving.value = false
-  }
-}
-
-/** 恢复显示悬浮条快捷键为默认 Alt+Shift+Space */
-const restoreDefaultLauncherHotkey = async () => {
-  await saveLauncherHotkey(DEFAULT_GLOBAL_LAUNCHER_HOTKEY)
 }
 
 /** 保存 Windows 鼠标快捷唤醒设置 */
@@ -660,60 +650,128 @@ const clearHotkey = async () => {
 
 const startHotkeyRecording = () => {
   if (hotkeySaving.value) return
-  stopLauncherHotkeyRecording(false)
+  stopShellShortcutRecording(false)
   resetHotkeyRecorderState()
   hotkeyRecording.value = true
   hotkeyRecordingText.value = ''
   hotkeyRecordingIsKeys.value = false
 }
 
-const handleLauncherHotkeyKeydown = async (event) => {
+const checkShellGlobalOverlapWarning = (combo) => {
+  const canonical = canonicalizeShellShortcut(combo)
+  if (!canonical) return
+  if (settings.hotkey && canonicalizeShellShortcut(settings.hotkey) === canonical) {
+    warning(
+      t('settings.shortcuts.common.globalOverlapWarning', {
+        target: t('settings.shortcuts.wakeHotkey.label')
+      })
+    )
+  }
+}
+
+const commitShellShortcut = async (item, nextCombo) => {
+  if (!item?.editable || savingShellShortcutId.value || restoringShellShortcuts.value) return false
+  savingShellShortcutId.value = item.id
+  try {
+    const result = await saveShellShortcut(item.id, nextCombo)
+    if (!result.success) {
+      if (result.reason === 'conflict' && result.conflict?.label) {
+        error(t('settings.shortcuts.common.conflict', { label: result.conflict.label }))
+      } else {
+        error(t('settings.shortcuts.common.saveFailed'))
+      }
+      return false
+    }
+    if (!result.unchanged) {
+      success(
+        result.combo
+          ? t('settings.shortcuts.common.saved', { label: item.label })
+          : t('settings.shortcuts.common.cleared', { label: item.label })
+      )
+      if (result.combo) {
+        checkShellGlobalOverlapWarning(result.combo)
+      }
+      track('settings_change', '', { type: 'shell_shortcut', id: item.id })
+    }
+    return true
+  } finally {
+    savingShellShortcutId.value = ''
+  }
+}
+
+const clearShellShortcut = async (item) => {
+  if (!item?.editable || !item.combo) return
+  await commitShellShortcut(item, '')
+}
+
+const startShellShortcutRecording = (item) => {
+  if (!item?.editable || savingShellShortcutId.value || restoringShellShortcuts.value) return
+  stopHotkeyRecording(false)
+  if (activeShellShortcutId.value && activeShellShortcutId.value !== item.id) {
+    stopShellShortcutRecording(false)
+  }
+  resetHotkeyRecorderState()
+  activeShellShortcutId.value = item.id
+  shellShortcutRecordingText.value = ''
+  shellShortcutRecordingIsKeys.value = false
+}
+
+const handleShellShortcutKeydown = async (item, event) => {
   event?.preventDefault?.()
   event?.stopPropagation?.()
-  if (!launcherHotkeyRecording.value || launcherHotkeySaving.value) return
+  if (activeShellShortcutId.value !== item.id || savingShellShortcutId.value) return
 
   const result = interpretRecorderKeydown(event, {
-    platform: hotkeyPlatform.value,
-    allowDoubleTap: supportsDoubleModifierHotkeys.value
+    platform: effectiveShellPlatform.value,
+    allowDoubleTap: false,
+    allowShellKeys: true
   })
   if (result.action === 'cancel') {
-    stopLauncherHotkeyRecording(true)
+    stopShellShortcutRecording(true)
     return
   }
   if (result.action === 'clear') {
-    stopLauncherHotkeyRecording(true)
-    if (settings.launcherHotkey) {
-      await clearLauncherHotkey()
+    stopShellShortcutRecording(true)
+    if (item.combo) {
+      await clearShellShortcut(item)
     }
     return
   }
-  launcherHotkeyRecordingText.value = result.text
-  launcherHotkeyRecordingIsKeys.value = result.isKeys
+  shellShortcutRecordingText.value = result.text
+  shellShortcutRecordingIsKeys.value = result.isKeys
   if (result.action !== 'valid') return
-  stopLauncherHotkeyRecording(true)
-  await saveLauncherHotkey(result.hotkey)
+  stopShellShortcutRecording(true)
+  await commitShellShortcut(item, result.hotkey)
 }
 
-const clearLauncherHotkey = async () => {
-  await saveLauncherHotkey('')
-}
-
-const startLauncherHotkeyRecording = () => {
-  if (launcherHotkeySaving.value) return
-  stopHotkeyRecording(false)
-  resetHotkeyRecorderState()
-  launcherHotkeyRecording.value = true
-  launcherHotkeyRecordingText.value = ''
-  launcherHotkeyRecordingIsKeys.value = false
-}
-
-/** 从 Delphi 端加载插件的启动快捷键数据并缓存 */
-async function loadPluginHotkeyCount() {
+const restoreDefaultShellShortcuts = async () => {
+  if (restoringShellShortcuts.value || savingShellShortcutId.value || !hasShellShortcutChanges.value) return
+  stopShellShortcutRecording(false)
+  restoringShellShortcuts.value = true
   try {
-    if (!window.ztools?.trigger) return
-    const result = await window.ztools.trigger.list()
-    if (isUnmounted) return
-    const triggers = result?.data || result || []
+    const result = await resetAllShellShortcuts()
+    if (!result.success) {
+      error(t('settings.shortcuts.common.saveFailed'))
+      return
+    }
+    success(t('settings.shortcuts.common.restored'))
+    track('settings_change', '', { type: 'shell_shortcut_reset' })
+  } finally {
+    restoringShellShortcuts.value = false
+  }
+}
+
+/** 从 Delphi 端加载插件的启动快捷键数据并缓存（支持复用外部已拉取的 triggers） */
+async function loadPluginHotkeyCount(prefetchedTriggers) {
+  try {
+    let triggers = prefetchedTriggers
+    if (triggers === undefined) {
+      if (!window.ztools?.trigger) return
+      const result = await window.ztools.trigger.list()
+      if (isUnmounted) return
+      triggers = result?.data || result || []
+    }
+    if (!Array.isArray(triggers)) return
     const map = buildLaunchHotkeyMap(
       triggers,
       getPluginFeatureHotkeyItemByTrigger
@@ -727,20 +785,22 @@ async function loadPluginHotkeyCount() {
   }
 }
 
-async function loadPluginFeatureHotkeyCount() {
+async function loadPluginFeatureHotkeyCount(prefetchedTriggers) {
   try {
-    if (!window.ztools?.trigger) return
-    const result = await window.ztools.trigger.list()
-    if (isUnmounted) return
-    const triggers = result?.data || result || []
+    let triggers = prefetchedTriggers
+    if (triggers === undefined) {
+      if (!window.ztools?.trigger) return
+      const result = await window.ztools.trigger.list()
+      if (isUnmounted) return
+      triggers = result?.data || result || []
+    }
+    if (!Array.isArray(triggers)) return
     let count = 0
 
-    if (Array.isArray(triggers)) {
-      for (const trigger of triggers) {
-        const item = getPluginFeatureHotkeyItemByTrigger(trigger)
-        if (item && !isDeprecatedPluginFeatureHotkeyItem(item)) {
-          count += 1
-        }
+    for (const trigger of triggers) {
+      const item = getPluginFeatureHotkeyItemByTrigger(trigger)
+      if (item && !isDeprecatedPluginFeatureHotkeyItem(item)) {
+        count += 1
       }
     }
 
@@ -778,19 +838,20 @@ const stopHotkeyRecording = (restoreFocus = false) => {
   resetHotkeyRecorderState()
 }
 
-const stopLauncherHotkeyRecording = (restoreFocus = false) => {
-  if (launcherHotkeyRecording.value) {
-    launcherHotkeyRecording.value = false
-    launcherHotkeyRecordingText.value = ''
-    launcherHotkeyRecordingIsKeys.value = false
-    launcherHotkeyFieldRef.value?.blurInput?.({ restoreFocus })
+const stopShellShortcutRecording = (restoreFocus = false) => {
+  const currentId = activeShellShortcutId.value
+  if (currentId) {
+    activeShellShortcutId.value = ''
+    shellShortcutRecordingText.value = ''
+    shellShortcutRecordingIsKeys.value = false
+    shellShortcutFieldRefs.get(currentId)?.blurInput?.({ restoreFocus })
   }
   resetHotkeyRecorderState()
 }
 
 const stopAllHotkeyRecording = () => {
   stopHotkeyRecording(false)
-  stopLauncherHotkeyRecording(false)
+  stopShellShortcutRecording(false)
 }
 
 watch(activeTab, (tab) => {
@@ -802,6 +863,7 @@ watch(activeTab, (tab) => {
 let hasCompletedInitialMount = false
 let isConsumingRouteQuery = false
 let isUnmounted = false
+const isPageActive = ref(true)
 
 const clearRouteQueries = async (keys) => {
   const currentQuery = route?.query || {}
@@ -885,7 +947,7 @@ watch(
     route?.query?.manageBundled
   ],
   () => {
-    if (hasCompletedInitialMount && !isUnmounted) {
+    if (isPageActive.value && hasCompletedInitialMount && !isUnmounted) {
       void consumeRouteQuery()
     }
   }
@@ -893,6 +955,7 @@ watch(
 
 onMounted(async () => {
   isUnmounted = false
+  isPageActive.value = true
   // 在首个 await 前同步绑定监听器并设置导航激活态，确保快速卸载时能与 onBeforeUnmount 对称注销
   useNavStore().setPage('advanced-settings')
   window.addEventListener('ztools-settings-changed', onSettingsChanged)
@@ -902,39 +965,46 @@ onMounted(async () => {
   hotkeyPlatform.value = capabilities.platform
   supportsDoubleModifierHotkeys.value = capabilities.supportsDoubleModifierHotkeys
   supportsMouseTriggers.value = capabilities.supportsMouseTriggers
-  await loadSettings()
+  const sharedTriggers = await loadSettings()
   if (isUnmounted) return
 
-  // 异步加载插件快捷键数量（不阻塞页面渲染）
-  loadPluginHotkeyCount()
-  loadPluginFeatureHotkeyCount()
+  // 复用单次 trigger.list() 结果，避免重复 IPC 拉取
+  if (Array.isArray(sharedTriggers)) {
+    void loadPluginHotkeyCount(sharedTriggers)
+    void loadPluginFeatureHotkeyCount(sharedTriggers)
+  }
 
   hasCompletedInitialMount = true
   await consumeRouteQuery()
 })
 
 onActivated(() => {
+  isPageActive.value = true
   if (isUnmounted) return
   useNavStore().setPage('advanced-settings')
   if (!hasCompletedInitialMount) return
-  void loadSettings()
-  void loadPluginHotkeyCount()
-  void loadPluginFeatureHotkeyCount()
+  void loadSettings().then((sharedTriggers) => {
+    if (isUnmounted || !Array.isArray(sharedTriggers)) return
+    void loadPluginHotkeyCount(sharedTriggers)
+    void loadPluginFeatureHotkeyCount(sharedTriggers)
+  })
   void consumeRouteQuery()
 })
 
 onDeactivated(() => {
+  isPageActive.value = false
   stopAllHotkeyRecording()
 })
 
 const onSettingsChanged = () => {
-  if (!isUnmounted) {
-    loadSettings()
+  if (!isUnmounted && isPageActive.value) {
+    void loadSettings()
   }
 }
 
 onBeforeUnmount(() => {
   isUnmounted = true
+  isPageActive.value = false
   stopAllHotkeyRecording()
   window.removeEventListener('ztools-settings-changed', onSettingsChanged)
 })
@@ -1093,6 +1163,13 @@ onBeforeUnmount(() => {
                   <div class="setting-text">
                     <span class="setting-label">{{ t('settings.shortcuts.wakeHotkey.label') }}</span>
                     <span class="setting-desc">{{ t('settings.shortcuts.wakeHotkey.desc') }}</span>
+                    <span
+                      v-if="wakeHotkeyInactive"
+                      class="setting-desc setting-warn"
+                      data-testid="wake-hotkey-inactive-hint"
+                    >
+                      {{ t('settings.shortcuts.wakeHotkey.inactiveHint') }}
+                    </span>
                   </div>
                 </div>
                 <div class="hotkey-input-group">
@@ -1116,7 +1193,7 @@ onBeforeUnmount(() => {
                     variant="secondary"
                     size="sm"
                     data-testid="restore-default-wake-hotkey"
-                    :disabled="settings.hotkey === DEFAULT_GLOBAL_WAKE_HOTKEY || hotkeySaving"
+                    :disabled="settings.hotkey === DEFAULT_GLOBAL_WAKE_HOTKEY && !wakeHotkeyInactive || hotkeySaving"
                     @click="restoreDefaultHotkey"
                   >
                     {{ t('settings.shortcuts.wakeHotkey.restoreDefault') }}
@@ -1124,41 +1201,22 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <!-- 独立显示悬浮条快捷键 -->
-              <div class="setting-item hotkey-item" data-testid="launcher-hotkey-setting">
+              <!-- 呼出形态偏好设置（紧跟全局唤醒快捷键：决定按全局热键弹悬浮条还是主工作台） -->
+              <div class="setting-item" data-testid="wake-preference-setting">
                 <div class="setting-info">
                   <div class="setting-text">
-                    <span class="setting-label">{{ t('settings.shortcuts.launcherHotkey.label') }}</span>
-                    <span class="setting-desc">{{ t('settings.shortcuts.launcherHotkey.desc') }}</span>
+                    <span class="setting-label">{{ t('settings.shortcuts.wakePreference.label') }}</span>
+                    <span class="setting-desc">{{ t('settings.shortcuts.wakePreference.desc') }}</span>
                   </div>
                 </div>
-                <div class="hotkey-input-group">
-                  <HotkeyCaptureField
-                    ref="launcherHotkeyFieldRef"
-                    data-testid="launcher-hotkey-field"
-                    :hotkey="settings.launcherHotkey"
-                    :recording="launcherHotkeyRecording"
-                    :loading="launcherHotkeySaving"
-                    :platform="hotkeyPlatform"
-                    :supports-double-modifier="supportsDoubleModifierHotkeys"
-                    :recording-text="launcherHotkeyRecordingText"
-                    :recording-is-keys="launcherHotkeyRecordingIsKeys"
-                    :wait-text="getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys)"
-                    :empty-text="t('settings.shortcuts.wakeHotkey.emptyText')"
-                    @start="startLauncherHotkeyRecording"
-                    @cancel="stopLauncherHotkeyRecording(false)"
-                    @keydown="handleLauncherHotkeyKeydown"
-                    @clear="clearLauncherHotkey"
+                <div class="setting-control">
+                  <RcSegmented
+                    variant="marker"
+                    :aria-label="t('settings.shortcuts.wakePreference.ariaLabel')"
+                    :model-value="settings.wakePreference"
+                    :options="wakeOptions"
+                    @change="onWakePreferenceChange"
                   />
-                  <RcButton
-                    variant="secondary"
-                    size="sm"
-                    data-testid="restore-default-launcher-hotkey"
-                    :disabled="settings.launcherHotkey === DEFAULT_GLOBAL_LAUNCHER_HOTKEY || launcherHotkeySaving"
-                    @click="restoreDefaultLauncherHotkey"
-                  >
-                    {{ t('settings.shortcuts.wakeHotkey.restoreDefault') }}
-                  </RcButton>
                 </div>
               </div>
 
@@ -1225,25 +1283,6 @@ onBeforeUnmount(() => {
                 />
               </div>
 
-              <!-- 呼出形态偏好设置 -->
-              <div class="setting-item">
-                <div class="setting-info">
-                  <div class="setting-text">
-                    <span class="setting-label">{{ t('settings.shortcuts.wakePreference.label') }}</span>
-                    <span class="setting-desc">{{ t('settings.shortcuts.wakePreference.desc') }}</span>
-                  </div>
-                </div>
-                <div class="setting-control">
-                  <RcSegmented
-                    variant="marker"
-                    :aria-label="t('settings.shortcuts.wakePreference.ariaLabel')"
-                    :model-value="settings.wakePreference"
-                    :options="wakeOptions"
-                    @change="onWakePreferenceChange"
-                  />
-                </div>
-              </div>
-
               <!-- 启动快捷键（独立项） -->
               <button
                 ref="launchShortcutButton"
@@ -1280,15 +1319,48 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <!-- 常用快捷键（只读）：与 shellShortcuts 唯一信源保持一致 -->
+          <!-- 常用快捷键：除 Esc 外其余 5 项均支持修改、清空与一键恢复默认 -->
           <div class="settings-card">
-            <div class="card-header">
+            <div class="card-header card-header-with-action">
               <h2 class="card-title">{{ t('settings.shortcuts.commonTitle') }}</h2>
+              <RcButton
+                variant="secondary"
+                size="sm"
+                data-testid="restore-default-shell-shortcuts"
+                :disabled="!hasShellShortcutChanges || Boolean(savingShellShortcutId) || restoringShellShortcuts"
+                @click="restoreDefaultShellShortcuts"
+              >
+                {{ t('settings.shortcuts.common.restoreDefault') }}
+              </RcButton>
             </div>
             <div class="settings-list">
-              <div v-for="item in builtinShortcutHints" :key="item.id || item.combo" class="setting-item compact">
+              <div
+                v-for="item in builtinShortcutHints"
+                :key="item.id || item.combo"
+                class="setting-item compact"
+                :data-testid="`common-shortcut-row-${item.id}`"
+              >
                 <span class="setting-label">{{ item.label }}</span>
-                <ShortcutKeys :combo="item.combo" />
+                <HotkeyCaptureField
+                  v-if="item.editable"
+                  :ref="(el) => registerShellShortcutFieldRef(item.id, el)"
+                  :data-testid="`shell-shortcut-field-${item.id}`"
+                  :hotkey="item.combo"
+                  :recording="activeShellShortcutId === item.id"
+                  :loading="savingShellShortcutId === item.id"
+                  :disabled="restoringShellShortcuts || (Boolean(savingShellShortcutId) && savingShellShortcutId !== item.id)"
+                  :platform="effectiveShellPlatform"
+                  :supports-double-modifier="false"
+                  :recording-text="activeShellShortcutId === item.id ? shellShortcutRecordingText : ''"
+                  :recording-is-keys="activeShellShortcutId === item.id ? shellShortcutRecordingIsKeys : false"
+                  :wait-text="getHotkeyWaitText(effectiveShellPlatform, false)"
+                  :empty-text="t('settings.shortcuts.common.emptyText')"
+                  @start="startShellShortcutRecording(item)"
+                  @cancel="stopShellShortcutRecording(false)"
+                  @keydown="handleShellShortcutKeydown(item, $event)"
+                  @clear="clearShellShortcut(item)"
+                />
+                <ShortcutKeys v-else :combo="item.combo" />
               </div>
             </div>
           </div>
@@ -1328,6 +1400,13 @@ onBeforeUnmount(() => {
 }
 
 /* 快捷键录入与扩展控制 */
+.card-header-with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .hotkey-item {
   flex-wrap: wrap;
   gap: 12px;
@@ -1374,6 +1453,11 @@ onBeforeUnmount(() => {
 .setting-meta {
   font-size: var(--rc-fs-small);
   color: var(--rc-text-secondary);
+}
+
+.setting-warn {
+  color: var(--rc-warning);
+  margin-top: 2px;
 }
 
 .setting-meta-icon {

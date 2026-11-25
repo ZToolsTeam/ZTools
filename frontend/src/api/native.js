@@ -28,9 +28,6 @@ export const isNative = hasNativeBridge()
 /** 全局唤醒快捷键默认值：配置里没有这一项（从未设置过）时使用；存的是空串表示用户主动关闭 */
 export const DEFAULT_GLOBAL_WAKE_HOTKEY = 'Alt+Space'
 
-/** 独立显示悬浮条快捷键默认值：与全局唤醒快捷键完全独立且零冲突；存的是空串表示用户主动关闭 */
-export const DEFAULT_GLOBAL_LAUNCHER_HOTKEY = 'Alt+Shift+Space'
-
 /**
  * Get a native module from window.ztools
  * @param {string} moduleName
@@ -274,20 +271,6 @@ const native = {
       return true
     } catch (err) {
       console.warn('[native] setHotkey 失败:', err)
-      return false
-    }
-  },
-  // 读取失败直接抛错：空串表示用户已关闭独立悬浮条快捷键，不能把读取失败当成关闭
-  async getLauncherHotkey() {
-    const raw = await getNativeModule('config').get('hotkey.launcher', DEFAULT_GLOBAL_LAUNCHER_HOTKEY)
-    return typeof raw === 'string' ? raw.trim() : ''
-  },
-  async setLauncherHotkey(val) {
-    try {
-      await getNativeModule('config').set('hotkey.launcher', val || '', true)
-      return true
-    } catch (err) {
-      console.warn('[native] setLauncherHotkey 失败:', err)
       return false
     }
   },
@@ -650,8 +633,6 @@ export const getAutostart = native.getAutostart
 export const setAutostart = native.setAutostart
 export const getHotkey = native.getHotkey
 export const setHotkey = native.setHotkey
-export const getLauncherHotkey = native.getLauncherHotkey
-export const setLauncherHotkey = native.setLauncherHotkey
 export const getMinimizeToTray = native.getMinimizeToTray
 export const setMinimizeToTray = native.setMinimizeToTray
 export const getShowTrayIcon = native.getShowTrayIcon

@@ -156,20 +156,75 @@ describe('HotkeyConflictModal 系统占用与插件重复冲突合并展示', ()
       expect(wrapper.text()).toContain('Mouse Quick Wake')
       expect(wrapper.text()).toContain('System or another app')
       expect(wrapper.text()).not.toContain('全局唤醒快捷键')
+    } finally {
+      setI18nLocale(prevLocale)
+      wrapper.unmount()
+    }
+  })
 
-      // 独立悬浮条快捷键 global_launcher_hotkey 也应按系统冲突项实时随语言切换显示
-      wrapper.vm.close()
-      await flushPromises()
-      setI18nLocale('zh-CN')
+  it('全局唤醒冲突附带实测可用备选热键时，支持一键替换生效，注册失败时回滚配置且保留弹窗', async () => {
+    const prevLocale = getCurrentLocale()
+    setI18nLocale('zh-CN')
+    const configSet = vi.fn().mockResolvedValue(true)
+    const reloadHotkeys = vi.fn().mockResolvedValue(true)
+    const register = vi.fn()
+      .mockRejectedValueOnce(new Error('操作系统拒绝注册'))
+      .mockResolvedValue({ success: true, data: { triggerId: 'global_wake_hotkey' } })
+    window.ztools = {
+      config: {
+        get: vi.fn().mockResolvedValue('Alt+Space'),
+        set: configSet
+      },
+      sys: { reloadHotkeys },
+      trigger: {
+        list: vi.fn().mockResolvedValue({ data: [] }),
+        register,
+        unregister: vi.fn().mockResolvedValue({ success: true })
+      }
+    }
+
+    const wrapper = mount(HotkeyConflictModal, {
+      global: {
+        plugins: [router],
+        stubs: {
+          AModal: {
+            props: ['open', 'title'],
+            template: '<div v-if="open" :data-title="title"><slot /><slot name="footer" /></div>'
+          }
+        }
+      }
+    })
+
+    try {
       wrapper.vm.show([
-        { type: 'system', key: 'Alt+Shift+Space', pluginId: 'system', triggerId: 'global_launcher_hotkey' }
+        {
+          type: 'system',
+          key: 'Alt+Space',
+          pluginId: 'system',
+          triggerId: 'global_wake_hotkey',
+          suggestions: ['DoubleAlt', 'Alt+Q', 'Alt+Shift+Space']
+        }
       ])
       await flushPromises()
-      expect(wrapper.text()).toContain('显示悬浮条快捷键')
-      setI18nLocale('en-US')
+
+      expect(wrapper.find('[data-testid="wake-conflict-suggestions"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="quick-switch-Alt+Q"]').exists()).toBe(true)
+
+      // 1. 首次点击注册失败：必须回滚 hotkey.global 为 Alt+Space 且弹窗保持打开
+      await wrapper.find('[data-testid="quick-switch-Alt+Q"]').trigger('click')
       await flushPromises()
-      expect(wrapper.text()).toContain('Show Quick Launcher Hotkey')
+      expect(configSet).toHaveBeenCalledWith('hotkey.global', 'Alt+Q', true)
+      expect(configSet).toHaveBeenLastCalledWith('hotkey.global', 'Alt+Space', true)
+      expect(wrapper.find('[data-testid="wake-conflict-suggestions"]').exists()).toBe(true)
+
+      // 2. 再次点击注册成功：刷新托盘并自动关闭冲突弹窗
+      await wrapper.find('[data-testid="quick-switch-Alt+Shift+Space"]').trigger('click')
+      await flushPromises()
+      expect(configSet).toHaveBeenLastCalledWith('hotkey.global', 'Alt+Shift+Space', true)
+      expect(reloadHotkeys).toHaveBeenCalledTimes(1)
+      expect(wrapper.find('[data-testid="wake-conflict-suggestions"]').exists()).toBe(false)
     } finally {
+      delete window.ztools
       setI18nLocale(prevLocale)
       wrapper.unmount()
     }

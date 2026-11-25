@@ -747,7 +747,7 @@ describe("「所见即所按」快捷键解析、保留键屏蔽、重复去重�
     expect(log).toEqual(["toggle"]);
   });
 
-  it("插件误声明宿主保留快捷键（Ctrl+Shift+P / Ctrl+U / Ctrl+,）时不渲染假徽标且不触发插件动作", async () => {
+  it("插件误声明宿主保留快捷键（Ctrl+Shift+P / Ctrl+,）时不渲染假徽标且不触发插件动作", async () => {
     const log = [];
     const wrapper = mountView(() =>
       List({}, [
@@ -757,7 +757,7 @@ describe("「所见即所按」快捷键解析、保留键屏蔽、重复去重�
           actions: ActionPanel({}, [
             Action({ title: "主动作", onAction: () => log.push("primary") }),
             Action({ title: "危险预览", shortcut: { modifiers: ["ctrl", "shift"], key: "p" }, onAction: () => log.push("plugin-csp") }),
-            Action({ title: "切换模式", shortcut: { modifiers: ["ctrl"], key: "u" }, onAction: () => log.push("plugin-cu") })
+            Action({ title: "覆盖设置", shortcut: { modifiers: ["ctrl"], key: "," }, onAction: () => log.push("plugin-settings") })
           ])
         })
       ])
@@ -769,7 +769,7 @@ describe("「所见即所按」快捷键解析、保留键屏蔽、重复去重�
       expect(secondaryBtn.text()).not.toContain("P");
     }
     press(searchInput(wrapper), "p", { metaKey: true, shiftKey: true });
-    press(searchInput(wrapper), "u", { metaKey: true });
+    press(searchInput(wrapper), ",", { metaKey: true });
     await flush();
     expect(log).toEqual([]);
   });

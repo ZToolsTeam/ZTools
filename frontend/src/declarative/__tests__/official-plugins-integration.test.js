@@ -843,10 +843,16 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(wrapper.text()).toContain('第一条社区极客笔记')
       expect(window.__ztoolsLauncher.hide).not.toHaveBeenCalled()
 
-      // 4. 在原位声明式视图触发 Ctrl+U 展开工作台，验证路由自动指向 /declarative/community-notes
+      // 4. 在原位声明式视图按 Ctrl+U 不再误切换窗口；按 Escape 退出回到搜索框后可通过按钮展开工作台
       await wrapper.trigger('keydown', { key: 'u', ctrlKey: true })
       await nextTick()
-      expect(expandSpy).toHaveBeenCalledWith(expect.stringContaining('/declarative/community-notes'))
+      expect(expandSpy).not.toHaveBeenCalled()
+
+      await wrapper.trigger('keydown', { key: 'Escape' })
+      await nextTick()
+      await wrapper.find('.launcher-workbench-btn').trigger('click')
+      await nextTick()
+      expect(expandSpy).toHaveBeenCalledTimes(1)
 
       // 5. [Beyond Happy Path] 触发试图越权加载 child_process 的第三方插件：验证悬浮条原位拦截并显示错误态，按 Esc 自愈恢复
       const inputAfterExpand = wrapper.find('#launcherQuery')

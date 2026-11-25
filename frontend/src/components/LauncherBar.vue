@@ -63,7 +63,7 @@
           <button
             type="button"
             class="launcher-workbench-btn"
-            :title="t('launcher.workbenchTooltip', { shortcut: workbenchHint })"
+            :title="t('launcher.workbenchTooltip')"
             @click="expandToDashboard()"
           >
             {{ t('launcher.workbenchBtn') }}
@@ -143,7 +143,7 @@
               :ref="el => registerItemEl(index, el)"
               :item="displayItems[index]"
               :active="pinnedFocusIndex < 0 && activeIndex === index"
-              :parts="highlightParts(item)"
+              :parts="displayHighlightParts[index]"
               @mouseenter="pinnedFocusIndex = -1; activeIndex = index"
               @click="pinnedFocusIndex = -1; executeItem(item)"
             />
@@ -197,7 +197,7 @@
               {{ currentFocusedItem?.pinned ? t('launcher.footUnpin') : t('launcher.footPin') }} <ShortcutKeys combo="Ctrl+P" />
             </button>
             <button v-if="activeItemActions.length" type="button" class="launcher-foot-hint" @click="toggleActionPanel">
-              {{ t('launcher.footActions') }} <ShortcutKeys combo="Ctrl+K" />
+              {{ t('launcher.footActions') }} <ShortcutKeys v-if="SHELL_SHORTCUTS.ACTION_PANEL" :combo="SHELL_SHORTCUTS.ACTION_PANEL" />
             </button>
             <button type="button" class="launcher-foot-hint" @click="handleLauncherEscape">
               {{ pinnedFocusIndex >= 0 ? t('common.back') : (query ? t('common.clear') : t('launcher.footClose')) }}
@@ -213,7 +213,7 @@
       v-if="actionPanelVisible"
       :visible="actionPanelVisible"
       :actions="activeItemActions"
-      :reserved-combos="LAUNCHER_PANEL_RESERVED_SHORTCUTS"
+      :reserved-combos="launcherPanelReservedShortcuts"
       @close="actionPanelVisible = false"
       @trigger="runLauncherAction"
     />
@@ -249,15 +249,15 @@ import {
   useKeymap,
   registerKeyHandler,
   KEYMAP_SCOPES,
-  OPEN_SETTINGS_SHORTCUT,
   dispatchKeyEvent,
   isComposingEvent,
   isInputElement
 } from '@/utils/keymap'
 import {
-  TOGGLE_MODE_SHORTCUT,
-  POPOUT_WINDOW_SHORTCUT,
-  SHELL_SHORTCUTS
+  SHELL_SHORTCUTS,
+  comboToActionShortcut,
+  getLauncherPanelReservedShortcuts,
+  matchesShellShortcut
 } from '@/utils/shellShortcuts'
 import {
   resolveActionKeyBindings,
@@ -283,8 +283,6 @@ const router = useRouter()
 const pluginsStore = usePluginsStore()
 // 由宿主选择圆角策略；系统裁切时页面铺满窗口，避免两层圆角和边框互相露底。
 const nativeCorners = new URLSearchParams(window.location.search).get('nativeCorners') === '1'
-// 悬停提示是纯文本，按平台格式化（键帽展示统一走 ShortcutKeys）
-const workbenchHint = shortcutLabel(TOGGLE_MODE_SHORTCUT)
 
 const inputRef = ref(null)
 const pinnedGridRef = ref(null)
@@ -425,6 +423,11 @@ const displayItems = computed(() =>
     if (item?.badge && item.badgeKind === 'source') return { ...item, badgeQuiet: true }
     return item
   })
+)
+
+// 预计算每项高亮分片，避免悬停/键盘切换 activeIndex 时整列行组件因新数组引用全量重绘
+const displayHighlightParts = computed(() =>
+  visibleItems.value.map((item) => highlightParts(item))
 )
 
 const currentFocusedItem = computed(() => {
@@ -693,7 +696,6 @@ const activeItemActions = computed(() => {
       type: 'Action',
       props: {
         title: t('launcher.actionExpandWorkspace'),
-        shortcut: { modifiers: ['Ctrl'], key: 'U' },
         onAction: () => {
           actionPanelVisible.value = false
           expandToDashboard()
@@ -748,11 +750,12 @@ const activeItemActions = computed(() => {
   }
 
   if (item.pluginId && isDeclarativeTarget(item.pluginId, item) && item.mode !== 'no-view') {
+    const popoutActionShortcut = comboToActionShortcut(SHELL_SHORTCUTS.POPOUT_WINDOW)
     actions.push({
       type: 'Action',
       props: {
         title: t('launcher.actionOpenPopout'),
-        shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'P' },
+        ...(popoutActionShortcut ? { shortcut: popoutActionShortcut } : {}),
         onAction: () => {
           actionPanelVisible.value = false
           popoutDeclarativePlugin(item.pluginId, item.featureCode || '')
@@ -795,7 +798,6 @@ const activeItemActions = computed(() => {
     type: 'Action',
     props: {
       title: t('launcher.actionExpandFullWindow'),
-      shortcut: { modifiers: ['Ctrl'], key: 'U' },
       onAction: () => {
         actionPanelVisible.value = false
         expandToDashboard()
@@ -1178,18 +1180,14 @@ async function commitPinnedReorder(order, kind, baseline, generation) {
   }
 }
 
-// 悬浮条动作面板专属保留键：不屏蔽 Ctrl+U（展开工作台）与 Ctrl+Shift+P（独立窗），使其在面板中可见且可直达
-const LAUNCHER_PANEL_RESERVED_SHORTCUTS = new Set([
-  SHELL_SHORTCUTS.ACTION_PANEL,
-  SHELL_SHORTCUTS.OPEN_SETTINGS,
-  'Escape'
-])
+// 悬浮条动作面板专属保留键：动态读取当前生效的动作面板与打开设置快捷键，不屏蔽独立窗
+const launcherPanelReservedShortcuts = computed(() => getLauncherPanelReservedShortcuts())
 
 // 悬浮条「所见即所按」快捷键解析器
 const resolvedLauncherBindings = computed(() =>
   resolveActionKeyBindings(activeItemActions.value, {
     viewType: 'List',
-    reservedCombos: LAUNCHER_PANEL_RESERVED_SHORTCUTS
+    reservedCombos: launcherPanelReservedShortcuts.value
   })
 )
 
@@ -1250,9 +1248,10 @@ function handleLauncherActionShortcut(e) {
   return true
 }
 
-// 宿主保留热键：高于 DECLARATIVE 作用域，保证悬浮条内嵌运行插件时 Ctrl+Shift+P 仍能弹出独立常驻窗口
+// 宿主保留热键：高于 DECLARATIVE 作用域，保证悬浮条内嵌运行插件时弹出独立窗口快捷键始终优先
 useKeymap(KEYMAP_SCOPES.HOST_RESERVED, {
-  [POPOUT_WINDOW_SHORTCUT]: () => {
+  onKeyDown: (_event, { combo }) => {
+    if (!matchesShellShortcut(combo, 'POPOUT_WINDOW')) return false
     if (actionPanelVisible.value) return false
     if (activeDeclarativePlugin.value) {
       popoutDeclarativePlugin(
@@ -1271,15 +1270,14 @@ useKeymap(KEYMAP_SCOPES.HOST_RESERVED, {
   }
 })
 
-// 跨窗口级直达热键（非模态挂载于顶层作用域，保证动作面板打开期间按 Ctrl+, / Ctrl+U 仍能立即收起面板并跳转主窗口）
+// 跨窗口级直达热键（非模态挂载于顶层作用域，保证动作面板打开期间按打开设置仍能立即收起面板并跳转主窗口）
 useKeymap(KEYMAP_SCOPES.ACTION_PANEL, {
-  [TOGGLE_MODE_SHORTCUT]: () => {
-    expandToDashboard()
-    return true
-  },
-  [OPEN_SETTINGS_SHORTCUT]: () => {
-    expandToDashboard(ROUTES.ADVANCED_SETTINGS)
-    return true
+  onKeyDown: (_event, { combo }) => {
+    if (matchesShellShortcut(combo, 'OPEN_SETTINGS')) {
+      expandToDashboard(ROUTES.ADVANCED_SETTINGS)
+      return true
+    }
+    return false
   }
 })
 
@@ -1352,10 +1350,6 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
       return true
     }
   },
-  'Ctrl+K': () => {
-    if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-    return toggleActionPanel()
-  },
   'Ctrl+P': () => {
     if (actionPanelVisible.value) return false
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
@@ -1368,7 +1362,14 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
   },
   'Ctrl+Shift+ArrowLeft': () => handlePinnedReorder(-1),
   'Ctrl+Shift+ArrowRight': () => handlePinnedReorder(1),
-  'Escape': handleLauncherEscape
+  'Escape': handleLauncherEscape,
+  onKeyDown: (_event, { combo }) => {
+    if (matchesShellShortcut(combo, 'ACTION_PANEL')) {
+      if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
+      return toggleActionPanel()
+    }
+    return false
+  }
 })
 
 function handleKeyDown(e) {

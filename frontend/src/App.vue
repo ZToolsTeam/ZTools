@@ -18,10 +18,7 @@ import {
 } from '@/utils/pluginFeatureHotkeys'
 import { openSettings } from '@/utils/internalPlugins'
 import { toggleHostDevTools } from '@/utils/hostDevTools'
-import {
-  OPEN_SETTINGS_SHORTCUT,
-  TOGGLE_MODE_SHORTCUT
-} from '@/utils/shellShortcuts'
+import { matchesShellShortcut } from '@/utils/shellShortcuts'
 import {
   isHotkeyRecorderInput,
   isComposingEvent,
@@ -89,7 +86,6 @@ const transformConflicts = (rawConflicts) => {
     const tid = String(triggerId || '').trim()
     const pid = String(id || '').trim()
     if (tid === 'global_wake_hotkey') return t('modals.hotkeyConflict.globalWake')
-    if (tid === 'global_launcher_hotkey') return t('modals.hotkeyConflict.globalLauncher')
     if (tid === 'mouse_wake_hook') return t('modals.hotkeyConflict.mouseWake')
     if (pid.toLowerCase() === 'system') return t('modals.hotkeyConflict.systemHotkey')
     const featureItem = tid ? getPluginFeatureHotkeyItemByTriggerId(tid) : null
@@ -130,7 +126,8 @@ const transformConflicts = (rawConflicts) => {
         key: item.key || '',
         conflictType: 'system_occupied',
         conflictWith: item.reason || t('modals.hotkeyConflict.systemOrOtherApp'),
-        triggerId: item.triggerId || ''
+        triggerId: item.triggerId || '',
+        ...(Array.isArray(item.suggestions) ? { suggestions: [...item.suggestions] } : {})
       })
     } else if (item.type === 'keyboard' || item.type === 'mouse') {
       result.push({
@@ -139,7 +136,8 @@ const transformConflicts = (rawConflicts) => {
         key: item.key || '',
         conflictType: 'system_occupied',
         conflictWith: t('modals.hotkeyConflict.systemOrOtherApp'),
-        triggerId: item.type === 'mouse' ? 'mouse_wake_hook' : 'global_wake_hotkey'
+        triggerId: item.type === 'mouse' ? 'mouse_wake_hook' : 'global_wake_hotkey',
+        ...(Array.isArray(item.suggestions) ? { suggestions: [...item.suggestions] } : {})
       })
     } else if ('conflictType' in item || 'pluginName' in item) {
       result.push(item)
@@ -174,7 +172,7 @@ const cleanupDeprecatedFeatureHotkeys = async () => {
   }
 }
 
-/** 全局快捷键监听：开发者工具 (F12, Ctrl+Shift+I)、设置 (Ctrl+,) 与双模态切换 (Ctrl+U) */
+/** 全局快捷键监听：开发者工具 (F12, Ctrl+Shift+I) 与设置 (Ctrl+,) */
 const handleGlobalKeydown = (event) => {
   if (isHotkeyRecorderInput(event?.target) || isComposingEvent(event)) return
 
@@ -185,26 +183,9 @@ const handleGlobalKeydown = (event) => {
     return
   }
 
-  if (combo === OPEN_SETTINGS_SHORTCUT && !isModalOpen()) {
+  if (matchesShellShortcut(combo, 'OPEN_SETTINGS') && !isModalOpen()) {
     event.preventDefault()
     void openSettings()
-    return
-  }
-
-  // 双模态自由切换（Ctrl+U）
-  if (
-    combo === TOGGLE_MODE_SHORTCUT &&
-    !event.shiftKey &&
-    !event.altKey &&
-    !isModalOpen() &&
-    !isPopoutWindow.value
-  ) {
-    event.preventDefault()
-    switchWindowMode(
-      windowModeState.currentMode === WINDOW_MODES.LAUNCHER
-        ? WINDOW_MODES.DASHBOARD
-        : WINDOW_MODES.LAUNCHER
-    )
     return
   }
 

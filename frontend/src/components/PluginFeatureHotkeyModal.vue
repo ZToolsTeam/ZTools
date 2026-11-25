@@ -7,7 +7,7 @@ import { storeToRefs } from 'pinia'
 import { usePluginsStore } from '@/stores/plugins'
 import { useAppI18n } from '@/i18n'
 import { resolveErrorMessage } from '@/utils/errorMessage'
-import { getHotkey, getLauncherHotkey, openPlugin as apiOpenPlugin } from '@/api/apiserver'
+import { getHotkey, openPlugin as apiOpenPlugin } from '@/api/apiserver'
 import {
   getHotkeyHostCapabilities,
   getHotkeyRuleDescription,
@@ -296,14 +296,6 @@ const getGlobalWakeHotkey = async () => {
   }
 }
 
-const getGlobalLauncherHotkey = async () => {
-  try {
-    return typeof getLauncherHotkey === 'function' ? (await getLauncherHotkey()) || '' : ''
-  } catch {
-    return ''
-  }
-}
-
 const canApplyItem = () => true
 
 const hasSamePluginHotkeyConflict = async (item, hotkeyStr) => {
@@ -377,15 +369,6 @@ const registerHotkey = async (item, hotkeyStr) => {
       globalWakeHotkey.toLowerCase() === hotkeyStr.toLowerCase()
     ) {
       message.warning(t('hotkey.featureModal.conflictGlobalWake'))
-      return false
-    }
-
-    const globalLauncherHotkey = await getGlobalLauncherHotkey()
-    if (
-      globalLauncherHotkey &&
-      globalLauncherHotkey.toLowerCase() === hotkeyStr.toLowerCase()
-    ) {
-      message.warning(t('hotkey.featureModal.conflictGlobalLauncher'))
       return false
     }
 
@@ -604,6 +587,13 @@ defineExpose({ show, hide, configuredCount })
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: min(400px, calc(100vh - 300px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 4px;
+  /* 底部留白，滚到底时最后一行不贴着弹窗边缘被裁断 */
+  padding-bottom: 8px;
 }
 
 .feature-hotkey-item {

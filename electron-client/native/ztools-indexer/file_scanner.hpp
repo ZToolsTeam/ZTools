@@ -33,8 +33,10 @@
 #include <chrono>
 #include <iostream>
 #include <unordered_set>
+#include <unordered_map>
 #include <memory>
 #include <cwchar>
+#include <algorithm>
 
 #include "pinyin.hpp"
 
@@ -139,13 +141,13 @@ public:
     (void)out_entries;
     return false;
 #else
-    // Determine volume from path, e.g. "C:\\..." -> "\\\\.\\C:"
-    std::wstring volume = L"\\\\.\\";
+    // Determine volume from path, e.g. "C:\\..." -> "\\\\.\\C:" and drive root "C:"
+    std::wstring drive_prefix = L"C:";
     if (target.size() >= 2 && target[1] == L':') {
-      volume += target.substr(0, 2);
-    } else {
-      volume += L"C:";
+      drive_prefix = target.substr(0, 2);
     }
+    std::wstring volume = L"\\\\.\\" + drive_prefix;
+    std::string drive_root_utf8 = WideToUtf8(drive_prefix);
 
     HANDLE hVol = CreateFileW(
       volume.c_str(),
@@ -178,7 +180,21 @@ public:
     constexpr DWORD kBufferSize = 64 * 1024;
     std::vector<BYTE> buffer(kBufferSize);
 
-    size_t count = 0;
+    struct RawUsnItem {
+      DWORDLONG frn = 0;
+      DWORDLONG parent_frn = 0;
+      std::string name;
+      uint64_t mtime = 0;
+      bool is_dir = false;
+    };
+    struct DirNode {
+      DWORDLONG parent_frn = 0;
+      std::string name;
+    };
+
+    std::vector<RawUsnItem> raw_items;
+    std::unordered_map<DWORDLONG, DirNode> dir_map;
+
     while (DeviceIoControl(hVol, FSCTL_ENUM_USN_DATA, &enumData, sizeof(enumData), buffer.data(), kBufferSize, &bytesReturned, NULL)) {
       if (bytesReturned <= sizeof(USN)) break;
 
@@ -187,19 +203,26 @@ public:
         auto* record = reinterpret_cast<USN_RECORD_V2*>(buffer.data() + offset);
         if (record->RecordLength == 0) break;
 
-        std::wstring wname(reinterpret_cast<wchar_t*>(reinterpret_cast<BYTE*>(record) + record->FileNameOffset), record->FileNameLength / sizeof(wchar_t));
+        std::wstring wname(
+          reinterpret_cast<wchar_t*>(reinterpret_cast<BYTE*>(record) + record->FileNameOffset),
+          record->FileNameLength / sizeof(wchar_t)
+        );
         std::string name = WideToUtf8(wname);
-        
-        FileEntry entry;
-        entry.name = name;
-        entry.path = WideToUtf8(volume) + "\\" + name;
-        entry.is_dir = (record->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-        entry.mtime = record->TimeStamp.QuadPart;
+        const bool is_dir = (record->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
-        PinyinEngine::Convert(name, entry.acronym, entry.pinyin_full, entry.name_lower);
-        out_entries.push_back(std::move(entry));
+        if (!name.empty() && name[0] != '$') {
+          if (is_dir) {
+            dir_map[record->FileReferenceNumber] = {record->ParentFileReferenceNumber, name};
+          }
+          raw_items.push_back({
+            record->FileReferenceNumber,
+            record->ParentFileReferenceNumber,
+            std::move(name),
+            static_cast<uint64_t>(record->TimeStamp.QuadPart),
+            is_dir
+          });
+        }
 
-        ++count;
         offset += record->RecordLength;
       }
 
@@ -207,7 +230,54 @@ public:
     }
 
     CloseHandle(hVol);
-    return count > 0;
+
+    // Reconstruct real drive paths ("C:\dir\file") from ParentFileReferenceNumber chain
+    std::unordered_map<DWORDLONG, std::string> resolved_dir_paths;
+    resolved_dir_paths.reserve(dir_map.size());
+    auto resolve_dir_path = [&](DWORDLONG frn) -> const std::string& {
+      auto cached = resolved_dir_paths.find(frn);
+      if (cached != resolved_dir_paths.end()) return cached->second;
+
+      std::vector<std::string> segments;
+      DWORDLONG curr = frn;
+      for (int depth = 0; depth < 128; ++depth) {
+        auto it_cached = resolved_dir_paths.find(curr);
+        if (it_cached != resolved_dir_paths.end()) {
+          std::string base = it_cached->second;
+          for (auto rit = segments.rbegin(); rit != segments.rend(); ++rit) {
+            base += "\\";
+            base += *rit;
+          }
+          return resolved_dir_paths.emplace(frn, std::move(base)).first->second;
+        }
+        auto it = dir_map.find(curr);
+        if (it == dir_map.end() || it->second.parent_frn == curr) break;
+        segments.push_back(it->second.name);
+        curr = it->second.parent_frn;
+      }
+
+      std::string full = drive_root_utf8;
+      for (auto rit = segments.rbegin(); rit != segments.rend(); ++rit) {
+        full += "\\";
+        full += *rit;
+      }
+      return resolved_dir_paths.emplace(frn, std::move(full)).first->second;
+    };
+
+    out_entries.reserve(out_entries.size() + raw_items.size());
+    for (auto& item : raw_items) {
+      const std::string& parent_path = resolve_dir_path(item.parent_frn);
+      FileEntry entry;
+      entry.name = std::move(item.name);
+      entry.path = parent_path + "\\" + entry.name;
+      entry.is_dir = item.is_dir;
+      entry.mtime = item.mtime;
+
+      PinyinEngine::Convert(entry.name, entry.acronym, entry.pinyin_full, entry.name_lower);
+      out_entries.push_back(std::move(entry));
+    }
+
+    return !raw_items.empty();
 #endif
   }
 };
@@ -297,32 +367,158 @@ public:
     }
   }
 
-  static std::vector<std::wstring> EnumerateFixedDrives() {
-    std::vector<std::wstring> drives;
+  struct DriveVolumeInfo {
+    std::wstring root;
+    std::string root_utf8;
+    std::string drive_type; // "fixed" | "removable" | "directory"
+    uint32_t volume_serial = 0;
+
+    bool operator==(const DriveVolumeInfo& other) const noexcept {
+      return root_utf8 == other.root_utf8 &&
+             drive_type == other.drive_type &&
+             volume_serial == other.volume_serial;
+    }
+  };
+
+  // 纯内核位掩码查询（零磁盘 I/O，绝不唤醒休眠机械硬盘）
+  static uint32_t GetLogicalDriveMask() {
 #ifdef _WIN32
+    return static_cast<uint32_t>(GetLogicalDrives());
+#else
+    return 0;
+#endif
+  }
+
+  // 检查当前位掩码中是否存在任何可移动驱动器盘符（GetDriveTypeW 不访问介质，不唤醒磁盘）
+  static bool HasRemovableDriveLetter(uint32_t mask) {
+#ifdef _WIN32
+    for (int i = 0; i < 26; ++i) {
+      if ((mask & (1u << i)) == 0) continue;
+      wchar_t root[4] = {static_cast<wchar_t>(L'A' + i), L':', L'\\', L'\0'};
+      if (GetDriveTypeW(root) == DRIVE_REMOVABLE) {
+        return true;
+      }
+    }
+    return false;
+#else
+    (void)mask;
+    return false;
+#endif
+  }
+
+  // 仅探测就绪的 DRIVE_REMOVABLE 卷（供盘符未变时的读卡器换卡检查，不触碰休眠中的 DRIVE_FIXED 硬盘）
+  static std::vector<DriveVolumeInfo> EnumerateReadyRemovableDrives() {
+    std::vector<DriveVolumeInfo> volumes;
+#ifdef _WIN32
+    DWORD prev_error_mode = 0;
+    const BOOL mode_changed = SetThreadErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX, &prev_error_mode);
+
     wchar_t buf[512] = {0};
     DWORD len = GetLogicalDriveStringsW(static_cast<DWORD>(sizeof(buf) / sizeof(wchar_t) - 1), buf);
     if (len > 0 && len < sizeof(buf) / sizeof(wchar_t)) {
       const wchar_t* curr = buf;
       while (*curr != L'\0') {
         std::wstring drive(curr);
-        UINT dtype = GetDriveTypeW(drive.c_str());
-        if (dtype == DRIVE_FIXED) {
-          drives.push_back(drive);
-        }
         curr += drive.size() + 1;
+        if (GetDriveTypeW(drive.c_str()) != DRIVE_REMOVABLE) continue;
+
+        DWORD serial = 0;
+        if (!GetVolumeInformationW(drive.c_str(), NULL, 0, &serial, NULL, NULL, NULL, 0)) continue;
+        DWORD attrs = GetFileAttributesW(drive.c_str());
+        if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) continue;
+
+        volumes.push_back({drive, WideToUtf8(drive), "removable", static_cast<uint32_t>(serial)});
       }
     }
-    if (drives.empty()) {
-      drives.push_back(L"C:\\");
+
+    if (mode_changed) {
+      SetThreadErrorMode(prev_error_mode, NULL);
+    }
+#endif
+    return volumes;
+  }
+
+  // 枚举所有本机就绪的可索引卷：涵盖本地硬盘、外接移动硬盘（DRIVE_FIXED）以及 U 盘/存储卡（就绪的 DRIVE_REMOVABLE）
+  static std::vector<DriveVolumeInfo> EnumerateIndexableDrives() {
+    std::vector<DriveVolumeInfo> volumes;
+#ifdef _WIN32
+    // 屏蔽空读卡器/未就绪可移动驱动器触发的系统弹窗
+    DWORD prev_error_mode = 0;
+    const BOOL mode_changed = SetThreadErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX, &prev_error_mode);
+
+    wchar_t buf[512] = {0};
+    DWORD len = GetLogicalDriveStringsW(static_cast<DWORD>(sizeof(buf) / sizeof(wchar_t) - 1), buf);
+    if (len > 0 && len < sizeof(buf) / sizeof(wchar_t)) {
+      const wchar_t* curr = buf;
+      while (*curr != L'\0') {
+        std::wstring drive(curr);
+        curr += drive.size() + 1;
+
+        UINT dtype = GetDriveTypeW(drive.c_str());
+        if (dtype != DRIVE_FIXED && dtype != DRIVE_REMOVABLE) {
+          continue;
+        }
+
+        DWORD serial = 0;
+        // 通过 GetVolumeInformationW 校验卷已就绪（有介质且已挂载文件系统），跳过空卡槽/未解锁卷
+        if (!GetVolumeInformationW(drive.c_str(), NULL, 0, &serial, NULL, NULL, NULL, 0)) {
+          continue;
+        }
+
+        DWORD attrs = GetFileAttributesW(drive.c_str());
+        if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+          continue;
+        }
+
+        DriveVolumeInfo info;
+        info.root = drive;
+        info.root_utf8 = WideToUtf8(drive);
+        info.drive_type = (dtype == DRIVE_REMOVABLE) ? "removable" : "fixed";
+        info.volume_serial = static_cast<uint32_t>(serial);
+        volumes.push_back(std::move(info));
+      }
+    }
+
+    if (mode_changed) {
+      SetThreadErrorMode(prev_error_mode, NULL);
+    }
+
+    if (volumes.empty()) {
+      volumes.push_back({L"C:\\", "C:\\", "fixed", 0});
     }
 #elif defined(__APPLE__)
-    drives.push_back(L"/Users");
-    drives.push_back(L"/Applications");
-    drives.push_back(L"/System/Applications");
+    volumes.push_back({L"/Users", "/Users", "fixed", 0});
+    volumes.push_back({L"/Applications", "/Applications", "fixed", 0});
+    volumes.push_back({L"/System/Applications", "/System/Applications", "fixed", 0});
+    // 同时枚举 macOS 外接硬盘 / U 盘挂载点（/Volumes 下非系统根卷的挂载目录）
+    DIR* vdp = opendir("/Volumes");
+    if (vdp) {
+      struct stat root_st {};
+      const bool has_root_st = (stat("/", &root_st) == 0);
+      struct dirent* vde = nullptr;
+      while ((vde = readdir(vdp)) != nullptr) {
+        if (vde->d_name[0] == '.') continue;
+        std::string vpath = std::string("/Volumes/") + vde->d_name;
+        struct stat vst {};
+        if (stat(vpath.c_str(), &vst) != 0 || !S_ISDIR(vst.st_mode)) continue;
+        if (has_root_st && vst.st_dev == root_st.st_dev) continue;
+        volumes.push_back({Utf8ToWide(vpath), vpath, "removable", static_cast<uint32_t>(vst.st_dev)});
+      }
+      closedir(vdp);
+    }
 #else
-    drives.push_back(L"/");
+    volumes.push_back({L"/", "/", "fixed", 0});
 #endif
+    return volumes;
+  }
+
+  static std::vector<std::wstring> EnumerateFixedDrives() {
+    std::vector<std::wstring> drives;
+    auto volumes = EnumerateIndexableDrives();
+    drives.reserve(volumes.size());
+    for (auto& v : volumes) {
+      drives.push_back(std::move(v.root));
+    }
     return drives;
   }
 

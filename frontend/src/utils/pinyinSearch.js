@@ -179,18 +179,20 @@ function tokenize(text) {
 /**
  * 从第 startIndex 个单元开始，用全拼、首字母或末尾的半个读音依次消费查询。
  * allowSecondary 为 false 时每个字只用按上下文的常用读音。
+ * 复用调用方传入的 sharedState.failed 集合且仅在 pos > 0 时惰性建表，避免每次未命中分配短命 Set。
  */
-function matchTokensFrom(tokens, q, startIndex, allowSecondary) {
-  const failed = new Set()
+function matchTokensFrom(tokens, q, startIndex, allowSecondary, sharedState) {
   const walk = (index, pos) => {
     if (pos >= q.length) return { end: index, partial: false }
     if (index >= tokens.length) return null
-    const memoKey = index * (MAX_PINYIN_QUERY_LENGTH + 1) + pos
-    if (failed.has(memoKey)) return null
+    const memoKey = pos > 0 ? index * (MAX_PINYIN_QUERY_LENGTH + 1) + pos : -1
+    if (memoKey >= 0 && sharedState.failed?.has(memoKey)) return null
     const readings = tokens[index].readings
     const count = allowSecondary ? readings.length : Math.min(1, readings.length)
+    const qChar = q[pos]
     for (let i = 0; i < count; i++) {
       const reading = readings[i]
+      if (reading[0] !== qChar) continue
       if (q.startsWith(reading, pos)) {
         const next = walk(index + 1, pos + reading.length)
         if (next) return next
@@ -199,12 +201,15 @@ function matchTokensFrom(tokens, q, startIndex, allowSecondary) {
         // 只剩一个字母时等同于首字母，不算半个读音（wx → 微信 是完全一致）
         return { end: index + 1, partial: q.length - pos > 1 }
       }
-      if (reading.length > 1 && reading[0] === q[pos]) {
+      if (reading.length > 1) {
         const next = walk(index + 1, pos + 1)
         if (next) return next
       }
     }
-    failed.add(memoKey)
+    if (memoKey >= 0) {
+      if (!sharedState.failed) sharedState.failed = new Set()
+      sharedState.failed.add(memoKey)
+    }
     return null
   }
   return walk(startIndex, 0)
@@ -217,6 +222,7 @@ function pinyinMatch(text, q, allowInner) {
   if (q.length > MAX_PINYIN_QUERY_LENGTH || !PINYIN_QUERY_RE.test(q)) return NO_TEXT_MATCH
   const tokens = tokenize(text)
   if (tokens.length === 0) return NO_TEXT_MATCH
+  const hasPolyphone = tokens.some((t) => t.readings && t.readings.length > 1)
   const toMatch = (startIndex, found, secondary) => {
     const exact = startIndex === 0 && !found.partial && found.end === tokens.length
     const shortAcronym = exact &&
@@ -231,15 +237,27 @@ function pinyinMatch(text, q, allowInner) {
       shortAcronym
     }
   }
-  for (const secondary of [false, true]) {
-    const found = matchTokensFrom(tokens, q, 0, secondary)
-    if (found) return toMatch(0, found, secondary)
+  const primaryState = { failed: null }
+  const foundPrimary0 = matchTokensFrom(tokens, q, 0, false, primaryState)
+  if (foundPrimary0) return toMatch(0, foundPrimary0, false)
+
+  let secondaryState = null
+  if (hasPolyphone) {
+    secondaryState = { failed: null }
+    const foundSecondary0 = matchTokensFrom(tokens, q, 0, true, secondaryState)
+    if (foundSecondary0) return toMatch(0, foundSecondary0, true)
   }
+
   if (!allowInner) return NO_TEXT_MATCH
-  for (const secondary of [false, true]) {
+
+  for (let start = 1; start < tokens.length; start++) {
+    const found = matchTokensFrom(tokens, q, start, false, primaryState)
+    if (found) return toMatch(start, found, false)
+  }
+  if (hasPolyphone) {
     for (let start = 1; start < tokens.length; start++) {
-      const found = matchTokensFrom(tokens, q, start, secondary)
-      if (found) return toMatch(start, found, secondary)
+      const found = matchTokensFrom(tokens, q, start, true, secondaryState)
+      if (found) return toMatch(start, found, true)
     }
   }
   return NO_TEXT_MATCH

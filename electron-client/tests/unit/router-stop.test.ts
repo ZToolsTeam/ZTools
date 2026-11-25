@@ -14,10 +14,13 @@ import type { WindowRegistry } from '../../src/main/windows/window-registry.js'
 
 class FixtureContents extends EventEmitter {
   readonly session = {}
+  readonly sent: Array<{ channel: string; payload: unknown }> = []
   constructor(readonly id: number, private readonly url = 'ztools://web/index.html') { super() }
   getURL(): string { return this.url }
   isDestroyed(): boolean { return false }
-  send(): void {}
+  send(channel: string, payload: unknown): void {
+    this.sent.push({ channel, payload })
+  }
 }
 
 async function verifyWindowCloseCallers(
@@ -148,12 +151,134 @@ async function verifyHotkeyAndSystemIntegration(
   const devToolsRes = await call('window_toggle_devtools', {})
   assert.equal(devToolsRes.success, false)
   assert.equal(devToolsRes.error?.code, 'PERMISSION_DENIED')
+
+  // 6. config_set 写入 user_settings.json 的 hotkey.shell 时跨窗口广播 system.ShellShortcutsChange 并刷新托盘
+  const secondary = new FixtureContents(12, 'ztools://web/index.html?mode=launcher')
+  registry.registerMain(secondary as unknown as WebContents)
+  const callFrom = async (sender: FixtureContents, method: string, params: unknown) => {
+    const invoke = handlers.get('ztools:call')
+    assert.ok(invoke)
+    return await invoke({ sender }, { messageId: `hk-${++seq}`, method, params }) as ZToolsResponse
+  }
+  assert.equal((await callFrom(main, 'event_subscribe', { key: 'system.ShellShortcutsChange' })).success, true)
+  assert.equal((await callFrom(secondary, 'event_subscribe', { key: 'system.ShellShortcutsChange' })).success, true)
+
+  const trayCountBeforeShellConfig = trayChangeCount.count
+  const shellRaw = JSON.stringify({
+    'focus-search': '  Ctrl+J  ',
+    'open-settings': '',
+    '__proto__': { polluted: true },
+    'invalid-key': 'Ctrl+Q',
+    'toggle-mode': 'Ctrl+U\nInjected'
+  })
+  const shellSetRes = await callFrom(main, 'config_set', {
+    file: 'user_settings.json',
+    path: 'hotkey.shell',
+    value: shellRaw,
+    sync_enabled: true
+  })
+  assert.equal(shellSetRes.success, true)
+  assert.equal(trayChangeCount.count, trayCountBeforeShellConfig + 1)
+
+  const expectedShortcuts = { 'focus-search': 'Ctrl+J', 'open-settings': '' }
+  for (const recipient of [main, secondary]) {
+    const shellEvents = recipient.sent
+      .map((item) => (item.payload as { msgData?: { envelope?: { type?: string; payload?: unknown } } })?.msgData?.envelope)
+      .filter((env) => env?.type === 'system.ShellShortcutsChange')
+    assert.equal(shellEvents.length, 1)
+    assert.deepEqual(shellEvents[0]?.payload, {
+      shortcuts: expectedShortcuts,
+      raw: JSON.stringify(expectedShortcuts)
+    })
+  }
+
+  // 写入其他配置路径不触发 system.ShellShortcutsChange
+  const unrelatedRes = await callFrom(main, 'config_set', {
+    file: 'user_settings.json',
+    path: 'ui.wake_preference',
+    value: 'dashboard',
+    sync_enabled: true
+  })
+  assert.equal(unrelatedRes.success, true)
+  const mainShellEventCount = main.sent
+    .map((item) => (item.payload as { msgData?: { envelope?: { type?: string } } })?.msgData?.envelope)
+    .filter((env) => env?.type === 'system.ShellShortcutsChange').length
+  assert.equal(mainShellEventCount, 1)
+}
+
+async function verifyPluginRevokeIdempotency(
+  registry: WindowRegistry,
+  handlers: Map<string, (event: unknown, value: unknown) => unknown>
+): Promise<void> {
+  const { PluginInstallService } = require('../../src/main/services/plugin-install-service.js') as typeof import('../../src/main/services/plugin-install-service.js')
+  const { DllPluginService } = require('../../src/main/services/dll-plugin-service.js') as typeof import('../../src/main/services/dll-plugin-service.js')
+  const { TriggerService } = require('../../src/main/services/trigger-service.js') as typeof import('../../src/main/services/trigger-service.js')
+
+  const main = new FixtureContents(21)
+  registry.registerMain(main as unknown as WebContents)
+  let seq = 0
+  const call = async (method: string, params: unknown) => {
+    const invoke = handlers.get('ztools:call')
+    assert.ok(invoke)
+    return await invoke({ sender: main }, { messageId: `rev-${++seq}`, method, params }) as ZToolsResponse
+  }
+
+  const origMarkRevoked = PluginInstallService.prototype.markRevoked
+  const origUnloadPlugin = DllPluginService.prototype.unloadPlugin
+  const origSyncEnabled = TriggerService.prototype.syncPluginEnabled
+  const counters = { markRevoked: 0, unloadPlugin: 0, syncPluginEnabled: 0 }
+
+  PluginInstallService.prototype.markRevoked = async function (...args) {
+    counters.markRevoked += 1
+    return origMarkRevoked.apply(this, args)
+  }
+  DllPluginService.prototype.unloadPlugin = async function (...args) {
+    counters.unloadPlugin += 1
+    return origUnloadPlugin.apply(this, args)
+  }
+  TriggerService.prototype.syncPluginEnabled = async function (...args) {
+    counters.syncPluginEnabled += 1
+    return origSyncEnabled.apply(this, args)
+  }
+
+  try {
+    // 1. 首次下架：执行完整副作用
+    const first = await call('plugin_revoke', { pluginId: 'demo-plugin', revoked: true, reason: 'policy violation' })
+    assert.equal(first.success, true)
+    assert.deepEqual(first.data, { success: true, pluginId: 'demo-plugin', revoked: true })
+    assert.deepEqual(counters, { markRevoked: 1, unloadPlugin: 1, syncPluginEnabled: 1 })
+
+    // 2. 相同 revoked 与 reason 重复调用：完全幂等跳过副作用
+    const second = await call('plugin_revoke', { pluginId: 'demo-plugin', revoked: true, reason: 'policy violation' })
+    assert.equal(second.success, true)
+    assert.deepEqual(second.data, { success: true, pluginId: 'demo-plugin', revoked: true })
+    assert.deepEqual(counters, { markRevoked: 1, unloadPlugin: 1, syncPluginEnabled: 1 })
+
+    // 3. reason 变化时：应更新状态并执行副作用
+    const changedReason = await call('plugin_revoke', { pluginId: 'demo-plugin', revoked: true, reason: 'updated reason' })
+    assert.equal(changedReason.success, true)
+    assert.deepEqual(counters, { markRevoked: 2, unloadPlugin: 2, syncPluginEnabled: 2 })
+
+    // 4. 解除下架：执行一次 markRevoked（不触发 unload/sync false）
+    const unrevoked = await call('plugin_revoke', { pluginId: 'demo-plugin', revoked: false })
+    assert.equal(unrevoked.success, true)
+    assert.deepEqual(counters, { markRevoked: 3, unloadPlugin: 2, syncPluginEnabled: 2 })
+
+    // 5. 重复解除下架：状态未变，跳过重写 plugin_state.json
+    const unrevokedAgain = await call('plugin_revoke', { pluginId: 'demo-plugin', revoked: false })
+    assert.equal(unrevokedAgain.success, true)
+    assert.deepEqual(counters, { markRevoked: 3, unloadPlugin: 2, syncPluginEnabled: 2 })
+  } finally {
+    PluginInstallService.prototype.markRevoked = origMarkRevoked
+    DllPluginService.prototype.unloadPlugin = origUnloadPlugin
+    TriggerService.prototype.syncPluginEnabled = origSyncEnabled
+  }
 }
 
 // 独立 Node 子进程隔离 Electron 替身，不启动 Electron、原生辅助进程或系统剪贴板。
 async function stopFixture(
   failFolderCleanup: boolean,
-  mode: 'none' | 'window-close' | 'hotkey-integration' = 'none'
+  mode: 'none' | 'window-close' | 'hotkey-integration' | 'plugin-revoke' = 'none'
 ): Promise<void> {
   const modules = require('node:module') as { _load: (name: string, ...args: unknown[]) => unknown }
   const load = modules._load
@@ -263,6 +388,9 @@ async function stopFixture(
         mouseConfigs,
         (value) => { packagedFlag = value }
       )
+    } else if (mode === 'plugin-revoke') {
+      router.register()
+      await verifyPluginRevokeIdempotency(registry, handlers)
     }
     const pending = router.stop()
     assert.equal(router.stop(), pending, '重复停止必须共用同一清理任务')
@@ -291,7 +419,9 @@ if (process.argv[2] === '--router-stop-fixture') {
     ? 'window-close'
     : arg === 'hotkey-integration'
       ? 'hotkey-integration'
-      : 'none'
+      : arg === 'plugin-revoke'
+        ? 'plugin-revoke'
+        : 'none'
   void stopFixture(arg === 'failure', mode).catch(error => { console.error(error); process.exitCode = 1 })
 } else {
   for (const scenario of ['success', 'failure']) {
@@ -304,5 +434,8 @@ if (process.argv[2] === '--router-stop-fixture') {
   })
   test('真实路由：冷启动唤醒加载、全局热键改写同步 user_settings 与托盘、鼠标钩子路由放行及正式版 DevTools 拦截', async () => {
     await promisify(execFile)(process.execPath, [__filename, '--router-stop-fixture', 'hotkey-integration'], { timeout: 15000 })
+  })
+  test('真实路由：plugin_revoke 幂等守卫在状态与原因未变时跳过重复落盘与卸载扫描', async () => {
+    await promisify(execFile)(process.execPath, [__filename, '--router-stop-fixture', 'plugin-revoke'], { timeout: 15000 })
   })
 }

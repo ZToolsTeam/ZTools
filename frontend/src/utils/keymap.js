@@ -57,7 +57,7 @@ export function normalizeEventKeyCombo(event) {
   if (hasAlt) parts.push('Alt')
   if (hasShift) parts.push('Shift')
 
-  const imeLetter = extractExplicitModifiedLetterFromCode(event)
+  const imePhysicalKey = extractExplicitModifiedKeyFromCode(event)
   let key = event.key || ''
   if (key === 'Escape' || key === 'Esc') {
     key = 'Escape'
@@ -70,8 +70,10 @@ export function normalizeEventKeyCombo(event) {
     key = ','
   } else if (key === '+') {
     key = 'Plus'
-  } else if (imeLetter) {
-    key = imeLetter
+  } else if (imePhysicalKey) {
+    key = imePhysicalKey
+  } else if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(key)) {
+    key = key.toUpperCase()
   } else if (key.length === 1) {
     key = key.toUpperCase()
   }
@@ -101,18 +103,36 @@ function isExplicitModifiedCommaKey(event) {
   return event.code === 'Comma' || event.key === ',' || event.key === '，'
 }
 
+const IME_PHYSICAL_PUNCTUATION_MAP = Object.freeze({
+  Period: '.',
+  Slash: '/',
+  Semicolon: ';',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Minus: '-',
+  Equal: '='
+})
+
 /**
- * 从非组字状态下显式携带主修饰键且由输入法包装的物理字母按键事件中还原大写字母（如 KeyU -> 'U'）
- * Windows 中文输入法在输入框聚焦但未组字时按下 Ctrl+U 等组合键，可能上报 keyCode=229 与 key='Process'/'Unidentified'。
+ * 从非组字状态下显式携带主修饰键或 Alt 且由输入法包装的物理按键事件中还原键名
+ * Windows 中文输入法在输入框聚焦但未组字时按下 Ctrl+U / Ctrl+1 / Ctrl+. 等组合键，可能上报 keyCode=229 与 key='Process'/'Unidentified'。
  */
-function extractExplicitModifiedLetterFromCode(event) {
+function extractExplicitModifiedKeyFromCode(event) {
   if (!event || typeof event !== 'object') return ''
   if (event.isComposing || event.target?.composing === true) return ''
-  if (!hasPrimaryModifier(event)) return ''
+  if (!hasPrimaryModifier(event) && !event.altKey) return ''
   if (event.key && event.key !== 'Process' && event.key !== 'Unidentified') return ''
   if (typeof event.code !== 'string') return ''
-  const match = /^Key([A-Z])$/.exec(event.code)
-  return match ? match[1] : ''
+  const letterMatch = /^Key([A-Z])$/.exec(event.code)
+  if (letterMatch) return letterMatch[1]
+  const digitMatch = /^Digit([0-9])$/.exec(event.code)
+  if (digitMatch) return digitMatch[1]
+  if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(event.code)) return event.code.toUpperCase()
+  if (event.code === 'Backquote') return event.shiftKey ? '~' : '`'
+  if (!event.shiftKey && Object.hasOwn(IME_PHYSICAL_PUNCTUATION_MAP, event.code)) {
+    return IME_PHYSICAL_PUNCTUATION_MAP[event.code]
+  }
+  return ''
 }
 
 /**
@@ -121,9 +141,9 @@ function extractExplicitModifiedLetterFromCode(event) {
 export function isComposingEvent(event) {
   if (!event || typeof event !== 'object') return false
   if (event.isComposing || event.target?.composing === true) return true
-  // 229 覆盖确认阶段的兼容事件，但放行非组字态下显式携带 Ctrl/Cmd 的逗号或物理字母快捷键
+  // 229 覆盖确认阶段的兼容事件，但放行非组字态下显式携带修饰键的逗号或物理字母/数字/符号快捷键
   if (event.keyCode === 229) {
-    return !isExplicitModifiedCommaKey(event) && !extractExplicitModifiedLetterFromCode(event)
+    return !isExplicitModifiedCommaKey(event) && !extractExplicitModifiedKeyFromCode(event)
   }
   return false
 }

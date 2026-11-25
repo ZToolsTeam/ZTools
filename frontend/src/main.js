@@ -19,6 +19,7 @@ import { useNavStore } from './stores/nav'
 // Toast 系统
 import { useToast } from '@/composables/useToast'
 import { syncGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
+import { initShellShortcuts } from '@/utils/shellShortcuts'
 import { openSettings } from '@/utils/internalPlugins'
 
 // 创建应用
@@ -53,11 +54,12 @@ const isAuxiliaryWindow = detectAuxiliaryWindow()
 // 全局暴露 router 供宿主控制与 CDP 联调
 window.__router = router
 
-// ===== 初始化主题与语言 =====
+// ===== 初始化主题、语言与常用快捷键 =====
 const themeStore = useThemeStore(pinia)
 themeStore.init()
 const localeStore = useLocaleStore(pinia)
 localeStore.init()
+void initShellShortcuts()
 
 // ===== 注册全局 Toast 函数（供 CEF-IPC SDK 使用）=====
 const { toast } = useToast()

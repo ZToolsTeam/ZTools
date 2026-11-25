@@ -906,12 +906,14 @@ export class ClipboardService {
       const persistHistory = supportsHistoryPlatform() && Boolean(this.recordHistory)
       if (owners.length === 0 && !persistHistory) return
       const fingerprint = this.#fingerprint()
+      if (fingerprint === this.#lastFingerprint || this.#isSensitiveClipboard(fingerprint)) return
+      // 历史恢复正在写剪贴板：等写完记住指纹后再看，避免把恢复内容当成新复制
+      if (this.#restoreInFlight > 0) return
       const filePaths = isFileClipboard(this.clipboard.availableFormats(), this.clipboard)
         ? await this.#readFilePaths(monitoring.signal)
         : undefined
       if (monitoring.signal.aborted || this.#stopped || this.#monitorAbort !== monitoring) return
       if (fingerprint === this.#lastFingerprint || this.#isSensitiveClipboard(fingerprint)) return
-      // 历史恢复正在写剪贴板：等写完记住指纹后再看，避免把恢复内容当成新复制
       if (this.#restoreInFlight > 0) return
       if (filePaths && this.#restoredFilesKey && JSON.stringify(filePaths) === this.#restoredFilesKey) {
         this.#lastFingerprint = fingerprint

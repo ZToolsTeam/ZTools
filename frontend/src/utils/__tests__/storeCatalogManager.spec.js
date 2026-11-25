@@ -298,3 +298,94 @@ describe('StoreCatalogManager 搜索按匹配程度排序', () => {
     }
   })
 })
+
+describe('StoreCatalogManager O(1) 索引、TTL 状态、单趟来源计数与分类概览聚合', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('getById 命中 _catalogById O(1) 索引，且测试直接替换 _catalog 时自动回退线性查找', async () => {
+    const manager = new StoreCatalogManager({
+      fetchRemote: async () => ({
+        plugins: [
+          { id: 'alpha', name: 'Alpha', downloads: 10 },
+          { id: 'beta', name: 'Beta', downloads: 20 }
+        ]
+      }),
+      getOfficialList: () => []
+    })
+
+    expect(manager.hasFreshCatalog()).toBe(false)
+    await manager.ensureCatalog(true)
+    expect(manager.hasFreshCatalog()).toBe(true)
+    expect(manager._catalogById.size).toBe(2)
+    expect(manager.getById('ALPHA')).toMatchObject({ pluginId: 'alpha', name: 'Alpha' })
+    expect(manager.getById('missing')).toBeNull()
+
+    // 模拟单测直接手改 _catalog 数组
+    manager._catalog = [{ id: 'manual-only', pluginId: 'manual-only', name: '手工注入' }]
+    expect(manager.getById('manual-only')).toMatchObject({ pluginId: 'manual-only', name: '手工注入' })
+  })
+
+  it('hasFreshCatalog 在 TTL 过期后返回 false', async () => {
+    vi.useFakeTimers()
+    const manager = new StoreCatalogManager({
+      fetchRemote: async () => ({ plugins: [{ id: 'a', name: 'A' }] }),
+      getOfficialList: () => [],
+      ttlMs: 1000
+    })
+    await manager.ensureCatalog(true)
+    expect(manager.hasFreshCatalog()).toBe(true)
+    vi.advanceTimersByTime(1001)
+    expect(manager.hasFreshCatalog()).toBe(false)
+  })
+
+  it('countBySource 单趟统计全部/官方/社区，结果与三次 query 完全等价', async () => {
+    const catalog = [
+      { id: 'off-sys', name: '系统监控', author: 'ZTools Team', is_official: true, category: '系统工具', downloads: 100 },
+      { id: 'com-sys', name: '社区系统工具', author: 'alice', source_type: 'community', category: '系统工具', downloads: 50 },
+      { id: 'com-dev', name: '开发辅助', author: 'bob', source_type: 'community', category: '开发工具', downloads: 300 }
+    ]
+    const manager = new StoreCatalogManager({
+      fetchRemote: async () => ({ plugins: catalog }),
+      getOfficialList: () => []
+    })
+
+    expect(await manager.countBySource({})).toEqual({ all: 3, official: 1, community: 2 })
+    expect(await manager.countBySource({ category: '系统工具' })).toEqual({ all: 2, official: 1, community: 1 })
+    expect(await manager.countBySource({ keyword: '系统' })).toEqual({ all: 2, official: 1, community: 1 })
+    expect(await manager.countBySource({ ids: ['off-sys', 'com-dev'] })).toEqual({ all: 2, official: 1, community: 1 })
+    expect(await manager.countBySource({ keyword: '不存在' })).toEqual({ all: 0, official: 0, community: 0 })
+  })
+
+  it('queryCategoryOverview 单趟按 categoryId 分组排序切片，total 为去重目录总数', async () => {
+    const catalog = [
+      { id: 'com-high', name: '社区高下载', author: 'alice', source_type: 'community', category: '系统工具', downloads: 9999 },
+      { id: 'off-low', name: '官方低下载', author: 'ZTools Team', is_official: true, category: ['系统工具', '网络工具'], downloads: 5 },
+      { id: 'com-mid', name: '社区中下载', author: 'bob', source_type: 'community', category: '系统工具', downloads: 500 }
+    ]
+    const manager = new StoreCatalogManager({
+      fetchRemote: async () => ({ plugins: catalog }),
+      getOfficialList: () => []
+    })
+
+    const overview = await manager.queryCategoryOverview(
+      [
+        { id: 'system', name: '系统工具' },
+        { id: 'network', name: '网络工具' },
+        { id: 'ai', name: 'AI 工具' }
+      ],
+      2
+    )
+    expect(overview.total).toBe(3)
+    expect(overview.groups.map((g) => g.id)).toEqual(['system', 'network'])
+    // 系统工具共 3 项，切片 2 项：官方置顶，其后按下载量降序
+    expect(overview.groups[0].total).toBe(3)
+    expect(overview.groups[0].plugins.map((p) => p.pluginId)).toEqual(['off-low', 'com-high'])
+    expect(overview.groups[1].total).toBe(1)
+    expect(overview.groups[1].plugins.map((p) => p.pluginId)).toEqual(['off-low'])
+    // 空分类列表时返回空 groups 但保留 total
+    expect(await manager.queryCategoryOverview([], 8)).toEqual({ groups: [], total: 3 })
+  })
+})

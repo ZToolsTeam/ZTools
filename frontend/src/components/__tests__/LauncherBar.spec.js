@@ -1144,7 +1144,7 @@ describe('LauncherBar 首屏固定磁贴、全类型固定、1~2排滚动与 Ctr
     }
   })
 
-  it('已移除未实现的“/ 快捷方式”占位文案；工作台切换采用 Ctrl+U；聚焦可用文件时底栏展示定位提示', async () => {
+  it('已移除未实现的“/ 快捷方式”占位文案；点击「工作台」按钮展开工作台（不再绑定 Ctrl+U）；聚焦可用文件时底栏展示定位提示', async () => {
     const expandToDashboard = vi.fn().mockResolvedValue({ success: true })
     window.__ztoolsLauncher = { expandToDashboard, hide: vi.fn().mockResolvedValue() }
     items.value = [
@@ -1155,13 +1155,18 @@ describe('LauncherBar 首屏固定磁贴、全类型固定、1~2排滚动与 Ctr
       expect(wrapper.find('#launcherQuery').attributes('placeholder')).not.toContain('快捷方式')
       expect(wrapper.find('.launcher-foot').text()).toContain('定位')
 
-      // 「工作台」按钮不再显示 Ctrl+U 快捷键徽标，但按 Ctrl+U 仍能唤醒完整工作台
+      // 「工作台」按钮干净展示文字、不含快捷键提示，按 Ctrl+U 不再误触发切换
       const workbenchBtn = wrapper.find('.launcher-workbench-btn')
       expect(workbenchBtn.text()).toBe('工作台')
       expect(workbenchBtn.findAll('kbd')).toHaveLength(0)
+      expect(workbenchBtn.attributes('title')).not.toContain('Ctrl+U')
 
-      // 按 Ctrl+U 唤醒完整工作台
       await wrapper.trigger('keydown', { key: 'u', ctrlKey: true })
+      await flushPromises()
+      expect(expandToDashboard).not.toHaveBeenCalled()
+
+      // 点击「工作台」按钮展开完整工作台
+      await workbenchBtn.trigger('click')
       await flushPromises()
       expect(expandToDashboard).toHaveBeenCalledWith()
 

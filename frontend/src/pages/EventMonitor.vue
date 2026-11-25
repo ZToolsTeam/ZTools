@@ -1,13 +1,30 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue'
 import { RcButton } from '@/components/base'
 import { useAppI18n, getCurrentLocale } from '@/i18n'
 
 const { t } = useAppI18n()
 const events = ref([])
+let eventSeq = 0
+let isSubscribed = false
+
+const format = (e) => {
+  try {
+    return JSON.stringify(e, null, 2)
+  } catch {
+    return String(e)
+  }
+}
 
 const handler = (env) => {
-  events.value.unshift(env)
+  const formatted = format(env)
+  const timeLabel = new Date(env?.timestamp).toLocaleString(getCurrentLocale())
+  events.value.unshift({
+    ...(env && typeof env === 'object' ? env : { payload: env }),
+    _seq: ++eventSeq,
+    _formatted: formatted,
+    _timeLabel: timeLabel
+  })
   if (events.value.length > 200) events.value.length = 200
 }
 const clear = () => {
@@ -23,19 +40,34 @@ const setDark = async (dark) => {
     await window.ztools.sys.setDarkMode(dark)
   }
 }
-const format = (e) => {
-  try {
-    return JSON.stringify(e, null, 2)
-  } catch {
-    return String(e)
+
+const subscribe = () => {
+  if (isSubscribed) return
+  if (window?.ztools?.events?.on) {
+    window.ztools.events.on('*', handler)
+    isSubscribed = true
   }
 }
 
+const unsubscribe = () => {
+  if (!isSubscribed) return
+  if (window?.ztools?.events?.off) {
+    window.ztools.events.off('*', handler)
+  }
+  isSubscribed = false
+}
+
 onMounted(() => {
-  if (window?.ztools?.events?.on) window.ztools.events.on('*', handler)
+  subscribe()
+})
+onActivated(() => {
+  subscribe()
+})
+onDeactivated(() => {
+  unsubscribe()
 })
 onBeforeUnmount(() => {
-  if (window?.ztools?.events?.off) window.ztools.events.off('*', handler)
+  unsubscribe()
 })
 </script>
 
@@ -55,11 +87,11 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="event-list">
-      <div v-for="(e, idx) in events" :key="idx" class="event-item">
+      <div v-for="e in events" :key="e._seq" class="event-item">
         <div class="event-meta">
-          {{ new Date(e.timestamp).toLocaleString(getCurrentLocale()) }} · {{ e.type }}
+          {{ e._timeLabel }} · {{ e.type }}
         </div>
-        <pre class="event-body">{{ format(e) }}</pre>
+        <pre class="event-body">{{ e._formatted }}</pre>
       </div>
       <div v-if="!events.length" class="event-empty">{{ t('eventMonitor.empty') }}</div>
     </div>

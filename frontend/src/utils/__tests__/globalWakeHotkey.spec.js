@@ -1,25 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   DEFAULT_GLOBAL_WAKE_HOTKEY,
-  DEFAULT_GLOBAL_LAUNCHER_HOTKEY,
-  GLOBAL_LAUNCHER_TRIGGER_ID,
   MOUSE_WAKE_OPTIONS,
   MOUSE_WAKE_TRIGGER_ID,
   buildMouseWakeTrigger,
   clampMouseLongPressMs,
   currentGlobalWakeHotkey,
-  currentGlobalLauncherHotkey,
   parseMouseWakeTrigger,
   refreshCurrentGlobalWakeHotkey,
-  refreshCurrentGlobalLauncherHotkey,
   syncFullscreenDndToTriggers,
   syncGlobalWakeHotkey,
-  syncGlobalLauncherHotkey,
   syncMouseWakeHook
 } from '../globalWakeHotkey'
 
-// mock getHotkey / getLauncherHotkey
-const hotkeyMock = vi.hoisted(() => ({ getHotkey: vi.fn(), getLauncherHotkey: vi.fn() }))
+// mock getHotkey
+const hotkeyMock = vi.hoisted(() => ({ getHotkey: vi.fn() }))
 vi.mock('@/api/apiserver', () => hotkeyMock)
 
 describe('syncGlobalWakeHotkey', () => {
@@ -415,58 +410,5 @@ describe('Windows 原生鼠标快捷唤醒与全屏免打扰同步', () => {
     expect(triggerMock.register).toHaveBeenCalledTimes(2)
     expect(triggerMock.register.mock.calls[0][0].config.fullscreenDnd).toBe(true)
     expect(triggerMock.register.mock.calls[1][0].config.fullscreenDnd).toBe(true)
-  })
-
-  it('syncGlobalLauncherHotkey 独立注册 toggle_launcher 且满足主进程契约、支持注销与失败回滚', async () => {
-    const { validateMethodParams } = await import('../../../../electron-client/src/contracts/method-params.ts')
-    hotkeyMock.getLauncherHotkey.mockResolvedValue(DEFAULT_GLOBAL_LAUNCHER_HOTKEY)
-
-    const regRes = await syncGlobalLauncherHotkey()
-    expect(regRes).toEqual({ success: true, hotkey: DEFAULT_GLOBAL_LAUNCHER_HOTKEY })
-    expect(currentGlobalLauncherHotkey.value).toBe(DEFAULT_GLOBAL_LAUNCHER_HOTKEY)
-    const registeredPayload = triggerMock.register.mock.calls[0][0]
-    expect(() => validateMethodParams('trigger_register', structuredClone(registeredPayload))).not.toThrow()
-    expect(registeredPayload).toMatchObject({
-      id: GLOBAL_LAUNCHER_TRIGGER_ID,
-      pluginId: 'system',
-      type: 'hotkey',
-      config: { key: DEFAULT_GLOBAL_LAUNCHER_HOTKEY },
-      actionMode: 'builtin',
-      actionTarget: 'toggle_launcher'
-    })
-
-    // 仅注销 global_launcher_hotkey，不触碰 global_wake_hotkey
-    triggerMock.list.mockResolvedValue({
-      data: [
-        { id: 'global_wake_hotkey', enabled: true, config: { key: 'Alt+Space' }, action: { mode: 'builtin', target: 'toggle_main_window', params: {} } },
-        { id: GLOBAL_LAUNCHER_TRIGGER_ID, enabled: true, config: { key: DEFAULT_GLOBAL_LAUNCHER_HOTKEY }, action: { mode: 'builtin', target: 'toggle_launcher', params: {} } }
-      ]
-    })
-    const clearRes = await syncGlobalLauncherHotkey({ hotkey: '' })
-    expect(clearRes).toEqual({ success: true, hotkey: '' })
-    expect(triggerMock.unregister).toHaveBeenCalledWith(GLOBAL_LAUNCHER_TRIGGER_ID)
-    expect(triggerMock.unregister).not.toHaveBeenCalledWith('global_wake_hotkey')
-    expect(currentGlobalLauncherHotkey.value).toBe('')
-
-    // 注册新热键失败时自动恢复原 global_launcher_hotkey（且保留 toggle_launcher）
-    triggerMock.register.mockReset()
-    triggerMock.register
-      .mockRejectedValueOnce(new Error('操作系统拒绝注册'))
-      .mockResolvedValueOnce({ success: true })
-    const failRes = await syncGlobalLauncherHotkey({ hotkey: 'Ctrl+Alt+Space' })
-    expect(failRes.success).toBe(false)
-    expect(failRes.reason).toBe('trigger_register_failed')
-    expect(triggerMock.register).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        id: GLOBAL_LAUNCHER_TRIGGER_ID,
-        config: { key: DEFAULT_GLOBAL_LAUNCHER_HOTKEY },
-        action: expect.objectContaining({ mode: 'builtin', target: 'toggle_launcher' })
-      })
-    )
-
-    // refreshCurrentGlobalLauncherHotkey 读取最新配置
-    hotkeyMock.getLauncherHotkey.mockResolvedValue('Ctrl+Alt+L')
-    await expect(refreshCurrentGlobalLauncherHotkey()).resolves.toBe('Ctrl+Alt+L')
-    expect(currentGlobalLauncherHotkey.value).toBe('Ctrl+Alt+L')
   })
 })

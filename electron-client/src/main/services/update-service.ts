@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import type { UpdateCheckParams, UpdatePackageParams } from '../../contracts/method-params.js'
 import type { RuntimePaths } from '../runtime/runtime-paths.js'
+import { resolveNormalizedRuntimePlatformAndArch } from '../platform/runtime-architecture.js'
 import type { WebResourceService } from './web-resource-service.js'
 import { getResolvedLocale, t } from '../i18n/index.js'
 
@@ -456,6 +457,11 @@ export class UpdateService {
   constructor(options: {
     platform?: NodeJS.Platform
     arch?: string
+    /** 仅在未显式传 arch 时用于解析原生硬件架构（测试可控） */
+    processArch?: string
+    runningUnderARM64Translation?: boolean | null
+    processorArchitecture?: string | undefined
+    processorArchitew6432?: string | undefined
     runtimePaths: RuntimePaths
     appVersion: string
     webVersion: string
@@ -467,7 +473,17 @@ export class UpdateService {
     macUpdater?: MacUpdateInstaller
   }) {
     this.#platform = options.platform ?? process.platform
-    this.#arch = options.arch ?? process.arch
+    this.#arch = options.arch ?? resolveNormalizedRuntimePlatformAndArch({
+      platform: this.#platform,
+      processArch: options.processArch ?? process.arch,
+      runningUnderARM64Translation: options.runningUnderARM64Translation ?? null,
+      processorArchitecture: 'processorArchitecture' in options
+        ? options.processorArchitecture
+        : process.env.PROCESSOR_ARCHITECTURE,
+      processorArchitew6432: 'processorArchitew6432' in options
+        ? options.processorArchitew6432
+        : process.env.PROCESSOR_ARCHITEW6432
+    }).arch
     this.#runtimePaths = options.runtimePaths
     this.#appVersion = options.appVersion
     this.#webVersion = options.webVersion

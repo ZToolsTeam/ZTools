@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   WM_SYSCHAR,
   acceleratorToRecorderKeyPayload,
+  createNormalBoundsPersistController,
   dispatchRecorderKeyToWebContents,
   handleMainWindowBeforeInputEvent,
   suppressWindowsSystemMenu,
@@ -263,5 +264,50 @@ test('主窗口与极客条 Alt+Space / Ctrl+Space 消息流转及 Windows 系�
 
     const launcherHandledNull = handleLauncherBeforeInputEvent(event, {}, { hide: () => {} })
     assert.equal(launcherHandledNull, false)
+  })
+
+  await t.test('8. [窗口持久化去抖与纯移动零写盘] 仅移动窗口位置不写盘，仅宽高变化时防抖落盘', (sub) => {
+    sub.mock.timers.enable({ apis: ['setTimeout'] })
+    const persisted: Electron.Rectangle[] = []
+    let currentBounds: Electron.Rectangle = { x: 100, y: 100, width: 1040, height: 680 }
+    const controller = createNormalBoundsPersistController({
+      getBounds: () => ({ ...currentBounds }),
+      canPersist: () => true,
+      persistNormalBounds: (bounds) => { persisted.push(bounds) },
+      initialSize: { width: 1040, height: 680 },
+      delayMs: 250
+    })
+
+    // 纯拖动窗口位置：宽高未变，绝对不触发持久化
+    currentBounds = { x: 420, y: 260, width: 1040, height: 680 }
+    controller.schedulePersist()
+    sub.mock.timers.tick(500)
+    assert.equal(persisted.length, 0, '纯移动窗口位置不应触发 persistNormalBounds')
+
+    // 调整窗口宽高：250ms 防抖后写盘一次
+    currentBounds = { x: 420, y: 260, width: 1200, height: 740 }
+    controller.schedulePersist()
+    sub.mock.timers.tick(249)
+    assert.equal(persisted.length, 0)
+    sub.mock.timers.tick(1)
+    assert.deepEqual(persisted, [{ x: 420, y: 260, width: 1200, height: 740 }])
+
+    // 再次纯移动窗口位置与 close 刷新：宽高未变化，不重复写盘
+    currentBounds = { x: 80, y: 40, width: 1200, height: 740 }
+    controller.schedulePersist()
+    sub.mock.timers.tick(500)
+    controller.flushPersist()
+    assert.equal(persisted.length, 1)
+
+    // 关闭前刚刚缩放过尺寸：flushPersist 应立即落盘且取消原定时器
+    currentBounds = { x: 80, y: 40, width: 1280, height: 800 }
+    controller.schedulePersist()
+    controller.flushPersist()
+    sub.mock.timers.tick(500)
+    assert.deepEqual(persisted, [
+      { x: 420, y: 260, width: 1200, height: 740 },
+      { x: 80, y: 40, width: 1280, height: 800 }
+    ])
+    controller.dispose()
   })
 })

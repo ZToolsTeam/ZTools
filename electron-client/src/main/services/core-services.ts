@@ -12,6 +12,7 @@ import { runtimePathsForBusinessDataRoot, type RuntimePaths } from '../runtime/r
 import type { OrdinaryNativeRuntimePort } from '../native-host/dll-client-port.js'
 import type { ServiceClient } from '../service/service-client.js'
 import type { NativeInputAdapter } from '../platform/native-runtime.js'
+import { resolveNormalizedRuntimePlatformAndArch } from '../platform/runtime-architecture.js'
 
 import { FrecencyRankingService } from './frecency-ranking-service.js'
 import { HudService } from './hud-service.js'
@@ -106,6 +107,10 @@ export async function readWebVersion(webRoot: string): Promise<string> {
 
 export interface CoreServicesRuntimeOptions {
   readonly runningUnderARM64Translation?: boolean | null
+  readonly platform?: NodeJS.Platform
+  readonly processArch?: string
+  readonly processorArchitecture?: string | undefined
+  readonly processorArchitew6432?: string | undefined
 }
 
 export function createCoreServices(
@@ -135,7 +140,21 @@ export function createCoreServices(
       ? { runningUnderARM64Translation: runtimeOptions.runningUnderARM64Translation }
       : {})
   })
+  const effectivePlatform = runtimeOptions?.platform ?? process.platform
+  const { arch: runtimeArch } = resolveNormalizedRuntimePlatformAndArch({
+    platform: effectivePlatform,
+    processArch: runtimeOptions?.processArch ?? process.arch,
+    runningUnderARM64Translation: runtimeOptions?.runningUnderARM64Translation ?? null,
+    processorArchitecture: runtimeOptions && 'processorArchitecture' in runtimeOptions
+      ? runtimeOptions.processorArchitecture
+      : process.env.PROCESSOR_ARCHITECTURE,
+    processorArchitew6432: runtimeOptions && 'processorArchitew6432' in runtimeOptions
+      ? runtimeOptions.processorArchitew6432
+      : process.env.PROCESSOR_ARCHITEW6432
+  })
   const update = new UpdateService({
+    platform: effectivePlatform,
+    arch: runtimeArch,
     runtimePaths,
     appVersion,
     webVersion,

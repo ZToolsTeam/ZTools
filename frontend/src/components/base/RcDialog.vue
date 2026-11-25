@@ -80,6 +80,10 @@ const close = (event) => {
 <style scoped>
 .rc-dialog {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 88px);
+  -webkit-app-region: no-drag;
 }
 
 /* ---------- 通用：关闭按钮 ---------- */
@@ -87,7 +91,7 @@ const close = (event) => {
   position: absolute;
   top: 14px;
   right: 14px;
-  z-index: 1;
+  z-index: 2;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -99,6 +103,7 @@ const close = (event) => {
   color: var(--rc-text-muted);
   font-size: 16px;
   cursor: pointer;
+  -webkit-app-region: no-drag;
   transition: background-color var(--rc-dur) ease, color var(--rc-dur) ease;
 }
 
@@ -205,6 +210,18 @@ const close = (event) => {
   padding: 24px 32px 28px;
 }
 
+.rc-dialog-header,
+.rc-dialog-footer {
+  flex-shrink: 0;
+}
+
+.rc-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 /* ---------- 底部操作区 ---------- */
 .rc-dialog-footer {
   display: flex;
@@ -216,6 +233,12 @@ const close = (event) => {
   background: var(--rc-surface-subtle);
 }
 
+/* 避让顶部无边框标题栏与系统窗口按钮，并阻断 -webkit-app-region: drag 穿透劫持弹窗点击 */
+:global(.rc-dialog-wrap) {
+  padding: 56px 16px 24px;
+  -webkit-app-region: no-drag;
+}
+
 /* antd 外壳：去掉自带内边距与底色，交给上面的结构 */
 :global(.rc-dialog-wrap .ant-modal-content) {
   padding: 0 !important;
@@ -224,9 +247,11 @@ const close = (event) => {
   border-radius: var(--rc-radius-xl) !important;
   background-color: var(--rc-surface) !important;
   box-shadow: var(--rc-shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+  -webkit-app-region: no-drag;
 }
 
 :global(.rc-dialog-wrap .ant-modal-body) {
   padding: 0 !important;
+  overflow: hidden;
 }
 </style>

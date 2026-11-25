@@ -199,10 +199,20 @@ export class StoreCatalogManager {
     this.remoteTimeoutMs = options.remoteTimeoutMs || REMOTE_FETCH_TIMEOUT_MS
 
     this._catalog = [] // 内存中全量有效插件条目
+    this._catalogById = new Map() // pluginId(小写) -> 插件条目，O(1) 查找索引
+    this._catalogIndexSource = this._catalog
     this._lastSyncTime = 0
     this.lastSource = '' // 最近一次目录数据的来源，见 _doSync
     this._revokedMap = {} // { [pluginId]: { revoked: true, reason: string } }
     this._inFlightPromise = null
+  }
+
+  /**
+   * 内存目录是否已加载且仍在 TTL 有效期内
+   * @returns {boolean}
+   */
+  hasFreshCatalog() {
+    return this._catalog.length > 0 && Date.now() - this._lastSyncTime < this.ttlMs
   }
 
   /**
@@ -480,8 +490,15 @@ export class StoreCatalogManager {
       }
     }
 
-    // 更新内存状态
+    // 更新内存状态与 O(1) ID 索引
+    const nextById = new Map()
+    for (const entry of mergedList) {
+      const key = String(entry.pluginId || entry.id || '').toLowerCase()
+      if (key) nextById.set(key, entry)
+    }
     this._catalog = mergedList
+    this._catalogById = nextById
+    this._catalogIndexSource = mergedList
     this._revokedMap = newRevokedMap
     this._lastSyncTime = Date.now()
     // 最近一次目录数据的来源（remote / local_snapshot / decentralized_static / official_builtin），内存缓存命中时沿用
@@ -550,6 +567,7 @@ export class StoreCatalogManager {
 
     // 1. 本地极速过滤（有搜索词时顺带记下每个插件的匹配档，排序先看匹配程度）
     const relevance = keyword ? new Map() : null
+    const officialFlags = new WeakMap()
     const selectedCategoryIds =
       targetCategory && !isAllCategory(targetCategory) && !isOfficialAlias && !isCommunityAlias
         ? normalizeCategoryIds(targetCategory)
@@ -562,6 +580,7 @@ export class StoreCatalogManager {
 
       // 来源类型过滤 (all / official / community)
       const itemIsOfficial = isOfficialPluginItem(item)
+      officialFlags.set(item, itemIsOfficial)
       if (filterType === 'official' && !itemIsOfficial) {
         return false
       }
@@ -588,20 +607,28 @@ export class StoreCatalogManager {
     })
 
     // 2. 本地排序：有搜索词时匹配程度高的在前；同档官方插件置顶，再按排序字段
+    // 预提取 locale、官方标记与本地化名称，避免在 O(N log N) 比较器内重复求值
+    const currentLocale = getCurrentLocale()
+    let localizedNames = null
+    if (sortField === 'name') {
+      localizedNames = new WeakMap()
+      for (const item of filtered) {
+        localizedNames.set(item, getLocalizedPluginName(item, currentLocale))
+      }
+    }
     filtered.sort((a, b) => {
       if (relevance) {
         const byRelevance = compareMatches(relevance.get(a), relevance.get(b))
         if (byRelevance !== 0) return byRelevance
       }
-      const aOfficial = isOfficialPluginItem(a) ? 1 : 0
-      const bOfficial = isOfficialPluginItem(b) ? 1 : 0
+      const aOfficial = officialFlags.get(a) ? 1 : 0
+      const bOfficial = officialFlags.get(b) ? 1 : 0
       if (aOfficial !== bOfficial) {
         return bOfficial - aOfficial // 官方置顶
       }
 
-      const currentLocale = getCurrentLocale()
-      let valA = sortField === 'name' ? getLocalizedPluginName(a, currentLocale) : a[sortField]
-      let valB = sortField === 'name' ? getLocalizedPluginName(b, currentLocale) : b[sortField]
+      const valA = sortField === 'name' ? localizedNames.get(a) : a[sortField]
+      const valB = sortField === 'name' ? localizedNames.get(b) : b[sortField]
 
       if (typeof valA === 'string') {
         return direction * valA.localeCompare(String(valB || ''), currentLocale)
@@ -631,6 +658,158 @@ export class StoreCatalogManager {
       pageSize,
       lastPage
     }
+  }
+
+  /**
+   * 单趟遍历统计「全部 / 官方 / 社区」插件数，完全跳过排序与分页拷贝
+   * @param {object} [params]
+   * @param {string} [params.category]
+   * @param {string} [params.keyword]
+   * @param {string|string[]} [params.ids]
+   * @returns {Promise<{ all: number, official: number, community: number }>}
+   */
+  async countBySource(params = {}) {
+    const { catalog } = await this.ensureCatalog()
+
+    const targetCategory = String(params.category || '').trim()
+    const keyword = String(params.keyword || params.search || '').trim()
+    const normalizedTarget = targetCategory.toLowerCase()
+    // i18n-allow: legacy-category-alias
+    const isOfficialAlias = normalizedTarget === 'official' || targetCategory === '官方自营'
+    // i18n-allow: legacy-category-alias
+    const isCommunityAlias = normalizedTarget === 'community' || targetCategory === '社区精选'
+
+    let targetIds = null
+    if (params.ids) {
+      const arr = Array.isArray(params.ids) ? params.ids : String(params.ids).split(',')
+      targetIds = new Set(arr.map((id) => normalizePluginId(id).toLowerCase()).filter(Boolean))
+    }
+
+    const selectedCategoryIds =
+      targetCategory && !isAllCategory(targetCategory) && !isOfficialAlias && !isCommunityAlias
+        ? normalizeCategoryIds(targetCategory)
+        : null
+
+    let all = 0
+    let official = 0
+    let community = 0
+
+    for (const item of catalog) {
+      if (targetIds && !targetIds.has(String(item.pluginId).toLowerCase())) {
+        continue
+      }
+
+      if (selectedCategoryIds) {
+        const itemCategoryIds = getPluginCategoryIds(item.categoryId || item.category)
+        if (!itemCategoryIds.some((id) => selectedCategoryIds.includes(id))) {
+          continue
+        }
+      }
+
+      if (keyword && !matchCatalogPlugin(item, keyword).matched) {
+        continue
+      }
+
+      const itemIsOfficial = isOfficialPluginItem(item)
+      if (isOfficialAlias && !itemIsOfficial) continue
+      if (isCommunityAlias && itemIsOfficial) continue
+
+      all += 1
+      if (itemIsOfficial) {
+        official += 1
+      } else {
+        community += 1
+      }
+    }
+
+    return { all, official, community }
+  }
+
+  /**
+   * 分类概览单趟聚合查询：一次遍历将目录按 categoryId 分组并在各分组内按默认规则排序切片
+   * @param {Array<string|{ id?: string, name?: string }>} [categories=[]]
+   * @param {number} [perCategoryLimit=8]
+   * @returns {Promise<{ groups: Array<object>, total: number }>}
+   */
+  async queryCategoryOverview(categories = [], perCategoryLimit = 8) {
+    const { catalog } = await this.ensureCatalog()
+    const total = catalog.length
+    const rawLimit = Number(perCategoryLimit)
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 8
+
+    if (!Array.isArray(categories) || categories.length === 0) {
+      return { groups: [], total }
+    }
+
+    const buckets = []
+    const catIdToBucketIndices = new Map()
+    for (const cat of categories) {
+      const isObj = Boolean(cat) && typeof cat === 'object'
+      const rawKey = String(isObj ? (cat.id || cat.name || '') : (cat || '')).trim()
+      if (!rawKey) continue
+      const targetIds = normalizeCategoryIds(rawKey)
+      const canonicalId = targetIds[0] || (isObj ? (cat.id || rawKey) : rawKey)
+      const bucketIdx = buckets.length
+      buckets.push({
+        base: isObj ? { ...cat, id: cat.id || canonicalId } : { id: canonicalId, name: rawKey },
+        categoryId: canonicalId,
+        items: [],
+        lastItem: null
+      })
+      for (const cid of targetIds) {
+        let list = catIdToBucketIndices.get(cid)
+        if (!list) {
+          list = []
+          catIdToBucketIndices.set(cid, list)
+        }
+        list.push(bucketIdx)
+      }
+    }
+
+    const officialFlags = new WeakMap()
+    for (const item of catalog) {
+      officialFlags.set(item, isOfficialPluginItem(item))
+      const itemCategoryIds = getPluginCategoryIds(item.categoryId || item.category)
+      for (const cid of itemCategoryIds) {
+        const matchedIndices = catIdToBucketIndices.get(cid)
+        if (!matchedIndices) continue
+        for (const idx of matchedIndices) {
+          const bucket = buckets[idx]
+          if (bucket.lastItem !== item) {
+            bucket.lastItem = item
+            bucket.items.push(item)
+          }
+        }
+      }
+    }
+
+    const compareDefault = (a, b) => {
+      const aOfficial = officialFlags.get(a) ? 1 : 0
+      const bOfficial = officialFlags.get(b) ? 1 : 0
+      if (aOfficial !== bOfficial) return bOfficial - aOfficial
+      const numDiff = (Number(b.downloads) || 0) - (Number(a.downloads) || 0)
+      if (numDiff !== 0) return numDiff
+      const aBuiltin = Boolean(a.isBuiltin) ? 1 : 0
+      const bBuiltin = Boolean(b.isBuiltin) ? 1 : 0
+      if (aBuiltin !== bBuiltin) return bBuiltin - aBuiltin
+      return 0
+    }
+
+    const groups = []
+    for (const bucket of buckets) {
+      if (bucket.items.length === 0) continue
+      bucket.items.sort(compareDefault)
+      const sliced = bucket.items.slice(0, limit)
+      groups.push({
+        ...bucket.base,
+        categoryId: bucket.categoryId,
+        plugins: sliced,
+        list: sliced,
+        total: bucket.items.length
+      })
+    }
+
+    return { groups, total }
   }
 
   /**
@@ -701,14 +880,23 @@ export class StoreCatalogManager {
   }
 
   /**
-   * 同步从内存缓存中按 ID 获取插件条目
+   * 同步从内存缓存中按 ID 获取插件条目（O(1) 索引查找，测试手改 _catalog 时自动回退线性查找）
    * @param {string} pluginId
    * @returns {object|null}
    */
   getById(pluginId) {
     const pid = normalizePluginId(pluginId).toLowerCase()
     if (!pid || !Array.isArray(this._catalog)) return null
-    const found = this._catalog.find((p) => String(p.pluginId || p.id).toLowerCase() === pid)
+    let found = null
+    if (
+      this._catalogById instanceof Map &&
+      this._catalogIndexSource === this._catalog &&
+      this._catalogById.size === this._catalog.length
+    ) {
+      found = this._catalogById.get(pid) || null
+    } else {
+      found = this._catalog.find((p) => String(p.pluginId || p.id).toLowerCase() === pid) || null
+    }
     return found ? { ...found } : null
   }
 
@@ -721,6 +909,9 @@ export class StoreCatalogManager {
     const pid = normalizePluginId(pluginId).toLowerCase()
     if (!pid) return null
     const { catalog } = await this.ensureCatalog()
+    if (catalog === this._catalog) {
+      return this.getById(pid)
+    }
     const found = catalog.find((p) => String(p.pluginId).toLowerCase() === pid)
     return found ? { ...found } : null
   }

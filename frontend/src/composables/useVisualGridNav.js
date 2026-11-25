@@ -403,13 +403,16 @@ export function collectVisualRowsFromDOM(containerEl, options = {}) {
  * 视觉网格与多区块统一键盘导航 Composable
  */
 export function useVisualGridNav(options = {}) {
+  const ROWS_CACHE_TTL_MS = 120
   const focusedIndex = options.focusedIndex || ref(0)
   const preferredCenterX = ref(null)
   const isKeyboardMode = ref(false)
   let lastPointerPos = { x: null, y: null }
+  let rowsCache = null
 
   function resetAnchor() {
     preferredCenterX.value = null
+    rowsCache = null
   }
 
   function setFocusedIndex(idx, { syncAnchor = true } = {}) {
@@ -417,6 +420,7 @@ export function useVisualGridNav(options = {}) {
     focusedIndex.value = next
     if (syncAnchor) {
       preferredCenterX.value = null
+      rowsCache = null
     }
   }
 
@@ -443,13 +447,47 @@ export function useVisualGridNav(options = {}) {
       ? options.getFallbackColumns()
       : (options.fallbackColumns ?? 2)
 
-    const rows = collectVisualRowsFromDOM(container, {
-      totalCount,
-      fallbackColumns,
-      rowTolerance: options.rowTolerance,
-      getGroup: options.getGroup,
-      getColumns: options.getColumns
-    })
+    const now = Date.now()
+    const clientWidth = container?.clientWidth ?? 0
+    const clientHeight = container?.clientHeight ?? 0
+    const scrollTop = container?.scrollTop ?? 0
+    const rowTolerance = options.rowTolerance ?? DEFAULT_ROW_TOLERANCE_PX
+
+    let rows
+    if (
+      rowsCache &&
+      rowsCache.container === container &&
+      rowsCache.clientWidth === clientWidth &&
+      rowsCache.clientHeight === clientHeight &&
+      rowsCache.scrollTop === scrollTop &&
+      rowsCache.totalCount === totalCount &&
+      rowsCache.fallbackColumns === fallbackColumns &&
+      rowsCache.rowTolerance === rowTolerance &&
+      now - rowsCache.timestamp <= ROWS_CACHE_TTL_MS
+    ) {
+      rows = rowsCache.rows
+    } else {
+      rows = collectVisualRowsFromDOM(container, {
+        totalCount,
+        fallbackColumns,
+        rowTolerance: options.rowTolerance,
+        getGroup: options.getGroup,
+        getColumns: options.getColumns
+      })
+      rowsCache = rows.length > 0
+        ? {
+            container,
+            clientWidth,
+            clientHeight,
+            scrollTop,
+            totalCount,
+            fallbackColumns,
+            rowTolerance,
+            timestamp: now,
+            rows
+          }
+        : null
+    }
     if (rows.length === 0) return false
 
     let pageStepRows = DEFAULT_PAGE_STEP_ROWS

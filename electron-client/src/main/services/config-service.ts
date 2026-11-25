@@ -3,8 +3,9 @@ import { getByPath, JsonFileStore, parseStoredValue, setByPath, type JsonObject 
 
 const USER_SETTINGS_FILE = 'user_settings.json'
 const MY_PAGE_SETTINGS_FILE = 'my_page_settings.json'
+const CATALOG_SNAPSHOT_FILE = 'catalog_snapshot.json'
 const APP_CONFIG_FILE = 'app_config.json'
-const ALLOWED_CONFIG_FILES = new Set([USER_SETTINGS_FILE, MY_PAGE_SETTINGS_FILE])
+const ALLOWED_CONFIG_FILES = new Set([USER_SETTINGS_FILE, MY_PAGE_SETTINGS_FILE, CATALOG_SNAPSHOT_FILE])
 
 function toStoredString(value: unknown): string {
   if (value === null || value === undefined) return ''
@@ -57,10 +58,11 @@ export class ConfigService {
   static readonly allowedStoreFiles: ReadonlySet<string> = new Set([
     USER_SETTINGS_FILE,
     MY_PAGE_SETTINGS_FILE,
+    CATALOG_SNAPSHOT_FILE,
     APP_CONFIG_FILE
   ])
 
-  #cachedWakePreference: 'dashboard' | 'launcher' = 'dashboard'
+  #cachedWakePreference: 'dashboard' | 'launcher' = 'launcher'
   readonly #localeChangeListeners = new Set<(rawLocale: unknown) => void>()
 
   constructor(private readonly store: JsonFileStore) {}
@@ -121,10 +123,31 @@ export class ConfigService {
     if (typeof features !== 'object' || features === null || Array.isArray(features)) {
       throw new ZToolsError(errorCodes.invalidRequest, 'features must be an object')
     }
+    const updates: Array<[FeatureFlagKey, boolean]> = []
     for (const [key, value] of Object.entries(features)) {
       if (Object.prototype.hasOwnProperty.call(DEFAULT_FEATURE_FLAGS, key) && typeof value === 'boolean') {
-        await this.setFeature(key as FeatureFlagKey, value)
+        updates.push([key as FeatureFlagKey, value])
       }
+    }
+    if (updates.length > 0) {
+      await this.store.update(USER_SETTINGS_FILE, (document) => {
+        const existing = document.features
+        const featureDocument: JsonObject =
+          typeof existing === 'object' && existing !== null && !Array.isArray(existing)
+            ? existing as JsonObject
+            : {}
+        document.features = featureDocument
+        for (const [key, value] of updates) {
+          featureDocument[key] = value
+        }
+        const sync = document._sync
+        const syncDocument: JsonObject =
+          typeof sync === 'object' && sync !== null && !Array.isArray(sync)
+            ? sync as JsonObject
+            : {}
+        syncDocument.features = true
+        document._sync = syncDocument
+      })
     }
     return this.getFeatures()
   }
@@ -154,7 +177,7 @@ export class ConfigService {
       }
       const response = toResponseString(value, defaultValue)
       if (fileName === USER_SETTINGS_FILE && pathValue === 'ui.wake_preference') {
-        this.#cachedWakePreference = response === 'launcher' ? 'launcher' : 'dashboard'
+        this.#cachedWakePreference = response === 'dashboard' ? 'dashboard' : 'launcher'
       }
       return response
     } catch (error) {
@@ -179,7 +202,7 @@ export class ConfigService {
     if (group === undefined) throw new ZToolsError(errorCodes.invalidRequest, 'Invalid config path')
     if (fileName === USER_SETTINGS_FILE && pathValue === 'ui.wake_preference') {
       const normalized = String(parseStoredValue(value)).trim()
-      this.#cachedWakePreference = normalized === 'launcher' ? 'launcher' : 'dashboard'
+      this.#cachedWakePreference = normalized === 'dashboard' ? 'dashboard' : 'launcher'
     }
     let nextLocaleUpdate: { changed: true; value: unknown } | undefined
     await this.store.update(fileName, (document) => {
@@ -288,7 +311,15 @@ export class ConfigService {
         width < 320 || height < 240 || width > 8192 || height > 8192) {
       throw new ZToolsError(errorCodes.invalidRequest, 'Invalid main window size')
     }
-    return this.store.update(APP_CONFIG_FILE, (document) => {
+    return this.#persistMainWindowSize(width, height)
+  }
+
+  async #persistMainWindowSize(width: number, height: number): Promise<void> {
+    const current = await this.getMainWindowSize()
+    if (current && current.width === width && current.height === height) {
+      return
+    }
+    await this.store.update(APP_CONFIG_FILE, (document) => {
       setByPath(document, 'cef.windowWidth', width)
       setByPath(document, 'cef.windowHeight', height)
     })

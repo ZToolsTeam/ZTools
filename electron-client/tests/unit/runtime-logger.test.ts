@@ -3,7 +3,12 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { initializeRuntimeLogging, writeRuntimeLog } from '../../src/main/services/runtime-logger.js'
+import {
+  flushRuntimeLog,
+  flushRuntimeLogSync,
+  initializeRuntimeLogging,
+  writeRuntimeLog
+} from '../../src/main/services/runtime-logger.js'
 
 const PER_LAUNCH_LOG_PATTERN = /^electron-main-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-pid\d+(?:-\d+)?\.log$/
 
@@ -30,6 +35,7 @@ test('runtime logger writes console and scoped errors to a per-launch file', asy
   assert.match(path.basename(file), new RegExp(`-pid${process.pid}(?:-\\d+)?\\.log$`))
   console.warn('console diagnostic', { pluginId: 'todo' })
   writeRuntimeLog('ERROR', 'renderer:window:7', 'plugin launch failed')
+  await flushRuntimeLog()
 
   const content = await fs.readFile(file, 'utf8')
   assert.match(content, /\[INFO\] \[logger\] Runtime file logging initialized/)
@@ -51,6 +57,7 @@ test('runtime logger creates a separate log file for each initialization', async
   assert.match(path.basename(firstFile), PER_LAUNCH_LOG_PATTERN)
   assert.match(path.basename(secondFile), PER_LAUNCH_LOG_PATTERN)
   writeRuntimeLog('INFO', 'session-2', 'second launch marker')
+  await flushRuntimeLog()
 
   const firstContent = await fs.readFile(firstFile, 'utf8')
   const secondContent = await fs.readFile(secondFile, 'utf8')
@@ -76,8 +83,42 @@ test('runtime logger routes Node DeprecationWarning to WARN instead of ERROR', a
   })
   // Node warning 事件在同一轮事件循环微任务后触发 listener
   await new Promise((resolve) => setImmediate(resolve))
+  await flushRuntimeLog()
 
   const content = await fs.readFile(file, 'utf8')
   assert.match(content, /\[WARN\] \[node-warning\] DeprecationWarning \[DEP0180\]: fs\.Stats constructor is deprecated\./)
   assert.doesNotMatch(content, /\[ERROR\].*DEP0180/)
+})
+
+test('runtime logger coalesces same-tick writes into a single async appendFile batch and supports sync flush', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-runtime-log-batch-'))
+  context.after(() => fs.rm(root, { recursive: true, force: true }))
+
+  const file = initializeRuntimeLogging(root)
+  assert.ok(file)
+  await flushRuntimeLog()
+
+  let appendCalls = 0
+  const originalAppendFile = fs.appendFile
+  fs.appendFile = (async (...args: Parameters<typeof fs.appendFile>) => {
+    appendCalls += 1
+    return originalAppendFile(...args)
+  }) as typeof fs.appendFile
+  try {
+    writeRuntimeLog('INFO', 'batch', 'line-1')
+    writeRuntimeLog('INFO', 'batch', 'line-2')
+    writeRuntimeLog('WARN', 'batch', 'line-3')
+    await flushRuntimeLog()
+    assert.equal(appendCalls, 1, '同一事件循环 tick 内的多条日志应合并为单次异步写盘')
+  } finally {
+    fs.appendFile = originalAppendFile
+  }
+
+  writeRuntimeLog('ERROR', 'sync-flush', 'before-crash')
+  flushRuntimeLogSync()
+  const content = await fs.readFile(file, 'utf8')
+  assert.match(content, /line-1/)
+  assert.match(content, /line-2/)
+  assert.match(content, /line-3/)
+  assert.match(content, /before-crash/)
 })

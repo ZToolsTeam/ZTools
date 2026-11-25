@@ -5,9 +5,38 @@ import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 
 export type JsonObject = Record<string, unknown>
 
+export interface JsonFileStoreOptions {
+  compactFiles?: ReadonlySet<string>
+}
+
+interface CachedDocument {
+  mtimeMs: number
+  ctimeMs: number
+  size: number
+  ino: number
+  document: JsonObject
+}
+
 const MAX_DOCUMENT_BYTES = 4 * 1024 * 1024
 let temporarySequence = 0
 const RENAME_RETRY_DELAYS_MS = [10, 25, 50] as const
+const DEFAULT_COMPACT_FILES: ReadonlySet<string> = new Set(['catalog_snapshot.json'])
+
+function normalizeQueueKey(filePath: string): string {
+  const resolved = path.resolve(filePath)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+function cloneJsonObject(document: JsonObject, fallbackJson?: string): JsonObject {
+  try {
+    return structuredClone(document)
+  } catch {
+    if (fallbackJson !== undefined) {
+      return JSON.parse(fallbackJson) as JsonObject
+    }
+    return JSON.parse(JSON.stringify(document)) as JsonObject
+  }
+}
 
 function isRecord(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -33,19 +62,35 @@ async function renameWithRetry(source: string, target: string): Promise<void> {
 }
 
 export class JsonFileStore {
-  static readonly #queues = new Map<string, Promise<unknown>>()
+  static readonly #writeQueues = new Map<string, Promise<unknown>>()
+  static readonly #cache = new Map<string, CachedDocument>()
+  static readonly #writeVersions = new Map<string, number>()
+
+  readonly #compactFiles: ReadonlySet<string>
 
   constructor(
     private readonly root: string,
-    private readonly allowedFiles: ReadonlySet<string>
-  ) {}
+    private readonly allowedFiles: ReadonlySet<string>,
+    options?: JsonFileStoreOptions
+  ) {
+    this.#compactFiles = options?.compactFiles ?? DEFAULT_COMPACT_FILES
+  }
 
-  read(fileName: string): Promise<JsonObject> {
-    return this.#serialize(fileName, () => this.#read(fileName))
+  async read(fileName: string): Promise<JsonObject> {
+    const filePath = this.#filePath(fileName)
+    const queueKey = normalizeQueueKey(filePath)
+    let pendingWrite = JsonFileStore.#writeQueues.get(queueKey)
+    while (pendingWrite) {
+      await pendingWrite.catch(() => undefined)
+      const nextWrite = JsonFileStore.#writeQueues.get(queueKey)
+      if (nextWrite === pendingWrite) break
+      pendingWrite = nextWrite
+    }
+    return this.#read(fileName)
   }
 
   update(fileName: string, mutate: (document: JsonObject) => void): Promise<void> {
-    return this.#serialize(fileName, async () => {
+    return this.#serializeWrite(fileName, async () => {
       const document = await this.#read(fileName)
       mutate(document)
       await this.#write(fileName, document)
@@ -53,7 +98,7 @@ export class JsonFileStore {
   }
 
   replace(fileName: string, document: JsonObject): Promise<void> {
-    return this.#serialize(fileName, () => this.#write(fileName, document))
+    return this.#serializeWrite(fileName, () => this.#write(fileName, document))
   }
 
   #filePath(fileName: string): string {
@@ -63,41 +108,85 @@ export class JsonFileStore {
     return path.join(this.root, fileName)
   }
 
-  async #serialize<T>(fileName: string, operation: () => Promise<T>): Promise<T> {
+  static #bumpWriteVersion(queueKey: string): number {
+    const next = (JsonFileStore.#writeVersions.get(queueKey) ?? 0) + 1
+    JsonFileStore.#writeVersions.set(queueKey, next)
+    return next
+  }
+
+  async #serializeWrite<T>(fileName: string, operation: () => Promise<T>): Promise<T> {
     const filePath = this.#filePath(fileName)
-    const queueKey = process.platform === 'win32'
-      ? path.resolve(filePath).toLowerCase()
-      : path.resolve(filePath)
-    const previous = JsonFileStore.#queues.get(queueKey) ?? Promise.resolve()
+    const queueKey = normalizeQueueKey(filePath)
+    const previous = JsonFileStore.#writeQueues.get(queueKey) ?? Promise.resolve()
     const current = previous.catch(() => undefined).then(operation)
-    JsonFileStore.#queues.set(queueKey, current)
+    JsonFileStore.#writeQueues.set(queueKey, current)
     try { return await current } finally {
-      if (JsonFileStore.#queues.get(queueKey) === current) JsonFileStore.#queues.delete(queueKey)
+      if (JsonFileStore.#writeQueues.get(queueKey) === current) JsonFileStore.#writeQueues.delete(queueKey)
     }
   }
 
   async #read(fileName: string): Promise<JsonObject> {
     const filePath = this.#filePath(fileName)
+    const queueKey = normalizeQueueKey(filePath)
+    const versionBeforeRead = JsonFileStore.#writeVersions.get(queueKey) ?? 0
     try {
+      const statInfo = await fs.stat(filePath)
+      if (statInfo.size > MAX_DOCUMENT_BYTES) {
+        JsonFileStore.#cache.delete(queueKey)
+        throw new ZToolsError(errorCodes.dataCorrupt, 'Configuration file exceeds size limit')
+      }
+      const cached = JsonFileStore.#cache.get(queueKey)
+      if (
+        cached &&
+        cached.mtimeMs === statInfo.mtimeMs &&
+        cached.ctimeMs === statInfo.ctimeMs &&
+        cached.size === statInfo.size &&
+        cached.ino === statInfo.ino
+      ) {
+        return cloneJsonObject(cached.document)
+      }
+
       const handle = await fs.open(filePath, 'r')
       let source: string
+      let openedInfo: { mtimeMs: number; ctimeMs: number; size: number; ino: number }
       try {
         const info = await handle.stat()
         if (info.size > MAX_DOCUMENT_BYTES) {
           throw new ZToolsError(errorCodes.dataCorrupt, 'Configuration file exceeds size limit')
+        }
+        openedInfo = {
+          mtimeMs: info.mtimeMs,
+          ctimeMs: info.ctimeMs,
+          size: info.size,
+          ino: info.ino
         }
         source = await handle.readFile('utf8')
       } finally {
         await handle.close()
       }
       const normalizedSource = source.startsWith('\uFEFF') ? source.slice(1) : source
-      if (normalizedSource.trim() === '') return {}
-      const value: unknown = JSON.parse(normalizedSource)
-      if (!isRecord(value)) {
-        throw new ZToolsError(errorCodes.dataCorrupt, 'Configuration file root must be a JSON object')
+      let value: JsonObject
+      if (normalizedSource.trim() === '') {
+        value = {}
+      } else {
+        const parsed: unknown = JSON.parse(normalizedSource)
+        if (!isRecord(parsed)) {
+          throw new ZToolsError(errorCodes.dataCorrupt, 'Configuration file root must be a JSON object')
+        }
+        value = parsed
+      }
+      if ((JsonFileStore.#writeVersions.get(queueKey) ?? 0) === versionBeforeRead) {
+        JsonFileStore.#cache.set(queueKey, {
+          mtimeMs: openedInfo.mtimeMs,
+          ctimeMs: openedInfo.ctimeMs,
+          size: openedInfo.size,
+          ino: openedInfo.ino,
+          document: cloneJsonObject(value)
+        })
       }
       return value
     } catch (error) {
+      JsonFileStore.#cache.delete(queueKey)
       if (error instanceof ZToolsError) throw error
       if (errorCode(error) === 'ENOENT') return {}
       if (error instanceof SyntaxError) {
@@ -109,19 +198,44 @@ export class JsonFileStore {
 
   async #write(fileName: string, document: JsonObject): Promise<void> {
     const filePath = this.#filePath(fileName)
+    const queueKey = normalizeQueueKey(filePath)
     const temporaryPath = path.join(
       this.root,
       `.${fileName}.${process.pid}.${++temporarySequence}.tmp`
     )
+    JsonFileStore.#bumpWriteVersion(queueKey)
+    let tempCreated = false
     try {
       await fs.mkdir(this.root, { recursive: true })
-      const encoded = `\uFEFF${JSON.stringify(document, null, 2)}\n`
+      const serialized = this.#compactFiles.has(fileName)
+        ? JSON.stringify(document)
+        : JSON.stringify(document, null, 2)
+      const encoded = `\uFEFF${serialized}\n`
       if (Buffer.byteLength(encoded, 'utf8') > MAX_DOCUMENT_BYTES) {
         throw new ZToolsError(errorCodes.storageError, 'Configuration file exceeds size limit')
       }
       await fs.writeFile(temporaryPath, encoded, { encoding: 'utf8', flag: 'wx' })
+      tempCreated = true
       await renameWithRetry(temporaryPath, filePath)
+      tempCreated = false
+      JsonFileStore.#bumpWriteVersion(queueKey)
+      try {
+        const info = await fs.stat(filePath)
+        JsonFileStore.#cache.set(queueKey, {
+          mtimeMs: info.mtimeMs,
+          ctimeMs: info.ctimeMs,
+          size: info.size,
+          ino: info.ino,
+          document: cloneJsonObject(document, serialized)
+        })
+      } catch {
+        JsonFileStore.#cache.delete(queueKey)
+      }
     } catch (error) {
+      JsonFileStore.#cache.delete(queueKey)
+      if (tempCreated) {
+        await fs.rm(temporaryPath, { force: true }).catch(() => undefined)
+      }
       if (error instanceof ZToolsError) throw error
       throw new ZToolsError(errorCodes.storageError, 'Failed to save configuration file')
     }

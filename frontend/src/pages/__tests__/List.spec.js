@@ -89,8 +89,10 @@ describe('List page', () => {
       updateMap: {}
     })
     // List 只依赖 store.loadWithCache（目录拉取 / 本地筛选分页由 StoreCatalogManager 负责，另有测试覆盖），
-    // 这里把边界接到 apiMocks.getMarketPlugins 上，断言 List 传出的查询参数与竞态处理
+    // 这里把边界接到 apiMocks.getMarketPlugins 上，断言 List 传出的查询参数与竞态处理；
+    // 单趟 loadCategoryOverview 路径在下方单独用例与 marketCategories.integration.spec.js 中验证。
     pluginsStore.loadWithCache = vi.fn((params) => apiMocks.getMarketPlugins(params))
+    pluginsStore.loadCategoryOverview = undefined
     // 来源数量在本地目录上统计（store 另有测试），这里固定返回，断言 List 的展示与刷新时机
     pluginsStore.countPluginsBySource = vi.fn().mockResolvedValue({ all: 13, official: 10, community: 3 })
     pluginsStore.fetchInstalledPlugins = vi.fn().mockResolvedValue([])
@@ -669,5 +671,101 @@ describe('List page', () => {
       expect(wrapper.vm.sourceCounts).toEqual({ all: 5, official: 4, community: 1 })
       expect(wrapper.find('[aria-label="来源"]').exists()).toBe(false)
     } finally { wrapper.unmount() }
+  })
+
+  it('[性能] 分类概览优先走单趟 loadCategoryOverview 并预计算 startIndex，不循环调用 loadWithCache', async () => {
+    const manager = new StoreCatalogManager({
+      fetchRemote: async () => [
+        { pluginId: 'office-1', name: '办公插件 1', category: ['办公效率'], downloads: 50 },
+        { pluginId: 'office-2', name: '办公插件 2', category: ['办公效率'], downloads: 20 },
+        { pluginId: 'sys-1', name: '系统插件 1', category: ['系统工具'], downloads: 30 }
+      ],
+      getOfficialList: () => []
+    })
+    pluginsStore._getCatalogManager = () => manager
+    pluginsStore.loadCategoryOverview = vi.fn((categories, limit) => manager.queryCategoryOverview(categories, limit))
+    pluginsStore.loadWithCache.mockClear()
+
+    await router.push({ name: 'list' })
+    wrapper = mount(List, {
+      global: {
+        plugins: [router],
+        stubs: {
+          PluginCard3D: { props: ['plugin'], template: '<article class="card-stub">{{ plugin.name }}</article>' },
+          SkeletonCard: true,
+          APagination: true,
+          AButton: true
+        }
+      }
+    })
+    await flushPromises()
+
+    expect(pluginsStore.loadCategoryOverview).toHaveBeenCalledTimes(1)
+    expect(pluginsStore.loadWithCache).not.toHaveBeenCalled()
+    expect(wrapper.vm.total).toBe(3)
+    expect(wrapper.vm.previewGroups.map((g) => ({ id: g.id, startIndex: g.startIndex, len: g.plugins.length }))).toEqual([
+      { id: 'productivity', startIndex: 0, len: 2 },
+      { id: 'system', startIndex: 2, len: 1 }
+    ])
+    expect(wrapper.findAll('.card-stub').map((el) => el.attributes('data-nav-index'))).toEqual(['0', '1', '2'])
+  })
+
+  it('[性能] 内存目录就绪时切分类不置 loading 闪烁骨架屏；失活期间不弹重复 Toast 并在激活后同步重载', async () => {
+    const { defineComponent, ref, KeepAlive } = await import('vue')
+    const { useCategoriesStore } = await import('@/stores/categories')
+    const categoriesStore = useCategoriesStore()
+    categoriesStore.loaded = true
+    pluginsStore.hasFreshCatalog = vi.fn(() => true)
+
+    let resolveNext
+    apiMocks.getMarketPlugins
+      .mockResolvedValueOnce({ list: [{ pluginId: 'a', name: 'A' }], total: 1 })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNext = resolve }))
+      .mockResolvedValue({ list: [{ pluginId: 'b', name: 'B' }], total: 1 })
+
+    const active = ref(true)
+    const Host = defineComponent({
+      components: { KeepAlive, List },
+      setup: () => ({ active }),
+      template: '<KeepAlive><List v-if="active" ref="listRef" /></KeepAlive>'
+    })
+
+    const hostWrapper = mount(Host, {
+      global: {
+        plugins: [router],
+        stubs: { PluginCard3D: true, SkeletonCard: { template: '<div class="skeleton-stub" />' }, APagination: true, AButton: true }
+      }
+    })
+    try {
+      await flushPromises()
+      const listComp = hostWrapper.findComponent(List)
+      expect(listComp.vm.items).toEqual([{ pluginId: 'a', name: 'A' }])
+
+      // 内存目录就绪时切分类：请求在途期间不置 loading=true，也不渲染骨架屏
+      await router.push({ name: 'list', params: { category: 'system' } })
+      await hostWrapper.vm.$nextTick()
+      expect(listComp.vm.loading).toBe(false)
+      expect(hostWrapper.find('.skeleton-stub').exists()).toBe(false)
+      resolveNext({ list: [{ pluginId: 'sys-a', name: 'SysA' }], total: 1 })
+      await flushPromises()
+      expect(listComp.vm.items).toEqual([{ pluginId: 'sys-a', name: 'SysA' }])
+
+      // KeepAlive 失活期间：路由变化与安装完成事件不触发重载也不弹重复 Toast
+      active.value = false
+      await flushPromises()
+      const callsBeforeDeactivated = apiMocks.getMarketPlugins.mock.calls.length
+      await listComp.vm.handleInstallComplete({
+        payload: { pluginId: 'sys-a', operationId: 'bg-op', success: true, isUpdate: true }
+      })
+      expect(toastSpies.toastSuccess).not.toHaveBeenCalled()
+      expect(apiMocks.getMarketPlugins.mock.calls.length).toBe(callsBeforeDeactivated)
+
+      // 重新激活后自动按失活期间的更新标记执行一次重载
+      active.value = true
+      await flushPromises()
+      expect(apiMocks.getMarketPlugins.mock.calls.length).toBe(callsBeforeDeactivated + 1)
+    } finally {
+      hostWrapper.unmount()
+    }
   })
 })

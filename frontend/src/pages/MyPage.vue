@@ -35,7 +35,7 @@ import { isClientProvidedPlugin } from '@/utils/officialPlugins'
 import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { getHotkeyHostPlatform } from '@/utils/hotkeyRecorder'
 import { useVisualGridNav } from '@/composables/useVisualGridNav'
-import { SHELL_SHORTCUTS } from '@/utils/shellShortcuts'
+import { SHELL_SHORTCUTS, matchesShellShortcut } from '@/utils/shellShortcuts'
 import {
   useKeymap,
   registerKeyHandler,
@@ -239,30 +239,42 @@ const isNewUser = computed(() => {
   return !hasInstalled && !hasFavorites
 })
 
+const pinnedSet = computed(() => new Set(pinnedList.value))
+
 // Computed - 已安装插件列表（按最近使用排序）
 const installedPlugins = computed(() => {
   const plugins = pluginsStore.installedPlugins || []
+  const currentPinnedSet = pinnedSet.value
   // 分离固定和未固定的插件
-  const pinned = plugins.filter((p) => isPinned(getPluginId(p)))
-  const unpinned = plugins.filter((p) => !isPinned(getPluginId(p)))
+  const pinned = []
+  const unpinned = []
+  for (const p of plugins) {
+    if (currentPinnedSet.has(getPluginId(p))) {
+      pinned.push(p)
+    } else {
+      unpinned.push(p)
+    }
+  }
   const orderList = recentOrder.value
+  const recentOrderMap = new Map(orderList.map((id, i) => [id, i]))
 
   // 固定插件：优先用 recentOrder，没有记录的按 pinnedList 中的固定先后顺序排
   const pinnedOrder = pinnedList.value
+  const pinnedOrderMap = new Map(pinnedOrder.map((id, i) => [id, i]))
   const sortedPinned = [...pinned].sort((a, b) => {
     const idA = getPluginId(a)
     const idB = getPluginId(b)
-    const recentIdxA = orderList.indexOf(idA)
-    const recentIdxB = orderList.indexOf(idB)
+    const recentIdxA = recentOrderMap.get(idA)
+    const recentIdxB = recentOrderMap.get(idB)
 
     // 都在 recentOrder 中，按 recentOrder 排
-    if (recentIdxA !== -1 && recentIdxB !== -1) return recentIdxA - recentIdxB
+    if (recentIdxA !== undefined && recentIdxB !== undefined) return recentIdxA - recentIdxB
     // 只有一个在 recentOrder 中，有记录的排前面
-    if (recentIdxA !== -1) return -1
-    if (recentIdxB !== -1) return 1
+    if (recentIdxA !== undefined) return -1
+    if (recentIdxB !== undefined) return 1
     // 都不在 recentOrder 中，按 pinnedList 的固定先后顺序排
-    const pinIdxA = pinnedOrder.indexOf(idA)
-    const pinIdxB = pinnedOrder.indexOf(idB)
+    const pinIdxA = pinnedOrderMap.get(idA) ?? -1
+    const pinIdxB = pinnedOrderMap.get(idB) ?? -1
     return pinIdxA - pinIdxB
   })
 
@@ -525,7 +537,7 @@ async function saveRecentOrder(order) {
 
 // Plugin management
 function isPinned(pluginId) {
-  return getPinnedList().includes(pluginId)
+  return pinnedSet.value.has(pluginId)
 }
 
 // 将当前 installedPlugins 的顺序快照持久化到 recentOrder
@@ -1228,9 +1240,12 @@ const contextMenuKeymap = registerKeyHandler(
       hideMenu()
       return true
     },
-    [SHELL_SHORTCUTS.ACTION_PANEL]: () => {
-      hideMenu()
-      return true
+    onKeyDown: (_event, { combo }) => {
+      if (matchesShellShortcut(combo, 'ACTION_PANEL')) {
+        hideMenu()
+        return true
+      }
+      return false
     }
   },
   { modal: true }
@@ -1332,18 +1347,6 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     const entry = navigableItems.value[focusedCardIndex.value]
     return executeFocusedNavEntry(entry)
   },
-  [SHELL_SHORTCUTS.ACTION_PANEL]: () => {
-    if (showMenu.value) {
-      hideMenu()
-      return true
-    }
-    const entry = navigableItems.value[focusedCardIndex.value]
-    if (entry?.plugin) {
-      openCardActionMenu(entry.plugin)
-      return true
-    }
-    return false
-  },
   [SHELL_SHORTCUTS.PIN_ITEM]: () => {
     // 仅对当前聚焦卡片且已安装的插件执行固定/取消固定
     if (showMenu.value) return false
@@ -1357,6 +1360,19 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
   'Escape': () => {
     if (showMenu.value) {
       hideMenu()
+      return true
+    }
+    return false
+  },
+  onKeyDown: (_event, { combo }) => {
+    if (!matchesShellShortcut(combo, 'ACTION_PANEL')) return false
+    if (showMenu.value) {
+      hideMenu()
+      return true
+    }
+    const entry = navigableItems.value[focusedCardIndex.value]
+    if (entry?.plugin) {
+      openCardActionMenu(entry.plugin)
       return true
     }
     return false

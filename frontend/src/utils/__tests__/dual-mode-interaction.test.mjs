@@ -66,20 +66,20 @@ describe('ZTools 双模态交互集成测试', () => {
     mockWindowBridge()
   })
 
-  it('1. [新手默认基线与容错] 首次启动默认应用工作台大界面，损坏存储安全自愈', async () => {
+  it('1. [新手默认基线与容错] 首次冷启动保持工作台大界面、热键唤醒默认悬浮条，损坏存储安全自愈', async () => {
     localStorage.clear()
     _resetWindowModeForTesting()
 
-  // 1.1 首次启动，偏好和当前模式必须是 DASHBOARD (大窗口)
+  // 1.1 首次启动，主窗口形态保持 DASHBOARD，按全局热键默认偏好为 LAUNCHER（悬浮条）
   initWindowMode()
-  assert.equal(windowModeState.currentMode, WINDOW_MODES.DASHBOARD, '默认必须是大窗口模式')
-  assert.equal(windowModeState.wakePreference, WAKE_PREFERENCES.DASHBOARD, '默认偏好必须是大窗口')
+  assert.equal(windowModeState.currentMode, WINDOW_MODES.DASHBOARD, '冷启动主窗口必须保持大窗口形态')
+  assert.equal(windowModeState.wakePreference, WAKE_PREFERENCES.LAUNCHER, '新用户热键唤醒默认偏好必须是悬浮条')
   assert.equal(windowModeState.geekModeDiscovered, false, '新用户未发现极客条')
 
   // 1.2 注入畸形/非法 localStorage 数据
   localStorage.setItem('ztools_wake_preference', 'MALICIOUS_CORRUPTED_STRING_###')
   initWindowMode()
-  assert.equal(windowModeState.wakePreference, WAKE_PREFERENCES.DASHBOARD, '数据异常必须自动降级回退为 DASHBOARD')
+  assert.equal(windowModeState.wakePreference, WAKE_PREFERENCES.LAUNCHER, '数据异常必须自动降级回退为 LAUNCHER')
 
   // 1.3 非法参数传入 setWakePreference 必须明确拒绝
   assert.throws(
@@ -273,12 +273,36 @@ describe('ZTools 双模态交互集成测试', () => {
 
     initWindowMode()
     await new Promise((r) => setTimeout(r, 10))
-    const countAfterInit = launcherShowCount
+    assert.equal(launcherShowCount, 0, '双击冷启动主窗口不得因 wakePreference=launcher 强行切走主面板')
 
     assert.equal(typeof hotkeyCallback, 'function')
     hotkeyCallback({ id: 'global_wake_hotkey' })
     await new Promise((r) => setTimeout(r, 10))
-    assert.equal(launcherShowCount, countAfterInit, '独立原生窗口模式下渲染进程不应重复触发 __ztoolsLauncher.show()')
+    assert.equal(launcherShowCount, 0, '独立原生窗口模式下渲染进程不应重复触发 __ztoolsLauncher.show()')
+  })
+
+  it('9. [配置单一信源] 宿主已有 dashboard 偏好时不得被空 localStorage 默认值覆盖', async () => {
+    localStorage.clear()
+    _resetWindowModeForTesting()
+    let writeCount = 0
+
+    mockWindowBridge({
+      ztools: {
+        config: {
+          get: async () => 'dashboard',
+          set: async () => {
+            writeCount++
+            return true
+          }
+        }
+      }
+    })
+
+    initWindowMode()
+    await new Promise((r) => setTimeout(r, 10))
+    assert.equal(windowModeState.wakePreference, WAKE_PREFERENCES.DASHBOARD, '必须回填宿主保存的老用户偏好')
+    assert.equal(localStorage.getItem('ztools_wake_preference'), 'dashboard')
+    assert.equal(writeCount, 0, '已有宿主配置时不得反向覆盖')
   })
 
   it('7. [唤醒偏好状态与配置持久化] setWakePreference 联动 config 并在异常时兜底', () => {

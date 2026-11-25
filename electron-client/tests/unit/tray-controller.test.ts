@@ -6,6 +6,7 @@ import test from 'node:test'
 import type { MenuItemConstructorOptions } from 'electron'
 import { ConfigService } from '../../src/main/services/config-service.js'
 import { JsonFileStore } from '../../src/main/services/json-file-store.js'
+import { resolveOpenSettingsShortcut, SHELL_SHORTCUTS } from '../../src/contracts/hotkey-rules.js'
 import { decideCloseAction, readClosePreferences } from '../../src/main/windows/close-behavior.js'
 import {
   buildTrayMenuTemplate,
@@ -295,4 +296,119 @@ test('双击修饰键（DoubleCtrl / DoubleAlt）作为全局唤醒时不设置�
   controller.updateState({ wakeAccelerator: 'DoubleAlt' })
   assert.equal(tray.findItem('open-launcher').accelerator, undefined)
   controller.stop()
+})
+
+test('TrayController 与 buildTrayMenuTemplate 支持修改与清空 open-settings 快捷键并动态重建菜单', async () => {
+  const { trays, deps } = createTrayHarness()
+
+  // 1. 初始自定义 settingsAccelerator：darwin 下 Ctrl 映射为 Command，Control 保持 Control
+  const darwinController = new TrayController({
+    icon: createFakeIcon(false),
+    platform: 'darwin',
+    settingsAccelerator: 'Ctrl+Shift+,',
+    showMainWindow: () => undefined,
+    requestExit: () => undefined,
+    deps
+  })
+  await darwinController.start()
+  const darwinTray = trays[0]!
+  assert.equal(darwinController.state.settingsAccelerator, 'Ctrl+Shift+,')
+  assert.equal(darwinTray.findItem('open-settings').accelerator, 'Command+Shift+,')
+
+  // 2. 动态修改为 Control+, -> darwin 保持 Control+,
+  darwinController.updateState({ settingsAccelerator: 'Control+,' })
+  assert.equal(darwinController.state.settingsAccelerator, 'Control+,')
+  assert.equal(darwinTray.findItem('open-settings').accelerator, 'Control+,')
+
+  // 3. 动态清空为 "" -> 菜单项不再携带 accelerator 属性，也不回退默认 Ctrl+,
+  darwinController.updateState({ settingsAccelerator: '' })
+  assert.equal(darwinController.state.settingsAccelerator, '')
+  const clearedDarwinItem = darwinTray.findItem('open-settings')
+  assert.equal('accelerator' in clearedDarwinItem, false)
+  assert.equal(clearedDarwinItem.accelerator, undefined)
+
+  // 4. 重复设置相同空串不重复重建菜单
+  const menuCountBeforeNoop = darwinTray.menus.length
+  darwinController.updateState({ settingsAccelerator: '' })
+  assert.equal(darwinTray.menus.length, menuCountBeforeNoop)
+
+  // 5. 恢复为默认值
+  darwinController.updateState({ settingsAccelerator: SHELL_SHORTCUTS.OPEN_SETTINGS })
+  assert.equal(darwinTray.findItem('open-settings').accelerator, 'Command+,')
+  darwinController.stop()
+
+  // 6. buildTrayMenuTemplate 直接传空串与非法值（双击修饰键 / 控制字符）不设置 accelerator
+  const noop = (): void => undefined
+  for (const invalidOrEmpty of ['', 'DoubleCtrl', 'Ctrl+,\nBad']) {
+    const items = buildTrayMenuTemplate({
+      wakeAccelerator: 'Alt+Space',
+      settingsAccelerator: invalidOrEmpty,
+      platform: 'win32',
+      onOpenLauncher: noop,
+      onShowMainWindow: noop,
+      onOpenSettings: noop,
+      onOpenAbout: noop,
+      onRequestExit: noop
+    })
+    const settingsItem = items.find((item) => item.id === 'open-settings')
+    assert.ok(settingsItem)
+    assert.equal('accelerator' in settingsItem, false)
+    assert.equal(settingsItem.accelerator, undefined)
+  }
+})
+
+test('Integration: ConfigService hotkey.shell 覆盖项端到端驱动 TrayController 偏好设置快捷键', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-tray-shell-shortcuts-'))
+  try {
+    const store = new JsonFileStore(tempDir, ConfigService.allowedStoreFiles)
+    const configService = new ConfigService(store)
+    const { trays, deps } = createTrayHarness()
+
+    const readSettingsShortcut = async (): Promise<string> => {
+      const raw = await configService.get('user_settings.json', 'hotkey.shell', '')
+      return resolveOpenSettingsShortcut(raw)
+    }
+
+    const controller = new TrayController({
+      icon: createFakeIcon(false),
+      platform: 'win32',
+      settingsAccelerator: await readSettingsShortcut(),
+      showMainWindow: () => undefined,
+      requestExit: () => undefined,
+      deps
+    })
+    await controller.start()
+    const tray = trays[0]!
+    assert.equal(tray.findItem('open-settings').accelerator, 'Ctrl+,')
+
+    // 修改 open-settings 为 Ctrl+Shift+S
+    await configService.set(
+      'user_settings.json',
+      'hotkey.shell',
+      JSON.stringify({ 'open-settings': 'Ctrl+Shift+S', 'focus-search': 'Ctrl+J' }),
+      true
+    )
+    controller.updateState({ settingsAccelerator: await readSettingsShortcut() })
+    assert.equal(tray.findItem('open-settings').accelerator, 'Ctrl+Shift+S')
+
+    // 显式清空 open-settings
+    await configService.set(
+      'user_settings.json',
+      'hotkey.shell',
+      JSON.stringify({ 'open-settings': '' }),
+      true
+    )
+    controller.updateState({ settingsAccelerator: await readSettingsShortcut() })
+    assert.equal(controller.state.settingsAccelerator, '')
+    assert.equal('accelerator' in tray.findItem('open-settings'), false)
+
+    // 删除覆盖项（恢复默认）
+    await configService.set('user_settings.json', 'hotkey.shell', '{}', true)
+    controller.updateState({ settingsAccelerator: await readSettingsShortcut() })
+    assert.equal(tray.findItem('open-settings').accelerator, 'Ctrl+,')
+
+    controller.stop()
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
 })

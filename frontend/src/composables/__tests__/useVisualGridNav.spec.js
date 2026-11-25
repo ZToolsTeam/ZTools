@@ -297,5 +297,52 @@ describe('useVisualGridNav 视觉网格与多区块方向键导航测试套件',
       expect(collected).toHaveLength(1)
       expect(collected[0].map((c) => c.index)).toEqual([0, 1])
     })
+
+    it('navigate 在短 TTL 内命中视觉行几何缓存，resetAnchor / scrollTop 变化 / TTL 过期时自动失效', () => {
+      vi.useFakeTimers()
+      try {
+        const host = document.createElement('div')
+        host.innerHTML = `
+          <div data-nav-index="0" data-nav-cols="2">0</div>
+          <div data-nav-index="1" data-nav-cols="2">1</div>
+          <div data-nav-index="2" data-nav-cols="2">2</div>
+          <div data-nav-index="3" data-nav-cols="2">3</div>
+        `
+        const qsaSpy = vi.spyOn(host, 'querySelectorAll')
+        const focusedIndex = ref(0)
+        const nav = useVisualGridNav({
+          focusedIndex,
+          getContainer: () => host,
+          getTotalCount: () => 4,
+          fallbackColumns: 2
+        })
+
+        // 连续两次按键在同一 TTL 窗口内：只扫描 DOM 一次
+        nav.navigate('ArrowRight')
+        nav.navigate('ArrowDown')
+        expect(focusedIndex.value).toBe(3)
+        expect(qsaSpy).toHaveBeenCalledTimes(1)
+
+        // resetAnchor 显式失效缓存
+        nav.resetAnchor()
+        nav.navigate('ArrowLeft')
+        expect(focusedIndex.value).toBe(2)
+        expect(qsaSpy).toHaveBeenCalledTimes(2)
+
+        // scrollTop 变化自动失效缓存
+        host.scrollTop = 120
+        nav.navigate('ArrowUp')
+        expect(focusedIndex.value).toBe(0)
+        expect(qsaSpy).toHaveBeenCalledTimes(3)
+
+        // 超过 120ms TTL 后自动失效
+        vi.advanceTimersByTime(150)
+        nav.navigate('ArrowRight')
+        expect(focusedIndex.value).toBe(1)
+        expect(qsaSpy).toHaveBeenCalledTimes(4)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 })

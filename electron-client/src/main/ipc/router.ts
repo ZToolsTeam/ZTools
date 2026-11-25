@@ -99,6 +99,7 @@ import {
   type ZToolsRequest,
   type ZToolsResponse
 } from '../../contracts/ipc.js'
+import { parseShellShortcutsOverrides } from '../../contracts/hotkey-rules.js'
 import {
   validateMethodParams,
   type AnalyticsReportParams,
@@ -423,14 +424,10 @@ export interface IpcRouterOptions {
     pluginRoot: string
   }
   toggleMainWindow(): void
-  /** 独立悬浮条快捷键回调（与 toggleMainWindow 完全分离） */
-  toggleLauncher?(): void
   forwardHotkeyToRecorder?(accelerator: string): Promise<boolean> | boolean
   /** 冷启动时若 triggers.json 尚未初始化，用于自动建立全局唤醒热键 */
   initialWakeHotkey?: string
-  /** 冷启动或升级后未显式关闭悬浮条热键时，用于自动建立独立悬浮条热键 */
-  initialLauncherHotkey?: string
-  closeConfirmationResolved(): void
+  closeConfirmationResolved(action?: 'minimize' | 'exit' | 'cancel'): void
   screenClipboardAdapters: ScreenClipboardAdapters
   systemPlatformAdapter: SystemPlatformAdapter
   processDiscoveryAdapter: ProcessDiscoveryAdapter
@@ -800,6 +797,13 @@ export class IpcRouter {
     this.#events.publishHost('system.AccentColorChange', { accent })
   }
 
+  publishShellShortcutsChange(rawValue: unknown): void {
+    if (this.#stopping) return
+    const shortcuts = parseShellShortcutsOverrides(rawValue)
+    const raw = JSON.stringify(shortcuts)
+    this.#events.publishHost('system.ShellShortcutsChange', { shortcuts, raw })
+  }
+
   publishLocaleChange(
     setting: LocaleSetting,
     locale: SupportedLocale,
@@ -833,10 +837,6 @@ export class IpcRouter {
 
   getGlobalWakeHotkey(): { exists: boolean; enabled: boolean; key: string } {
     return this.#triggers.getGlobalWakeHotkey()
-  }
-
-  getGlobalLauncherHotkey(): { exists: boolean; enabled: boolean; key: string } {
-    return this.#triggers.getGlobalLauncherHotkey()
   }
 
   flushStartupHotkeyConflicts(): void {
@@ -1211,9 +1211,7 @@ export class IpcRouter {
         ...(keyboardPort ? { keyboard: keyboardPort } : {}),
         ...(mousePort ? { mouse: mousePort } : {}),
         ...(options.initialWakeHotkey !== undefined ? { initialWakeHotkey: options.initialWakeHotkey } : {}),
-        ...(options.initialLauncherHotkey !== undefined ? { initialLauncherHotkey: options.initialLauncherHotkey } : {}),
         toggleMainWindow: options.toggleMainWindow,
-        ...(options.toggleLauncher ? { toggleLauncher: options.toggleLauncher } : {}),
         ...(options.forwardHotkeyToRecorder ? { forwardHotkeyToRecorder: options.forwardHotkeyToRecorder } : {})
       }),
       (triggers) => triggers.stop()
@@ -1479,26 +1477,15 @@ export class IpcRouter {
     const capabilityAuthorization = this.#capabilityAuthorization
     const diagnosticFailures = this.#diagnosticFailures
     const syncWakeHotkeyIfTarget = async (triggerId: string): Promise<void> => {
-      if (triggerId === 'global_wake_hotkey') {
-        const wakeState = triggers.getGlobalWakeHotkey()
-        const nextWakeKey = wakeState.enabled ? wakeState.key : ''
-        try {
-          await services.config.set?.('user_settings.json', 'hotkey.global', nextWakeKey, true)
-        } catch (error) {
-          console.warn('同步全局唤醒快捷键设置失败:', error)
-        }
-        options.onTrayStatePossiblyChanged?.()
-        return
+      if (triggerId !== 'global_wake_hotkey') return
+      const wakeState = triggers.getGlobalWakeHotkey()
+      const nextWakeKey = wakeState.enabled ? wakeState.key : ''
+      try {
+        await services.config.set?.('user_settings.json', 'hotkey.global', nextWakeKey, true)
+      } catch (error) {
+        console.warn('同步全局唤醒快捷键设置失败:', error)
       }
-      if (triggerId === 'global_launcher_hotkey') {
-        const launcherState = triggers.getGlobalLauncherHotkey()
-        const nextLauncherKey = launcherState.enabled ? launcherState.key : ''
-        try {
-          await services.config.set?.('user_settings.json', 'hotkey.launcher', nextLauncherKey, true)
-        } catch (error) {
-          console.warn('同步悬浮条快捷键设置失败:', error)
-        }
-      }
+      options.onTrayStatePossiblyChanged?.()
     }
     const handleLocaleSettingChanged = (rawLocale: unknown): void => {
       const previousLocale = getResolvedLocale()
@@ -1585,6 +1572,9 @@ export class IpcRouter {
           options.onAccentChanged?.(input.value)
           this.publishAccentColorChange(input.value)
         }
+        if (input.file === 'user_settings.json' && input.path === 'hotkey.shell') {
+          this.publishShellShortcutsChange(input.value)
+        }
         if (!hasConfigLocaleHook && input.file === 'user_settings.json') {
           const localeUpdate = extractFallbackLocaleUpdate(input.path, input.value)
           if (localeUpdate) handleLocaleSettingChanged(localeUpdate.value)
@@ -1669,6 +1659,16 @@ export class IpcRouter {
       },
       async plugin_revoke(params) {
         const input = params as { pluginId: string; revoked: boolean; reason?: string }
+        const current = await plugins.isRevoked(input.pluginId)
+        const normalizedReason = input.revoked
+          ? (input.reason || 'This plugin has been revoked and disabled by the official registry')
+          : undefined
+        const unchanged = input.revoked
+          ? current.revoked === true && current.reason === normalizedReason
+          : current.revoked === false && current.reason === undefined
+        if (unchanged) {
+          return { success: true, pluginId: input.pluginId, revoked: input.revoked }
+        }
         await plugins.markRevoked(input.pluginId, input.revoked, input.reason)
         if (input.revoked) {
           stopDeclarativePlugin(input.pluginId)
@@ -2551,14 +2551,18 @@ export class IpcRouter {
         return windows.toggleDevTools(caller, mainApp.isPackaged)
       },
       async ui_close_confirm_result(params, caller) {
+        const input = params as WindowCloseConfirmParams
         try {
           return await windows.handleCloseConfirm(
-            params as WindowCloseConfirmParams,
+            input,
             caller,
             async () => { await services.config.setSetting('closeConfirm', false) }
           )
         } finally {
-          options.closeConfirmationResolved()
+          const action = input?.action === 'minimize' || input?.action === 'exit' || input?.action === 'cancel'
+            ? input.action
+            : undefined
+          options.closeConfirmationResolved(action)
         }
       },
       async clipboard_history_query(params, caller) {

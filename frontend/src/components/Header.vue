@@ -221,15 +221,12 @@ onUnmounted(() => {
           ref="homeButtonRef"
           :aria-label="t('header.backToHome')"
           @click="goHome"
-          class="flex items-center hover:opacity-85 transition-opacity"
-          style="gap: 10px; cursor: pointer"
+          class="header-brand-btn flex items-center hover:opacity-85 transition-opacity"
         >
-          <BrandMark :size="20" />
-          <span
-            class="font-semibold text-sm"
-            style="color: var(--rc-text-primary); letter-spacing: -0.02em"
-          >
-            ZTools
+          <BrandMark :size="22" />
+          <span class="header-brand-text">
+            <span class="header-brand-name">ZTools</span>
+            <span class="header-brand-domain">www.ztools.cn</span>
           </span>
         </button>
 
@@ -279,4 +276,36 @@ onUnmounted(() => {
   </header>
 </template>
 
-<style scoped></style>
+<style scoped>
+.header-brand-btn {
+  gap: 8px;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.header-brand-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  line-height: 1.15;
+}
+
+.header-brand-name {
+  font-size: var(--rc-fs-emph);
+  font-weight: 600;
+  color: var(--rc-text-primary);
+  letter-spacing: -0.02em;
+}
+
+.header-brand-domain {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--rc-text-muted);
+  letter-spacing: 0.01em;
+  opacity: 0.85;
+}
+</style>

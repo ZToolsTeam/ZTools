@@ -526,3 +526,86 @@ test('cleanupConsumedDownloads removes consumed, outdated, and orphan artifacts 
     await fs.rm(root, { recursive: true, force: true })
   }
 })
+
+test('UpdateService 未显式传 arch 时自动归一化原生架构，显式传 arch 时优先采用显式值', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-arch-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
+  const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
+
+  const captureArch = async (options: ConstructorParameters<typeof UpdateService>[0]): Promise<{ platform: string; arch: string }> => {
+    let observed: { platform: string; arch: string } | undefined
+    const service = new UpdateService({
+      ...options,
+      updateSource: {
+        async fetchLatest(request) {
+          observed = { platform: request.platform, arch: request.arch }
+          return { app: null, web: null }
+        }
+      }
+    })
+    try {
+      await service.check({ source: 'manual' })
+      assert.ok(observed)
+      return observed
+    } finally {
+      await service.stop()
+    }
+  }
+
+  // Windows WOW64：32 位进程跑在 64 位系统上应上报原生 x64
+  assert.deepEqual(
+    await captureArch({
+      platform: 'win32',
+      processArch: 'ia32',
+      processorArchitecture: 'x86',
+      processorArchitew6432: 'AMD64',
+      runtimePaths,
+      appVersion: '1.0.0',
+      webVersion: '1.0.0'
+    }),
+    { platform: 'windows', arch: 'x64' }
+  )
+
+  // 原生 32 位 Windows：无 PROCESSOR_ARCHITEW6432 时归一化为 ia32
+  assert.deepEqual(
+    await captureArch({
+      platform: 'win32',
+      processArch: 'ia32',
+      processorArchitecture: 'x86',
+      processorArchitew6432: undefined,
+      runtimePaths,
+      appVersion: '1.0.0',
+      webVersion: '1.0.0'
+    }),
+    { platform: 'windows', arch: 'ia32' }
+  )
+
+  // macOS Rosetta：x64 进程且 runningUnderARM64Translation 为 true 应上报原生 arm64
+  assert.deepEqual(
+    await captureArch({
+      platform: 'darwin',
+      processArch: 'x64',
+      runningUnderARM64Translation: true,
+      processorArchitecture: undefined,
+      processorArchitew6432: undefined,
+      runtimePaths,
+      appVersion: '1.0.0',
+      webVersion: '1.0.0'
+    }),
+    { platform: 'macos', arch: 'arm64' }
+  )
+
+  // 显式传入 options.arch 时优先使用显式值（保持单测可控）
+  assert.deepEqual(
+    await captureArch({
+      platform: 'darwin',
+      arch: 'x64',
+      processArch: 'x64',
+      runningUnderARM64Translation: true,
+      runtimePaths,
+      appVersion: '1.0.0',
+      webVersion: '1.0.0'
+    }),
+    { platform: 'macos', arch: 'x64' }
+  )
+})

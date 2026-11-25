@@ -56,15 +56,19 @@
     "backToHome": "Back to Home",
     "mockTooltip": "Using Mock API (browser dev mode); data is simulated"
   },
+  "wakeGuide": {
+    "prefix": "Press",
+    "suffix": "anytime to open the quick launcher and search tools or files",
+    "changeHotkey": "Change"
+  },
   "geekTrigger": {
-    "switchTitle": "Switch to Launcher {shortcut}",
+    "switchTitle": "Switch to Launcher",
     "switchAria": "Switch to Launcher",
     "label": "Launcher",
     "guideTitle": "Floating Launcher",
     "guideSubtitle": "Collapse workspace into a centered quick-search bar",
     "wakeEverywhere": "Wake anywhere",
     "wakeDisabled": "Disabled; enable in Settings",
-    "backToWorkspace": "Back to Workspace",
     "switchBtn": "Switch to Launcher"
   },
   "launcher": {
@@ -74,7 +78,7 @@
     "backToSearch": "Back to Search",
     "placeholder": "Search plugins, apps, system tools, or files",
     "workbenchBtn": "Workspace",
-    "workbenchTooltip": "Expand to Workspace {shortcut}",
+    "workbenchTooltip": "Expand to Workspace",
     "pinnedSectionAria": "Pinned",
     "pinnedTitle": "Pinned ({count})",
     "pinnedHintFocused": "Arrows select · Enter open · {reorder} reorder · {pin} unpin",
@@ -406,6 +410,7 @@
     "editionOss": "Open Source",
     "unknownPlatform": "Unknown OS",
     "license": "Open-Core License",
+    "website": "Official Website",
     "clientRepo": "Client Repository",
     "pluginRepo": "Plugins Repository",
     "footerOfficial": "Official edition includes closed-source account and cloud services",
@@ -420,6 +425,7 @@
     "breadcrumbAria": "Breadcrumb",
     "popout": "Pop Out",
     "popoutTooltip": "Pop out to a standalone window with current state ({shortcut})",
+    "popoutTooltipNoShortcut": "Pop out to a standalone window with current state",
     "alwaysOnTopTooltip": "Toggle Always on Top",
     "pinnedTop": "Pinned",
     "pinTop": "Pin Top",
@@ -471,7 +477,6 @@
     },
     "hotkeyConflict": {
       "globalWake": "Global Wake Hotkey",
-      "globalLauncher": "Show Quick Launcher Hotkey",
       "mouseWake": "Mouse Quick Wake",
       "systemHotkey": "System Shortcut",
       "unknownTrigger": "Unknown Trigger",
@@ -493,6 +498,9 @@
       "tagSystem": "Occupied",
       "tagDuplicate": "Duplicate",
       "conflictWith": "Conflicts with \"{name}\"",
+      "quickSwitchLabel": "Switch to an available shortcut:",
+      "quickSwitchSuccess": "Global wake hotkey switched to {key}",
+      "quickSwitchFailed": "Failed to switch shortcut: {reason}",
       "goSettings": "Open Settings"
     }
   },
@@ -653,6 +661,7 @@
         "rollbackFailedSuffix": "; rollback also failed, please reconfigure",
         "saved": "Global wake hotkey saved",
         "disabled": "Global wake hotkey disabled",
+        "inactiveHint": "This shortcut is not currently active in the system (it may be occupied by another app). Please re-record or choose another combination",
         "reasons": {
           "trigger_unavailable": "Hotkey service is temporarily unavailable",
           "trigger_list_failed": "Failed to read existing hotkeys",
@@ -660,16 +669,6 @@
           "trigger_unregister_failed": "Failed to unregister hotkey",
           "default": "Hotkey service returned an error"
         }
-      },
-      "launcherHotkey": {
-        "label": "Show Quick Launcher Hotkey",
-        "desc": "Dedicated global shortcut to toggle the floating launcher bar independently of the global wake hotkey",
-        "loadFailed": "Failed to load quick launcher hotkey",
-        "conflict": "Quick launcher hotkey conflicts with \"{names}\". Please choose another combination",
-        "saveFailed": "Failed to save quick launcher hotkey",
-        "syncFailed": "Failed to sync quick launcher hotkey: {reason}",
-        "saved": "Quick launcher hotkey saved",
-        "disabled": "Quick launcher hotkey disabled"
       },
       "mouseWake": {
         "label": "Mouse Quick Wake",
@@ -722,10 +721,19 @@
         "configuredCount": "{count} configured"
       },
       "commonTitle": "Common Shortcuts",
+      "common": {
+        "restoreDefault": "Restore Defaults",
+        "emptyText": "Not set",
+        "saved": "Common shortcut \"{label}\" updated",
+        "cleared": "Cleared common shortcut \"{label}\"",
+        "restored": "Common shortcuts restored to defaults",
+        "saveFailed": "Failed to save common shortcut",
+        "conflict": "This shortcut conflicts with \"{label}\". Please choose another combination",
+        "globalOverlapWarning": "This shortcut matches {target}; the global hotkey will take precedence"
+      },
       "builtins": {
         "focus-search": "Focus Search",
         "action-panel": "Actions",
-        "toggle-mode": "Switch Workspace / Launcher",
         "toggle-sidebar": "Toggle Sidebar",
         "popout-window": "Pop Out Window",
         "open-settings": "Open Settings",
@@ -770,7 +778,8 @@
       "primaryTitle": "Run primary action ({shortcut})",
       "secondaryTitle": "Run secondary action ({shortcut})",
       "actionPanel": "Actions ({count})",
-      "actionPanelTitle": "Actions (Ctrl+K)"
+      "actionPanelTitle": "Actions ({shortcut})",
+      "actionPanelTitleNoShortcut": "Actions"
     },
     "empty": {
       "noContentTitle": "Nothing to Display",
@@ -885,6 +894,8 @@
       "unsupportedWin": "Only Ctrl, Shift, Alt with A-Z / Space / ` / ~ / F1-F24 are supported",
       "unsupportedWinDouble": "Only Ctrl, Shift, Alt with A-Z / Space / ` / ~ / F1-F24, or double-tap Ctrl / Alt / Shift are supported",
       "unsupportedMac": "Only ⌘ / ⌃ / ⌥ / ⇧ with A-Z / Space / ` / ~ / F1-F24 are supported",
+      "unsupportedShellWin": "Use Ctrl / Alt with a letter, digit, common punctuation, Space, or F1-F24",
+      "unsupportedShellMac": "Use ⌘ / ⌃ / ⌥ with a letter, digit, common punctuation, Space, or F1-F24",
       "unknownPlatformUnsupported": "Unable to identify host platform; shortcut recording is unavailable",
       "unknownPlatformRule": "Unable to identify host platform; shortcut recording is unavailable.",
       "ruleMac": "Supports ⌘ / ⌃ / ⌥ / ⇧ + A-Z, Space, backtick (`), tilde (~), or F1-F24. Double-tap modifiers, arrow keys, and digits are not supported.",
@@ -940,7 +951,6 @@
       "conflictOther": "Shortcut conflicts with another shortcut of {plugin}",
       "unavailable": "Global shortcut service is unavailable",
       "conflictGlobalWake": "Shortcut conflicts with the global wake hotkey",
-      "conflictGlobalLauncher": "Shortcut conflicts with the quick launcher hotkey",
       "conflictPlugins": "Shortcut conflicts with plugin \"{names}\"",
       "registerOccupied": "Failed to register shortcut; it may be occupied by another app",
       "setSuccess": "Shortcut set for \"{plugin} - {feature}\"",

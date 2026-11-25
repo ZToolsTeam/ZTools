@@ -1,14 +1,13 @@
 import { ref } from 'vue'
-import { getHotkey, getLauncherHotkey } from '@/api/apiserver'
-import { DEFAULT_GLOBAL_WAKE_HOTKEY, DEFAULT_GLOBAL_LAUNCHER_HOTKEY } from '@/api/native'
+import { getHotkey } from '@/api/apiserver'
+import { DEFAULT_GLOBAL_WAKE_HOTKEY } from '@/api/native'
 import { isDoubleModifierHotkey } from '@/utils/hotkeyRecorder'
 import { resolveErrorMessage } from '@/utils/errorMessage'
 import { t } from '@/i18n'
 
-export { DEFAULT_GLOBAL_WAKE_HOTKEY, DEFAULT_GLOBAL_LAUNCHER_HOTKEY }
+export { DEFAULT_GLOBAL_WAKE_HOTKEY }
 
 export const GLOBAL_WAKE_TRIGGER_ID = 'global_wake_hotkey'
-export const GLOBAL_LAUNCHER_TRIGGER_ID = 'global_launcher_hotkey'
 export const MOUSE_WAKE_TRIGGER_ID = 'mouse_wake_hook'
 export const DEFAULT_MOUSE_LONG_PRESS_MS = 300
 export const MIN_MOUSE_LONG_PRESS_MS = 200
@@ -111,9 +110,6 @@ export function buildMouseWakeTrigger({
  */
 export const currentGlobalWakeHotkey = ref(DEFAULT_GLOBAL_WAKE_HOTKEY)
 
-/** 当前生效的独立悬浮条全局快捷键（空字符串表示用户已关闭） */
-export const currentGlobalLauncherHotkey = ref(DEFAULT_GLOBAL_LAUNCHER_HOTKEY)
-
 /** 从配置读取当前唤醒快捷键；未设置时 getHotkey 已返回默认值，空串表示用户已关闭 */
 export async function refreshCurrentGlobalWakeHotkey() {
   try {
@@ -122,16 +118,6 @@ export async function refreshCurrentGlobalWakeHotkey() {
     console.warn('[globalWakeHotkey] 读取当前唤醒快捷键失败:', err)
   }
   return currentGlobalWakeHotkey.value
-}
-
-/** 从配置读取当前独立悬浮条快捷键；未设置时返回默认值，空串表示用户已关闭 */
-export async function refreshCurrentGlobalLauncherHotkey() {
-  try {
-    currentGlobalLauncherHotkey.value = normalizeHotkey(await getLauncherHotkey())
-  } catch (err) {
-    console.warn('[globalWakeHotkey] 读取当前悬浮条快捷键失败:', err)
-  }
-  return currentGlobalLauncherHotkey.value
 }
 
 function normalizeHotkey(value) {
@@ -392,17 +378,6 @@ export async function syncGlobalWakeHotkey({ hotkey, fullscreenDnd } = {}) {
     actionTarget: 'toggle_main_window',
     hotkeyRef: currentGlobalWakeHotkey,
     readConfiguredHotkey: getHotkey,
-    hotkey,
-    fullscreenDnd
-  })
-}
-
-export async function syncGlobalLauncherHotkey({ hotkey, fullscreenDnd } = {}) {
-  return syncSystemHotkeyTrigger({
-    triggerId: GLOBAL_LAUNCHER_TRIGGER_ID,
-    actionTarget: 'toggle_launcher',
-    hotkeyRef: currentGlobalLauncherHotkey,
-    readConfiguredHotkey: getLauncherHotkey,
     hotkey,
     fullscreenDnd
   })

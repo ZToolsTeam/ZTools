@@ -140,12 +140,26 @@ export interface SearchFilesResult {
   scope?: SystemSearchFilesScope | undefined
   visited_entries?: number | undefined
   max_entries?: number | undefined
+  /** 索引器后台是否仍在执行全盘/增量扫描 */
+  indexing?: boolean | undefined
+  /** 当前已纳入全盘索引的盘符/卷根列表 */
+  indexed_drives?: string[] | undefined
 }
 
 export interface IndexPathResult {
   total_indexed: number
   scanner_used: string
   elapsed_ms: number
+  indexed_drives?: string[] | undefined
+}
+
+export interface SyncDrivesResult {
+  changed: boolean
+  added_count: number
+  removed_count: number
+  total_indexed: number
+  elapsed_ms: number
+  indexed_drives?: string[] | undefined
 }
 
 export interface MockDatasetResult {
@@ -156,6 +170,8 @@ export interface MockDatasetResult {
 export interface IndexerStatsResult {
   total_indexed: number
   index_type: string
+  indexing?: boolean | undefined
+  indexed_drives?: string[] | undefined
 }
 
 export interface SidecarBinaryResolveContext {
@@ -179,6 +195,7 @@ export interface SidecarProcessOptions {
   maxRestartsWithinWindow?: number | undefined
   restartWindowMs?: number | undefined
   resolveContext?: SidecarBinaryResolveContext | undefined
+  onRestarted?: (() => void) | undefined
 }
 
 export interface SidecarStopOutcome {
@@ -860,7 +877,11 @@ export class ManagedSidecarProcess {
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null
       if (!this.intentionallyStopped) {
-        this.start().catch(err => {
+        this.start().then(() => {
+          if (this.state === 'running' && !this.intentionallyStopped) {
+            this.options.onRestarted?.()
+          }
+        }).catch(err => {
           console.error(`[Sidecar:${this.options.name}] Failed to auto-restart:`, err)
         })
       }
@@ -909,6 +930,7 @@ export class SidecarManager {
   // In-memory fallback dataset for degraded indexer mode
   private fallbackFiles: FileRecord[] = []
   private pastedHistory: string[] = []
+  private lastIndexRequest: { targetPath: string; scanner: 'auto' | 'usn' | 'directory' } | null = null
 
   constructor(options: SidecarManagerOptions = {}) {
     this.uiaccessProcess = new ManagedSidecarProcess({
@@ -923,7 +945,16 @@ export class SidecarManager {
       name: 'ztools-indexer',
       binaryName: 'ztools-indexer',
       heartbeatIntervalMs: 15000,
-      resolveContext: options.resolveContext
+      resolveContext: options.resolveContext,
+      onRestarted: () => {
+        // 索引侧车异常重启后内存索引已清空，自动按上次范围重建索引避免陷入永久空索引降级
+        const req = this.lastIndexRequest
+        if (req) {
+          void this.indexPath(req.targetPath, req.scanner).catch((err) => {
+            console.warn('[SidecarManager] Auto re-index after crash recovery failed:', err)
+          })
+        }
+      }
     })
   }
 
@@ -1277,6 +1308,8 @@ export class SidecarManager {
     }
 
     // 3. 若 Windows Indexer 侧车运行中且有非空关键词，优先调用硬件级索引
+    let indexerWarming = false
+    let indexedDrives: string[] | undefined
     if (trimmed && this.indexerProcess.state === 'running') {
       try {
         const rpcRes = await this.indexerProcess.sendRequest<SearchFilesResult>('search_files', {
@@ -1290,12 +1323,18 @@ export class SidecarManager {
             ...(scope === 'files' ? { scope } : {})
           }
         }
+        if (rpcRes) {
+          indexerWarming = rpcRes.indexing === true
+          if (Array.isArray(rpcRes.indexed_drives)) {
+            indexedDrives = rpcRes.indexed_drives
+          }
+        }
       } catch (err) {
         console.warn('[SidecarManager] searchFiles RPC failed, falling back:', err)
       }
     }
 
-    // 4. 空查询或 Windows 侧车未返回结果时，扫描本机真实用户目录（Downloads/Desktop/Documents/cwd）
+    // 4. 空查询或 Windows 侧车未返回有效全盘索引时，扫描本机真实用户目录（Downloads/Desktop/Documents）
     const t0 = performance.now()
     const local = await scanLocalRecentFiles(trimmed, safeLimit)
     const elapsedMs = performance.now() - t0
@@ -1311,16 +1350,22 @@ export class SidecarManager {
       elapsed_us: Math.round(elapsedMs * 1000),
       elapsed_ms: elapsedMs,
       total_indexed: local.files.length,
-      degraded: this.indexerProcess.state !== 'running',
+      // 非空关键词回退到 local-fs 时如实标记 degraded，避免全盘索引为 0 时伪装成正常全盘检索
+      degraded: this.indexerProcess.state !== 'running' || Boolean(trimmed),
       source: 'local-fs',
+      ...(indexerWarming ? { indexing: true } : {}),
+      ...(indexedDrives ? { indexed_drives: indexedDrives } : {}),
       ...(scope === 'files' ? { scope } : {})
     }
   }
 
   public async indexPath(targetPath: string, scanner: 'auto' | 'usn' | 'directory' = 'auto'): Promise<IndexPathResult> {
+    this.lastIndexRequest = { targetPath, scanner }
     if (this.indexerProcess.state === 'running') {
+      const isAllDrives = targetPath === '*' || targetPath === 'all'
+      const timeoutMs = isAllDrives ? 600000 : 60000
       try {
-        return await this.indexerProcess.sendRequest<IndexPathResult>('index_path', { path: targetPath, scanner }, 60000)
+        return await this.indexerProcess.sendRequest<IndexPathResult>('index_path', { path: targetPath, scanner }, timeoutMs)
       } catch (err) {
         console.warn('[SidecarManager] indexPath RPC failed, falling back:', err)
       }
@@ -1329,6 +1374,24 @@ export class SidecarManager {
     return {
       total_indexed: this.fallbackFiles.length,
       scanner_used: 'degraded_unindexed',
+      elapsed_ms: 0
+    }
+  }
+
+  public async syncDrives(roots?: string[]): Promise<SyncDrivesResult> {
+    if (this.indexerProcess.state === 'running') {
+      const params = Array.isArray(roots) ? { roots } : {}
+      try {
+        return await this.indexerProcess.sendRequest<SyncDrivesResult>('sync_drives', params, 180000)
+      } catch (err) {
+        console.warn('[SidecarManager] syncDrives RPC failed:', err)
+      }
+    }
+    return {
+      changed: false,
+      added_count: 0,
+      removed_count: 0,
+      total_indexed: this.fallbackFiles.length,
       elapsed_ms: 0
     }
   }

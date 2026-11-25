@@ -7,6 +7,7 @@ import { usePluginsStore } from '@/stores/plugins'
 import { useCommandSearch, canPinItem } from '@/composables/useCommandSearch'
 import { useToast } from '@/composables/useToast'
 import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
+import { matchesShellShortcut } from '@/utils/shellShortcuts'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { RcButton } from '@/components/base'
 import SearchResultRow from '@/components/SearchResultRow.vue'
@@ -68,6 +69,11 @@ const candidateCommands = computed(() => {
     }
   ]
 })
+
+// 预计算每项高亮分片，避免悬停/键盘切换 activeIndex 时全列行组件因新数组引用重渲染
+const displayHighlightParts = computed(() =>
+  candidateCommands.value.map((item) => highlightParts(item))
+)
 
 // 候选变少时（文件结果到达）选中项不能落到列表外
 watch(() => candidateCommands.value.length, (length) => {
@@ -231,11 +237,14 @@ async function executeCandidate(item) {
   }
 }
 
-// 统一快捷键注册
+// 统一快捷键注册（跟随常用快捷键 FOCUS_SEARCH 动态更新，清空后不触发）
 useKeymap(KEYMAP_SCOPES.GLOBAL, {
-  'Ctrl+F': () => {
-    focusInput()
-    return true
+  onKeyDown: (_event, { combo }) => {
+    if (matchesShellShortcut(combo, 'FOCUS_SEARCH')) {
+      focusInput()
+      return true
+    }
+    return false
   }
 })
 
@@ -346,7 +355,7 @@ defineExpose({ focusInput })
             :ref="el => registerRowEl(idx, el)"
             :item="item"
             :active="activeIndex === idx"
-            :parts="highlightParts(item)"
+            :parts="displayHighlightParts[idx]"
             @mousedown.prevent="executeCandidate(item)"
             @mouseenter="activeIndex = idx"
           />

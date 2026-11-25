@@ -189,7 +189,7 @@ public:
 
     std::string query_lower;
     query_lower.reserve(query.size());
-    for (char c : query) query_lower.push_back(static_cast<char>(::tolower(c)));
+    for (char c : query) query_lower.push_back(static_cast<char>(::tolower(static_cast<unsigned char>(c))));
 
     std::unordered_set<uint32_t> candidate_set;
     candidate_set.reserve(limit * 4);
@@ -213,30 +213,27 @@ public:
     }
 
     // Phase 3: Parallel Substring and Pinyin search if more results needed
+    // 每个线程分片独立配额，避免靠前盘符的线程抢先触发全局 early_stop 而饿死后序盘符/热插拔外接盘
     if (candidate_set.size() < limit && entries_.size() > 0 && pool_) {
+      const size_t tc = (std::max)(size_t(1), pool_->ThreadCount());
+      const size_t per_slice_limit = (std::max)(size_t(16), (limit * 4 + tc - 1) / tc);
       std::mutex cand_mutex;
-      std::atomic<bool> early_stop(false);
       pool_->ParallelFor(entries_.size(), [&](size_t start_idx, size_t end_idx) {
         std::vector<uint32_t> local_matches;
-        local_matches.reserve(limit);
+        local_matches.reserve(per_slice_limit);
         for (size_t i = start_idx; i < end_idx; ++i) {
-          if (early_stop.load(std::memory_order_relaxed)) break;
           const auto& e = entries_[i];
           if (e.name_lower.find(query_lower) != std::string::npos ||
               e.pinyin_full.find(query_lower) != std::string::npos ||
               e.acronym.find(query_lower) != std::string::npos) {
             local_matches.push_back(static_cast<uint32_t>(i));
-            if (local_matches.size() >= limit) break;
+            if (local_matches.size() >= per_slice_limit) break;
           }
         }
         if (!local_matches.empty()) {
           std::lock_guard<std::mutex> lk(cand_mutex);
           for (uint32_t id : local_matches) {
             candidate_set.insert(id);
-            if (candidate_set.size() >= limit * 2) {
-              early_stop.store(true, std::memory_order_relaxed);
-              break;
-            }
           }
         }
       });

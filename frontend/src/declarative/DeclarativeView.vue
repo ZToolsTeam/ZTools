@@ -159,8 +159,8 @@
           variant="secondary"
           size="sm"
           class="decl-foot-btn is-neutral"
-          kbd="Ctrl+K"
-          :title="t('declarative.footer.actionPanelTitle')"
+          :kbd="actionPanelShortcut"
+          :title="actionPanelTitle"
           data-decl-action-panel
           @click="toggleActionPanel"
         >
@@ -233,12 +233,20 @@ import {
   isInputElement,
   isInteractiveControlTarget
 } from "@/utils/keymap.js";
-import { isMacOS } from "@/utils/platform.js";
+import { isMacOS, shortcutLabel } from "@/utils/platform.js";
+import { SHELL_SHORTCUTS, matchesShellShortcut } from "@/utils/shellShortcuts.js";
 import { useUIStore } from "@/stores/ui.js";
 import { useAppI18n } from "@/i18n";
 import { resolveErrorMessage } from "@/utils/errorMessage";
 
 const { t, locale } = useAppI18n();
+const actionPanelShortcut = computed(() => SHELL_SHORTCUTS.ACTION_PANEL);
+const actionPanelTitle = computed(() => {
+  void locale.value;
+  return actionPanelShortcut.value
+    ? t("declarative.footer.actionPanelTitle", { shortcut: shortcutLabel(actionPanelShortcut.value) })
+    : t("declarative.footer.actionPanelTitleNoShortcut");
+});
 
 const props = defineProps({
   rootComponent: {
@@ -1144,10 +1152,6 @@ function isFocusInWorkbenchField(e) {
 
 // 统一分发器注册声明式舞台按键
 useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
-  'Ctrl+K': () => {
-    toggleActionPanel();
-    return true;
-  },
   'Ctrl+Enter': () => {
     if (actionPanelVisible.value) return false;
     // 表单：⌘Enter 提交（textarea 内 Enter 是换行，这是唯一的键盘保存方式）
@@ -1248,8 +1252,12 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
     listRendererRef.value?.focusLastItem?.();
     return true;
   },
-  // 焦点不在输入框（例如刚点过列表行）时直接打字：把焦点交回搜索框，字符照常输入进去
-  onKeyDown: (e, { inInput }) => {
+  // 动态匹配动作面板快捷键（修改/清空后即时生效）；焦点不在输入框时直接打字则把焦点交回搜索框
+  onKeyDown: (e, { combo, inInput }) => {
+    if (matchesShellShortcut(combo, "ACTION_PANEL")) {
+      toggleActionPanel();
+      return true;
+    }
     if (inInput || actionPanelVisible.value) return false;
     if (e.ctrlKey || e.metaKey || e.altKey) return false;
     if (typeof e.key !== "string" || e.key.length !== 1) return false;

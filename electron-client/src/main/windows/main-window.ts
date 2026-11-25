@@ -386,6 +386,64 @@ export function handleMainWindowBeforeInputEvent(
   return false
 }
 
+export interface NormalBoundsPersistController {
+  schedulePersist(): void
+  flushPersist(): void
+  dispose(): void
+}
+
+export function createNormalBoundsPersistController(options: {
+  getBounds: () => Electron.Rectangle
+  canPersist: () => boolean
+  persistNormalBounds?: ((bounds: Electron.Rectangle) => void) | undefined
+  initialSize?: { width: number; height: number } | undefined
+  delayMs?: number
+}): NormalBoundsPersistController {
+  let persistTimer: NodeJS.Timeout | undefined
+  let lastPersistedSize: { width: number; height: number } | undefined =
+    options.initialSize
+      ? { width: options.initialSize.width, height: options.initialSize.height }
+      : undefined
+
+  const isSizeUnchanged = (bounds: Electron.Rectangle): boolean =>
+    lastPersistedSize !== undefined &&
+    lastPersistedSize.width === bounds.width &&
+    lastPersistedSize.height === bounds.height
+
+  const persistIfSizeChanged = (): void => {
+    if (!options.persistNormalBounds || !options.canPersist()) return
+    const bounds = options.getBounds()
+    if (isSizeUnchanged(bounds)) return
+    lastPersistedSize = { width: bounds.width, height: bounds.height }
+    options.persistNormalBounds(bounds)
+  }
+
+  return {
+    schedulePersist(): void {
+      if (!options.persistNormalBounds || !options.canPersist()) return
+      if (isSizeUnchanged(options.getBounds())) return
+      if (persistTimer) clearTimeout(persistTimer)
+      persistTimer = setTimeout(() => {
+        persistTimer = undefined
+        persistIfSizeChanged()
+      }, options.delayMs ?? 250)
+    },
+    flushPersist(): void {
+      if (persistTimer) {
+        clearTimeout(persistTimer)
+        persistTimer = undefined
+      }
+      persistIfSizeChanged()
+    },
+    dispose(): void {
+      if (persistTimer) {
+        clearTimeout(persistTimer)
+        persistTimer = undefined
+      }
+    }
+  }
+}
+
 export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   const primaryDisplay = typeof screen?.getPrimaryDisplay === 'function' ? screen.getPrimaryDisplay() : undefined
   const workArea = primaryDisplay?.workArea ?? { x: 0, y: 0, width: 1920, height: 1080 }
@@ -454,25 +512,24 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
       }
     })
   }
-  let persistTimer: NodeJS.Timeout | undefined
+  const boundsPersister = createNormalBoundsPersistController({
+    getBounds: () => window.getNormalBounds(),
+    canPersist: () => !window.isDestroyed() && !window.isMinimized() && !window.isMaximized() && !window.isFullScreen(),
+    persistNormalBounds: options.persistNormalBounds,
+    initialSize: { width, height },
+    delayMs: 250
+  })
   const persistBounds = (): void => {
-    if (window.isDestroyed() || window.isMinimized() || window.isMaximized() || window.isFullScreen()) return
-    if (persistTimer) clearTimeout(persistTimer)
-    persistTimer = setTimeout(() => {
-      persistTimer = undefined
-      if (!window.isDestroyed() && !window.isMinimized() && !window.isMaximized() && !window.isFullScreen()) {
-        options.persistNormalBounds?.(window.getNormalBounds())
-      }
-    }, 250)
+    boundsPersister.schedulePersist()
   }
   window.on('resize', persistBounds)
   window.on('move', persistBounds)
   window.on('unmaximize', persistBounds)
   window.on('close', () => {
-    if (persistTimer) clearTimeout(persistTimer)
-    if (!window.isMinimized() && !window.isMaximized() && !window.isFullScreen()) {
-      options.persistNormalBounds?.(window.getNormalBounds())
-    }
+    boundsPersister.flushPersist()
+  })
+  window.once('closed', () => {
+    boundsPersister.dispose()
   })
   window.webContents.on('will-navigate', (event, url) => {
     if (!url.startsWith('ztools://web/')) event.preventDefault()

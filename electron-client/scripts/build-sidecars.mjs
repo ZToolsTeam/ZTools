@@ -59,19 +59,30 @@ export function buildSidecar(name, sourceDir, options = {}) {
 
   const exePath = path.join(outputBinDir, `${name}.exe`)
   const staleExePath = path.join(outputBinDir, `${name}.old.exe`)
+  const isExpectedLockError = (err) => {
+    const code = err && typeof err === 'object' ? err.code : undefined
+    return code === 'EBUSY' || code === 'EPERM' || code === 'EACCES' || code === 'ENOENT'
+  }
   try {
     if (fs.existsSync(staleExePath)) fs.unlinkSync(staleExePath)
-  } catch {
-    // Ignore if stale binary is still held by an exiting process
+  } catch (err) {
+    if (!isExpectedLockError(err)) {
+      console.warn(`[build-sidecars] Unexpected error removing stale binary ${staleExePath}:`, err)
+    }
   }
   if (fs.existsSync(exePath)) {
     try {
       fs.unlinkSync(exePath)
-    } catch {
+    } catch (unlinkErr) {
+      if (!isExpectedLockError(unlinkErr)) {
+        console.warn(`[build-sidecars] Unexpected error unlinking ${exePath}:`, unlinkErr)
+      }
       try {
         fs.renameSync(exePath, staleExePath)
-      } catch {
-        // Proceed and let linker report if still locked
+      } catch (renameErr) {
+        if (!isExpectedLockError(renameErr)) {
+          console.warn(`[build-sidecars] Unexpected error renaming locked binary ${exePath}:`, renameErr)
+        }
       }
     }
   }
@@ -132,8 +143,38 @@ export function buildMacosIndexerSidecar(sourceDir = path.join(nativeDir, 'ztool
   return { name: 'ztools-indexer', exePath: outBinary, sha256 }
 }
 
-export function buildAllSidecars() {
+function computeSidecarSourceSignature(sourceFiles) {
+  const hash = createHash('sha256')
+  const scriptPath = fileURLToPath(import.meta.url)
+  for (const file of [...sourceFiles, scriptPath]) {
+    if (!fs.existsSync(file)) continue
+    hash.update(path.relative(rootDir, file).replaceAll('\\', '/'))
+    hash.update('\0')
+    hash.update(fs.readFileSync(file))
+    hash.update('\0')
+  }
+  return hash.digest('hex')
+}
+
+function getWindowsSidecarSpecs() {
+  const sharedRpc = path.join(nativeDir, 'shared', 'json_rpc.hpp')
   const uiaccessDir = path.join(nativeDir, 'ztools-uiaccess')
+  const indexerDir = path.join(nativeDir, 'ztools-indexer')
+  const uiaccessSources = ['CMakeLists.txt', 'main.cpp', 'uiaccess_worker.hpp', 'app.manifest', 'uiaccess.rc']
+    .map(file => path.join(uiaccessDir, file))
+    .concat(sharedRpc)
+  const indexerSources = ['CMakeLists.txt', 'main.cpp', 'file_scanner.hpp', 'flat_trie.hpp', 'pinyin.hpp']
+    .map(file => path.join(indexerDir, file))
+    .concat(sharedRpc)
+
+  return [
+    { name: 'ztools-uiaccess', sourceDir: uiaccessDir, sources: uiaccessSources },
+    { name: 'ztools-uiaccess-standard', sourceDir: uiaccessDir, sources: uiaccessSources },
+    { name: 'ztools-indexer', sourceDir: indexerDir, sources: indexerSources }
+  ]
+}
+
+export function buildAllSidecars() {
   const indexerDir = path.join(nativeDir, 'ztools-indexer')
 
   if (process.platform === 'darwin') {
@@ -142,14 +183,57 @@ export function buildAllSidecars() {
   }
 
   console.log('[build-sidecars] Starting native sidecar build...')
-  const uiaccessRes = buildSidecar('ztools-uiaccess', uiaccessDir)
-  const uiaccessStandardRes = buildSidecar('ztools-uiaccess-standard', uiaccessDir)
-  const indexerRes = buildSidecar('ztools-indexer', indexerDir)
+  const specs = getWindowsSidecarSpecs()
+  const cmake = findCmake()
+  const results = {}
+  for (const spec of specs) {
+    const built = buildSidecar(spec.name, spec.sourceDir, { cmake })
+    fs.mkdirSync(outputBuildDir, { recursive: true })
+    const stampPath = path.join(outputBuildDir, `${spec.name}.source.sha256`)
+    fs.writeFileSync(stampPath, computeSidecarSourceSignature(spec.sources), 'utf8')
+    results[spec.name] = built
+  }
 
   return {
-    uiaccess: uiaccessRes,
-    uiaccessStandard: uiaccessStandardRes,
-    indexer: indexerRes
+    uiaccess: results['ztools-uiaccess'],
+    uiaccessStandard: results['ztools-uiaccess-standard'],
+    indexer: results['ztools-indexer']
+  }
+}
+
+/**
+ * Windows 开发态增量保鲜：当 C++ 侧车源码或共享 RPC 协议变化、或产物缺失时自动重编，
+ * 避免 npm run build / start 静默加载数周前的旧版 ztools-indexer.exe。
+ */
+export function buildDevelopmentWindowsSidecars() {
+  if (process.platform !== 'win32') return
+  const specs = getWindowsSidecarSpecs()
+  const staleSpecs = []
+  for (const spec of specs) {
+    const exePath = path.join(outputBinDir, `${spec.name}.exe`)
+    const stampPath = path.join(outputBuildDir, `${spec.name}.source.sha256`)
+    const expectedSig = computeSidecarSourceSignature(spec.sources)
+    const upToDate = fs.existsSync(exePath) &&
+      fs.existsSync(stampPath) &&
+      fs.readFileSync(stampPath, 'utf8').trim() === expectedSig
+    if (!upToDate) {
+      staleSpecs.push({ ...spec, expectedSig, stampPath })
+    }
+  }
+  if (staleSpecs.length === 0) return
+
+  let cmake
+  try {
+    cmake = findCmake()
+  } catch (err) {
+    console.warn(`[build-sidecars] 未找到 CMake/VS 工具链，跳过开发态侧车增量重编（${staleSpecs.map(s => s.name).join(', ')}）:`, err instanceof Error ? err.message : String(err))
+    return
+  }
+
+  fs.mkdirSync(outputBuildDir, { recursive: true })
+  for (const spec of staleSpecs) {
+    buildSidecar(spec.name, spec.sourceDir, { cmake })
+    fs.writeFileSync(spec.stampPath, spec.expectedSig, 'utf8')
   }
 }
 

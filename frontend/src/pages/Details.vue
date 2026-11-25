@@ -2,7 +2,7 @@
 import { RcButton } from '@/components/base'
 import { confirmDialog } from '@/utils/confirmDialog'
 import { ArrowLeftIcon, RotateCwIcon, TriangleAlertIcon } from '@lucide/vue'
-import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
+import { ref, watch, onMounted, onActivated, onDeactivated, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import PluginDetailHeader from './details-components/PluginDetailHeader.vue'
@@ -53,6 +53,7 @@ const {
 
 const plugin = ref({})
 const loading = ref(true)
+const isPageActive = ref(true)
 const currentDetailsPluginId = ref(String(route.params.pluginId || ''))
 const routePluginId = computed(() => currentDetailsPluginId.value)
 
@@ -617,6 +618,7 @@ const setHotkey = () => {
 
 // 事件处理函数
 const handleDownloadProgress = (envelope) => {
+  if (!isPageActive.value) return
   try {
     const payload = envelope?.payload || {}
     const pid = payload.pluginId
@@ -635,6 +637,7 @@ const handleDownloadProgress = (envelope) => {
 }
 
 const handleInstallComplete = async (envelope) => {
+  if (!isPageActive.value) return
   try {
     const payload = envelope?.payload || {}
     if (!pluginsStore.acceptsInstallEvent(payload)) return
@@ -689,6 +692,7 @@ onMounted(async () => {
 watch(
   [() => route.name, () => route.params.pluginId],
   ([name, nextPluginId], prev) => {
+    if (!isPageActive.value) return
     if (name && name !== ROUTES.DETAILS.name) return
     const normalized = String(nextPluginId || '')
     if (prev && normalized === currentDetailsPluginId.value && Object.keys(plugin.value || {}).length > 0) return
@@ -698,7 +702,22 @@ watch(
   { immediate: true }
 )
 
+onActivated(() => {
+  isPageActive.value = true
+  if (route.name && route.name !== ROUTES.DETAILS.name) return
+  const normalized = String(route.params.pluginId || '')
+  if (normalized !== currentDetailsPluginId.value) {
+    currentDetailsPluginId.value = normalized
+    load()
+  }
+})
+
+onDeactivated(() => {
+  isPageActive.value = false
+})
+
 onBeforeUnmount(() => {
+  isPageActive.value = false
   try {
     if (window.ztools && window.ztools.events) {
       window.ztools.events.off(

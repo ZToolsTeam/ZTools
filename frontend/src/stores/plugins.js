@@ -5,6 +5,7 @@ import {
   normalizeCategoryRouteParam
 } from '@/utils/pluginCategories'
 import { invalidatePluginSession } from '@/declarative/pluginSession'
+import { markRaw, toRaw } from 'vue'
 import { defineStore } from 'pinia'
 import router from '@/router'
 import { routeUtils } from '@/router/routes'
@@ -194,6 +195,21 @@ export function sanitizeRecentUsedAt(raw, recents, now = Date.now()) {
 
 export const HIDDEN_BUNDLED_CONFIG_KEY = 'plugins.hidden_bundled'
 export const BUNDLED_VISIBILITY_SIGNAL = 'ztools_bundled_visibility_changed'
+const CATALOG_SNAPSHOT_KEY = 'plugins.catalog_snapshot'
+const CATALOG_SNAPSHOT_FILE = 'catalog_snapshot.json'
+
+function parseCatalogSnapshot(raw) {
+  if (Array.isArray(raw)) return raw.length > 0 ? raw : null
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : null
+    } catch {
+      return null
+    }
+  }
+  return null
+}
 
 /**
  * 解析并校验已隐藏（假卸载）的内置插件 ID 列表：
@@ -566,7 +582,8 @@ export const usePluginsStore = defineStore('plugins', {
     _getCatalogManager() {
       if (!this._catalogManager) {
         // 与详情、下载和更新共用一次 CDN 读取；离线时目录管理器只展示本地快照与内置插件。
-        this._catalogManager = new StoreCatalogManager({
+        // 使用 markRaw 避免 Pinia/Vue 深度 Proxy 代理整份目录数组。
+        this._catalogManager = markRaw(new StoreCatalogManager({
           fetchRemote: async () => {
             const list = await loadV2StaticCatalogList()
             this._applyRevocations(list)
@@ -575,37 +592,103 @@ export const usePluginsStore = defineStore('plugins', {
             return list
           },
           getLocalSnapshot: async () => {
-            if (window.ztools?.config) {
+            if (!window.ztools?.config) return null
+            try {
               const raw = await window.ztools.config.get(
-                'plugins.catalog_snapshot',
+                CATALOG_SNAPSHOT_KEY,
+                '[]',
+                CATALOG_SNAPSHOT_FILE
+              )
+              const parsed = parseCatalogSnapshot(raw)
+              if (parsed) return parsed
+            } catch (err) {
+              // 忽略新文件读取异常，尝试回退旧文件
+              console.debug('[plugins] 读取独立目录快照失败，回退旧配置文件:', err)
+            }
+            try {
+              const legacyRaw = await window.ztools.config.get(
+                CATALOG_SNAPSHOT_KEY,
                 '[]',
                 'user_settings.json'
               )
-              try {
-                const parsed = JSON.parse(raw)
-                return Array.isArray(parsed) && parsed.length > 0 ? parsed : null
-              } catch {
-                return null
-              }
+              return parseCatalogSnapshot(legacyRaw)
+            } catch {
+              return null
             }
-            return null
           },
           saveLocalSnapshot: async (data) => {
             if (window.ztools?.config) {
               await window.ztools.config.set(
-                'plugins.catalog_snapshot',
+                CATALOG_SNAPSHOT_KEY,
                 JSON.stringify(data),
                 false,
-                'user_settings.json'
+                CATALOG_SNAPSHOT_FILE
               )
+              const rawThis = toRaw(this)
+              if (!rawThis._legacySnapshotCleared) {
+                rawThis._legacySnapshotCleared = true
+                try {
+                  const legacy = await window.ztools.config.get(
+                    CATALOG_SNAPSHOT_KEY,
+                    '',
+                    'user_settings.json'
+                  )
+                  const hasLegacy = Array.isArray(legacy)
+                    ? legacy.length > 0
+                    : typeof legacy === 'string' && legacy.trim() !== '' && legacy.trim() !== '[]'
+                  if (hasLegacy) {
+                    await window.ztools.config.set(
+                      CATALOG_SNAPSHOT_KEY,
+                      '',
+                      false,
+                      'user_settings.json'
+                    )
+                  }
+                } catch (err) {
+                  // 清理旧配置残留失败不影响快照写入
+                  console.debug('[plugins] 清理旧配置目录快照残留失败:', err)
+                }
+              }
             }
           },
           getOfficialList: () => [...getBundledPluginEntries(), ...getOfficialPluginsList()],
           isPlatformSupported: (item) => isPluginVisible(item) && isPluginSupportedOnCurrentPlatform(item),
           ttlMs: 5 * 60 * 1000
-        })
+        }))
       }
       return this._catalogManager
+    },
+
+    /** 内存目录是否已加载且在 TTL 有效期内 */
+    hasFreshCatalog() {
+      return Boolean(this._catalogManager?.hasFreshCatalog?.())
+    },
+
+    /**
+     * 收口目录派生状态同步（下架状态、分类计数、已安装插件元数据补齐）：
+     * 同一份目录引用与同一已安装状态快照下幂等跳过，消除连续查询时的重复全量扫描与序列化。
+     */
+    _syncCatalogDerivedState(catalog) {
+      if (!Array.isArray(catalog)) return
+      const rawThis = toRaw(this)
+      const rawCatalog = toRaw(catalog)
+      const installedRef = toRaw(this.installedPlugins)
+      const installedSetRef = toRaw(this.installedSet)
+      if (
+        rawThis._lastDerivedCatalogRef === rawCatalog &&
+        rawThis._lastDerivedInstalledRev === this._installedRevision &&
+        rawThis._lastDerivedInstalledPluginsRef === installedRef &&
+        rawThis._lastDerivedInstalledSetRef === installedSetRef
+      ) {
+        return
+      }
+      this._applyRevocations(catalog)
+      this._updateCategoryCounts(catalog)
+      this._patchInstalledFromCatalog(catalog)
+      rawThis._lastDerivedCatalogRef = rawCatalog
+      rawThis._lastDerivedInstalledRev = this._installedRevision
+      rawThis._lastDerivedInstalledPluginsRef = toRaw(this.installedPlugins)
+      rawThis._lastDerivedInstalledSetRef = toRaw(this.installedSet)
     },
 
     setSourceFilter(filter) {
@@ -663,21 +746,35 @@ export const usePluginsStore = defineStore('plugins', {
       }
 
       const result = await manager.query(queryParams)
-      // 下架状态来自完整目录，与当前分页、搜索和分类无关。
-      this._applyRevocations(manager._catalog)
-      this._updateCategoryCounts(manager._catalog)
-      this._patchInstalledFromCatalog(manager._catalog)
+      // 下架状态、分类计数与已安装元数据补齐来自完整目录，与当前分页、搜索和分类无关，按引用+修订号幂等执行。
+      this._syncCatalogDerivedState(manager._catalog)
 
       return result
     },
 
     /**
+     * 分类概览单趟聚合查询：一次遍历返回全部分类预览分组与去重目录总数
+     * @param {Array<string|object>} [categories=[]]
+     * @param {number} [limit=8]
+     * @returns {Promise<{ groups: Array<object>, total: number }>}
+     */
+    async loadCategoryOverview(categories = [], limit = 8) {
+      const manager = this._getCatalogManager()
+      const result = await manager.queryCategoryOverview(categories, limit)
+      this._syncCatalogDerivedState(manager._catalog)
+      return result
+    },
+
+    /**
      * 当前分类 / 搜索词 / 指定 ID 范围内，「全部 / 官方 / 社区」各有多少插件。
-     * 在已缓存的目录上本地统计，不发请求；目录不可用时抛出，由调用方决定不显示数字。
+     * 在已缓存的目录上本地单趟统计，不发请求；目录不可用时抛出，由调用方决定不显示数字。
      * @param {{ category?: string, keyword?: string, ids?: string[] }} params
      */
     async countPluginsBySource(params = {}) {
       const manager = this._getCatalogManager()
+      if (typeof manager.countBySource === 'function') {
+        return manager.countBySource(params)
+      }
       const types = ['all', 'official', 'community']
       const results = await Promise.all(
         types.map((sourceType) => manager.query({ ...params, sourceType, page: 1, pageSize: 1 }))
@@ -695,6 +792,14 @@ export const usePluginsStore = defineStore('plugins', {
           counts[id] = (counts[id] || 0) + 1
         }
       }
+      const prev = this.categoryCounts
+      if (prev && typeof prev === 'object') {
+        const prevKeys = Object.keys(prev)
+        const nextKeys = Object.keys(counts)
+        if (prevKeys.length === nextKeys.length && nextKeys.every((key) => prev[key] === counts[key])) {
+          return
+        }
+      }
       this.categoryCounts = counts
     },
 
@@ -702,9 +807,7 @@ export const usePluginsStore = defineStore('plugins', {
     async refreshCategoryCounts() {
       try {
         const { catalog } = await this._getCatalogManager().ensureCatalog()
-        this._applyRevocations(catalog)
-        this._updateCategoryCounts(catalog)
-        this._patchInstalledFromCatalog(catalog)
+        this._syncCatalogDerivedState(catalog)
       } catch (error) {
         console.warn('[PluginsStore] 统计分类插件数失败，保留全部分类:', error)
       }
@@ -1026,7 +1129,14 @@ export const usePluginsStore = defineStore('plugins', {
      */
     _applyRevocations(list) {
       if (!Array.isArray(list) || list.length === 0) return
+      const rawThis = toRaw(this)
+      if (!rawThis._notifiedRevokedMap) {
+        rawThis._notifiedRevokedMap = markRaw(new Map())
+      }
+      const notifiedMap = rawThis._notifiedRevokedMap
+      let nextRevokedMap = null
       let changed = false
+      let installedMutated = false
       for (const item of list) {
         if (!item || typeof item !== 'object') continue
         const pid = normalizePluginId(item.pluginId || item.id)
@@ -1036,17 +1146,18 @@ export const usePluginsStore = defineStore('plugins', {
           const localizedReason = getLocalizedPluginField(item, 'revokedReason')
           const reason = localizedReason || t('pluginCatalog.revokedDisabledReason')
           const itemI18n = item.i18n && typeof item.i18n === 'object' ? item.i18n : null
-          const prev = this.revokedMap[pid]
+          const currentMap = nextRevokedMap || this.revokedMap
+          const prev = currentMap[pid]
           if (!prev || prev.reason !== reason || prev.rawReason !== rawReason || prev.i18n !== itemI18n) {
-            this.revokedMap = {
-              ...this.revokedMap,
-              [pid]: {
-                revoked: true,
-                reason,
-                ...(rawReason ? { rawReason } : {}),
-                ...(itemI18n ? { i18n: itemI18n } : {}),
-                isDefault: !localizedReason
-              }
+            if (!nextRevokedMap) {
+              nextRevokedMap = { ...this.revokedMap }
+            }
+            nextRevokedMap[pid] = {
+              revoked: true,
+              reason,
+              ...(rawReason ? { rawReason } : {}),
+              ...(itemI18n ? { i18n: itemI18n } : {}),
+              isDefault: !localizedReason
             }
             changed = true
           }
@@ -1056,22 +1167,37 @@ export const usePluginsStore = defineStore('plugins', {
               (p) => normalizePluginId(p.pluginId || p.id) === pid
             )
             if (found) {
-              found.revoked = true
-              found.revoked_reason = rawReason || reason
-              if (itemI18n) {
-                found.i18n = mergePluginI18n(found.i18n, itemI18n)
+              const targetReason = rawReason || reason
+              if (!found.revoked || found.revoked_reason !== targetReason || found.enabled !== false) {
+                found.revoked = true
+                found.revoked_reason = targetReason
+                found.enabled = false
+                installedMutated = true
               }
-              found.enabled = false
+              if (itemI18n) {
+                const merged = mergePluginI18n(found.i18n, itemI18n)
+                if (!isSameJsonValue(merged, found.i18n)) {
+                  found.i18n = merged
+                  installedMutated = true
+                }
+              }
             }
-            if (window.ztools?.plugin?.revoke) {
-              window.ztools.plugin.revoke(pid, reason).catch((error) => {
+            if (window.ztools?.plugin?.revoke && notifiedMap.get(pid) !== reason) {
+              notifiedMap.set(pid, reason)
+              Promise.resolve(window.ztools.plugin.revoke(pid, reason)).catch((error) => {
+                if (notifiedMap.get(pid) === reason) {
+                  notifiedMap.delete(pid)
+                }
                 console.warn('[plugins] 禁用已下架插件失败:', pid, error)
               })
             }
           }
         }
       }
-      if (changed && this.installedPlugins?.length) {
+      if (nextRevokedMap) {
+        this.revokedMap = nextRevokedMap
+      }
+      if ((changed || installedMutated) && this.installedPlugins?.length) {
         this.installedPlugins = [...this.installedPlugins]
       }
     },

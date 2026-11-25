@@ -19,6 +19,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { IpcRouter } from './ipc/router.js'
 import { IPC_EVENT_CHANNEL } from '../contracts/ipc.js'
+import { resolveOpenSettingsShortcut, SHELL_SHORTCUTS } from '../contracts/hotkey-rules.js'
 import { installZToolsProtocol, registerZToolsScheme } from './protocol/ztools-protocol.js'
 import { getRuntimeDiagnostics } from './services/runtime-diagnostics.js'
 import {
@@ -226,7 +227,6 @@ let runtimeLock: RuntimeLock | null = null
 let healthCheckExitCode: number | undefined
 let launchIntentReady = false
 let pendingWakeTarget: 'main' | 'launcher' | undefined
-let lastActiveSurface: 'dashboard' | 'launcher' | null = null
 let removeNativeThemeListener: (() => void) | undefined
 let startupAnalyticsReported = false
 const pendingLaunchIntents: LaunchIntent[] = []
@@ -462,11 +462,11 @@ function runHealthCheck(): Record<string, unknown> {
 
 function toggleMainWindow(): void {
   if (applicationLifecycle.cancellationRequested) return
-  let pref = 'dashboard'
+  let pref: 'dashboard' | 'launcher' = 'launcher'
   try {
-    pref = services?.config.getCachedWakePreference() ?? 'dashboard'
+    pref = services?.config.getCachedWakePreference() ?? 'launcher'
   } catch {
-    pref = 'dashboard'
+    pref = 'launcher'
   }
   if (!launchIntentReady) {
     pendingWakeTarget = pref === 'launcher' ? 'launcher' : 'main'
@@ -479,7 +479,8 @@ function toggleMainWindow(): void {
     return
   }
 
-  if ((pref === 'launcher' || lastActiveSurface === 'launcher') && launcher) {
+  // 严格遵循用户设置的「默认呼出形态」(ui.wake_preference)：悬浮条或主工作台
+  if (pref === 'launcher' && launcher) {
     launcher.toggle()
     return
   }
@@ -491,7 +492,6 @@ function toggleMainWindow(): void {
     return
   }
   if (mainWindow.isMinimized()) {
-    lastActiveSurface = 'dashboard'
     mainWindow.restore()
     mainWindow.show()
     mainWindow.focus()
@@ -501,7 +501,7 @@ function toggleMainWindow(): void {
     mainWindow.hide()
     return
   }
-  lastActiveSurface = 'dashboard'
+  launcher?.hide()
   mainWindow.show()
   mainWindow.focus()
 }
@@ -513,7 +513,6 @@ function showMainWindow(): void {
     pendingWakeTarget = 'main'
     return
   }
-  lastActiveSurface = 'dashboard'
   launcher?.hide()
   if (!mainWindow || mainWindow.isDestroyed()) {
     if (lifecyclePolicy.reopenMainWindowOnActivate && router && services) {
@@ -552,30 +551,37 @@ function openMainWindowAt(route: string): void {
 function openLauncherWindow(): void {
   if (applicationLifecycle.cancellationRequested) return
   if (launcher) {
-    lastActiveSurface = 'launcher'
     launcher.show()
     return
   }
   showMainWindow()
 }
 
-/** 独立悬浮条全局快捷键动作：仅切换悬浮条显示/隐藏，不改写 lastActiveSurface 也不影响主唤醒热键逻辑 */
-function toggleLauncherWindow(): void {
-  if (applicationLifecycle.cancellationRequested) return
-  if (!launchIntentReady) {
-    pendingWakeTarget = 'launcher'
-    return
-  }
-  if (launcher) {
-    launcher.toggle({ updateLastActiveSurface: false })
-    return
-  }
-  showMainWindow()
+let currentSettingsAccelerator: string = SHELL_SHORTCUTS.OPEN_SETTINGS
+
+/**
+ * 同步刷新 macOS 顶栏应用菜单（携带最新的「偏好设置」快捷键）
+ */
+function refreshMacosApplicationMenu(settingsAccelerator: string = currentSettingsAccelerator): void {
+  currentSettingsAccelerator = settingsAccelerator
+  if (process.platform !== 'darwin') return
+  installMacosApplicationMenu({
+    onOpenPreferences: () => openMainWindowAt('/advanced-settings'),
+    settingsAccelerator
+  })
 }
 
-async function readTrayState(): Promise<{ wakeAccelerator: string; showTrayIcon: boolean }> {
+async function readTrayState(): Promise<{
+  wakeAccelerator: string
+  settingsAccelerator: string
+  showTrayIcon: boolean
+}> {
   if (!services) {
-    return { wakeAccelerator: 'Alt+Space', showTrayIcon: true }
+    return {
+      wakeAccelerator: 'Alt+Space',
+      settingsAccelerator: SHELL_SHORTCUTS.OPEN_SETTINGS,
+      showTrayIcon: true
+    }
   }
   const wakeFromTrigger = router?.getGlobalWakeHotkey()
   let wakeAccelerator = ''
@@ -590,18 +596,27 @@ async function readTrayState(): Promise<{ wakeAccelerator: string; showTrayIcon:
       ? 'Alt+Space'
       : String(rawWakeHotkey ?? '').trim()
   }
+  const rawShellShortcuts = await services.config
+    .get('user_settings.json', 'hotkey.shell', '')
+    .catch(() => '')
+  const settingsAccelerator = resolveOpenSettingsShortcut(rawShellShortcuts)
   const rawShowTrayIcon = await services.config
     .get('user_settings.json', 'system.showTrayIcon', 'true')
     .catch(() => 'true')
   return {
     // 存的是空串表示用户已关闭全局唤醒，托盘菜单不显示快捷键
     wakeAccelerator,
+    // 存的是空串表示用户已清空偏好设置快捷键，菜单项不显示快捷键
+    settingsAccelerator,
     // 默认显示；只有明确存为 false / 0 才隐藏
     showTrayIcon: !['false', '0'].includes(String(rawShowTrayIcon).trim().toLowerCase())
   }
 }
 
-function createTrayController(state: { wakeAccelerator: string }): TrayController {
+function createTrayController(state: {
+  wakeAccelerator: string
+  settingsAccelerator: string
+}): TrayController {
   if (!mainApplicationIcon) throw new Error('Application icon is not ready')
   return new TrayController({
     icon: loadTrayIcon(mainApplicationIcon),
@@ -623,7 +638,14 @@ function createTrayController(state: { wakeAccelerator: string }): TrayControlle
 // 托盘图标随「显示托盘图标」设置即时出现 / 消失；同步串行执行，避免连续切换时重复创建
 let trayApplyQueue: Promise<void> = Promise.resolve()
 
-function applyTrayState(state: { wakeAccelerator: string; showTrayIcon: boolean }): Promise<void> {
+function applyTrayState(state: {
+  wakeAccelerator: string
+  settingsAccelerator: string
+  showTrayIcon: boolean
+}): Promise<void> {
+  if (state.settingsAccelerator !== currentSettingsAccelerator) {
+    refreshMacosApplicationMenu(state.settingsAccelerator)
+  }
   const { showTrayIcon, ...menuState } = state
   if (!showTrayIcon) {
     tray?.stop()
@@ -832,6 +854,45 @@ async function persistNativeCloseChoice(action: 'exit' | 'minimize'): Promise<vo
   }
 }
 
+let firstMinimizeNoticeHandled = false
+
+function formatWakeHotkeyForNotice(rawKey: string): string {
+  const trimmed = rawKey.trim()
+  if (!trimmed) return ''
+  const compact = trimmed.replace(/[+\s]/g, '').toLowerCase()
+  if (compact === 'doublealt') return t('tray.firstMinimize.doubleAlt')
+  if (compact === 'doublectrl' || compact === 'doublecontrol') return t('tray.firstMinimize.doubleCtrl')
+  if (compact === 'doubleshift') return t('tray.firstMinimize.doubleShift')
+  if (process.platform === 'darwin') {
+    return trimmed
+      .replace(/\bAlt\b/gi, 'Option')
+      .replace(/\bCtrl\b/gi, 'Cmd')
+  }
+  return trimmed
+}
+
+/** 首次关闭主窗口隐藏到托盘时，发一条极简系统提示告知用户按全局热键随时呼出（全生命周期仅触发 1 次） */
+async function notifyFirstMinimizeToTray(): Promise<void> {
+  if (firstMinimizeNoticeHandled || applicationLifecycle.cancellationRequested || !services) return
+  firstMinimizeNoticeHandled = true
+  try {
+    const notified = await services.config
+      .get('user_settings.json', 'system.firstMinimizeNotified', 'false')
+      .catch(() => 'false')
+    if (String(notified).trim().toLowerCase() === 'true') return
+    await services.config.set('user_settings.json', 'system.firstMinimizeNotified', 'true', false)
+    const wake = router?.getGlobalWakeHotkey()
+    const formattedKey = wake?.exists && wake.enabled ? formatWakeHotkeyForNotice(wake.key) : ''
+    const body = formattedKey
+      ? t('tray.firstMinimize.bodyWithHotkey', { hotkey: formattedKey })
+      : t('tray.firstMinimize.bodyNoHotkey')
+    await showDesktopNotification(t('tray.firstMinimize.title'), body)
+  } catch (error) {
+    // 系统禁用通知或免打扰时静默忽略，绝不影响隐藏到托盘
+    lifecycleLog('DEBUG', 'First minimize desktop notice skipped', undefined, error)
+  }
+}
+
 async function showNativeCloseConfirmation(): Promise<void> {
   if (applicationLifecycle.cancellationRequested) return
   const window = mainWindow
@@ -876,7 +937,10 @@ async function showNativeCloseConfirmation(): Promise<void> {
   const action = result.response === 0 ? 'exit' : 'minimize'
   if (result.checkboxChecked) await persistNativeCloseChoice(action)
   if (action === 'exit') app.quit()
-  else if (!window.isDestroyed()) window.hide()
+  else if (!window.isDestroyed()) {
+    window.hide()
+    void notifyFirstMinimizeToTray()
+  }
 }
 
 async function requestMainWindowClose(origin: CloseRequestOrigin): Promise<void> {
@@ -920,6 +984,7 @@ async function requestMainWindowClose(origin: CloseRequestOrigin): Promise<void>
       case 'hide':
         lifecycleLog('INFO', 'Main window hidden instead of quitting', { origin })
         mainWindow?.hide()
+        void notifyFirstMinimizeToTray()
         return
       case 'quit':
         lifecycleLog('INFO', 'Main window close decision requests application quit', { origin })
@@ -995,7 +1060,7 @@ if (!app.requestSingleInstanceLock()) {
     const earlyCliLocale = parseCommandLineLocale(process.argv)
     setLocale(earlyCliLocale ?? 'system', app.getLocale())
     if (process.platform === 'darwin') {
-      installMacosApplicationMenu({ onOpenPreferences: () => openMainWindowAt('/advanced-settings') })
+      refreshMacosApplicationMenu()
     } else {
       // 非 macOS 平台清空默认应用菜单，封堵 Alt 调出或子窗口菜单泄漏
       Menu.setApplicationMenu(null)
@@ -1090,9 +1155,10 @@ if (!app.requestSingleInstanceLock()) {
       onWarn: (message, error) => console.warn(message, error)
     })
     setLocale(startupLocale.setting, app.getLocale())
-    if (process.platform === 'darwin') {
-      installMacosApplicationMenu({ onOpenPreferences: () => openMainWindowAt('/advanced-settings') })
-    }
+    const initialShellShortcutsRaw = await createdServices.config
+      .get('user_settings.json', 'hotkey.shell', '')
+      .catch(() => '')
+    refreshMacosApplicationMenu(resolveOpenSettingsShortcut(initialShellShortcutsRaw))
     await runLifecyclePhase('native-runtime.start', () => nativeRuntime.start(signal))
     if (!applicationLifecycle.canContinueStartup()) return
 
@@ -1115,7 +1181,10 @@ if (!app.requestSingleInstanceLock()) {
         })
         if (signal.aborted || !applicationLifecycle.canContinueStartup()) return
         if (indexRes) {
-          console.info(`[SidecarManager] Indexed ${indexRes.total_indexed} files from ${targetScope === '*' ? 'all fixed drives' : targetScope} in ${indexRes.elapsed_ms}ms (${indexRes.scanner_used})`)
+          const drivesSummary = Array.isArray(indexRes.indexed_drives) && indexRes.indexed_drives.length > 0
+            ? ` [${indexRes.indexed_drives.join(', ')}]`
+            : ''
+          console.info(`[SidecarManager] Indexed ${indexRes.total_indexed} files from ${targetScope === '*' ? 'all local & removable drives' : targetScope}${drivesSummary} in ${indexRes.elapsed_ms}ms (${indexRes.scanner_used})`)
         }
       }
     }).catch((err) => {
@@ -1127,7 +1196,7 @@ if (!app.requestSingleInstanceLock()) {
     try {
       persistedTheme = await createdServices.config.get('user_settings.json', 'ui.theme', '')
       persistedAccent = await createdServices.config.get('user_settings.json', 'ui.accent', 'ember')
-      await createdServices.config.get('user_settings.json', 'ui.wake_preference', 'dashboard').catch(() => 'dashboard')
+      await createdServices.config.get('user_settings.json', 'ui.wake_preference', 'launcher').catch(() => 'launcher')
     } catch (error) {
       console.warn('读取主题设置失败，将跟随系统:', error)
     }
@@ -1175,30 +1244,20 @@ if (!app.requestSingleInstanceLock()) {
     const initialWakeHotkey = initialWakeRaw === '__UNSET__'
       ? 'Alt+Space'
       : String(initialWakeRaw ?? '').trim()
-    const initialLauncherRaw = await createdServices.config
-      .get('user_settings.json', 'hotkey.launcher', '__UNSET__')
-      .catch(() => '__UNSET__')
-    const initialLauncherHotkey = initialLauncherRaw === '__UNSET__'
-      ? 'Alt+Shift+Space'
-      : String(initialLauncherRaw ?? '').trim()
     router = await runLifecyclePhase('ipc-router.create', () => IpcRouter.create(registry, createdServices, {
       pluginResources: { webRoot: () => activeWebRoot(), pluginRoot },
       pluginState, onDarkModeChanged: applyDarkMode, onAccentChanged: applyAccentTheme,
       onLocaleChanged: () => {
         syncTrayState()
-        if (process.platform === 'darwin') {
-          installMacosApplicationMenu({ onOpenPreferences: () => openMainWindowAt('/advanced-settings') })
-        }
+        refreshMacosApplicationMenu()
       },
       onTrayStatePossiblyChanged: syncTrayState,
       initialWakeHotkey,
-      initialLauncherHotkey,
       reloadMainWindow: async () => {
         if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Main window is unavailable')
         await mainWindow.loadURL('ztools://web/index.html')
       },
       toggleMainWindow,
-      toggleLauncher: toggleLauncherWindow,
       forwardHotkeyToRecorder: (accelerator) => {
         if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused()) {
           return false
@@ -1207,7 +1266,12 @@ if (!app.requestSingleInstanceLock()) {
         if (!payload) return false
         return dispatchRecorderKeyToWebContents(mainWindow.webContents, payload)
       },
-      closeConfirmationResolved: () => { closeConfirmationPending = false },
+      closeConfirmationResolved: (action) => {
+        closeConfirmationPending = false
+        if (action === 'minimize') {
+          void notifyFirstMinimizeToTray()
+        }
+      },
       screenClipboardAdapters,
       systemPlatformAdapter,
       processDiscoveryAdapter,
@@ -1217,16 +1281,6 @@ if (!app.requestSingleInstanceLock()) {
       } : {})
     }))
     if (!applicationLifecycle.canContinueStartup()) return
-    // 首次升级或全新启动时若未显式写过 hotkey.launcher，按触发器真实播种结果回写配置，避免默认避让后界面出现假快捷键
-    if (initialLauncherRaw === '__UNSET__') {
-      const seededLauncher = router.getGlobalLauncherHotkey()
-      const syncedLauncherKey = seededLauncher.exists && seededLauncher.enabled ? seededLauncher.key : ''
-      await createdServices.config
-        .set('user_settings.json', 'hotkey.launcher', syncedLauncherKey, true)
-        .catch((error: unknown) => {
-          console.warn('初始化同步悬浮条快捷键配置失败:', error)
-        })
-    }
     const protocolRoots = await router.fileService.prepareMainProtocolRoots()
     if (!applicationLifecycle.canContinueStartup()) return
     const activeRouter = router
@@ -1298,9 +1352,6 @@ if (!app.requestSingleInstanceLock()) {
         },
         showMainWindow,
         navigateMainWindow,
-        onShow: () => {
-          lastActiveSurface = 'launcher'
-        },
         hideMainWindow: () => {
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.hide()

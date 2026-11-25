@@ -1014,7 +1014,7 @@ describe('usePluginsStore', () => {
       apiMocks.installPluginNative.mockResolvedValue({ success: true, operationId: 'current-op' })
     })
 
-    it.each([true, false])('重复下架固定禁用并持久化原因（原启用=%s）', async enabled => {
+    it.each([true, false])('重复下架固定禁用并持久化原因，同原因去重且原因变更后重新通知（原启用=%s）', async enabled => {
       const state = { enabled, revoked: false }
       const call = vi.fn(async (method, params) => {
         expect(method).toBe('plugin_revoke')
@@ -1029,9 +1029,15 @@ describe('usePluginsStore', () => {
       store._applyRevocations(catalog)
       store._applyRevocations(catalog)
       await Promise.resolve()
-      expect(call).toHaveBeenCalledTimes(2)
+      expect(call).toHaveBeenCalledTimes(1)
       expect(call).toHaveBeenLastCalledWith('plugin_revoke', { pluginId: pid, revoked: true, reason: '已撤回' })
       expect(state).toEqual({ enabled: false, revoked: true, reason: '已撤回' })
+      // 下架原因更新时，再次通知宿主更新持久化原因
+      store._applyRevocations([{ pluginId: pid, revoked: true, revokedReason: '存在安全漏洞' }])
+      await Promise.resolve()
+      expect(call).toHaveBeenCalledTimes(2)
+      expect(call).toHaveBeenLastCalledWith('plugin_revoke', { pluginId: pid, revoked: true, reason: '存在安全漏洞' })
+      expect(state).toEqual({ enabled: false, revoked: true, reason: '存在安全漏洞' })
       await expect(store.openPlugin(pid)).rejects.toThrow('下架')
     })
 
@@ -1183,5 +1189,129 @@ describe('插件目录里的新版本不再支持当前系统', () => {
     expect(store.getRevokedKind('not-installed-yet')).toBe('revoked')
     store._applyPlatformSupport([{ pluginId: 'not-installed-yet', targets: both }])
     expect(store.isRevoked('not-installed-yet'), '平台恢复支持不能解除官方下架').toBe(true)
+  })
+})
+
+describe('性能优化与快照持久化契约（markRaw / 独立快照文件 / 派生状态幂等 / 概览聚合）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    setupZtools()
+  })
+
+  it('catalog_snapshot 读写使用独立 catalog_snapshot.json，兼容 ConfigAPI 返回的已解析数组并回退读取旧文件', async () => {
+    const store = usePluginsStore()
+    const files = new Map()
+    window.ztools.config.get = vi.fn(async (key, fallback, file) => {
+      const fullKey = `${file}::${key}`
+      return files.has(fullKey) ? files.get(fullKey) : fallback
+    })
+    window.ztools.config.set = vi.fn(async (key, value, _sync, file) => {
+      files.set(`${file}::${key}`, value)
+      return true
+    })
+
+    const manager = store._getCatalogManager()
+    // 1. 旧文件有遗留快照，新文件无数据 -> 自动回退读取旧文件（且支持直接返回数组不二次 JSON.parse）
+    files.set('user_settings.json::plugins.catalog_snapshot', [{ pluginId: 'legacy-tool', name: '旧快照插件' }])
+    const fromLegacy = await manager.getLocalSnapshot()
+    expect(fromLegacy).toEqual([{ pluginId: 'legacy-tool', name: '旧快照插件' }])
+
+    // 2. 写入新快照 -> 存入 catalog_snapshot.json 并清理 user_settings.json 残留
+    await manager.saveLocalSnapshot([{ pluginId: 'fresh-tool', name: '新快照插件' }])
+    expect(window.ztools.config.set).toHaveBeenCalledWith(
+      'plugins.catalog_snapshot',
+      JSON.stringify([{ pluginId: 'fresh-tool', name: '新快照插件' }]),
+      false,
+      'catalog_snapshot.json'
+    )
+    expect(files.get('user_settings.json::plugins.catalog_snapshot')).toBe('')
+
+    // 3. 模拟真实 ConfigAPI.get 返回已解析数组对象：不再触发二次 JSON.parse 失败
+    files.set('catalog_snapshot.json::plugins.catalog_snapshot', [{ pluginId: 'parsed-arr', name: '数组快照' }])
+    const fromParsedArray = await manager.getLocalSnapshot()
+    expect(fromParsedArray).toEqual([{ pluginId: 'parsed-arr', name: '数组快照' }])
+  })
+
+  it('同一份缓存目录连续 loadWithCache 仅执行一次派生状态同步，目录刷新或安装态变化时重新同步', async () => {
+    const store = usePluginsStore()
+    catalogMocks.load.mockResolvedValue([
+      { pluginId: 'tool-a', name: '工具甲', category: '系统工具', downloads: 10 },
+      { pluginId: 'tool-b', name: '工具乙', category: '办公效率', downloads: 20 }
+    ])
+    const applyRevSpy = vi.spyOn(store, '_applyRevocations')
+    const updateCountsSpy = vi.spyOn(store, '_updateCategoryCounts')
+    const patchInstalledSpy = vi.spyOn(store, '_patchInstalledFromCatalog')
+
+    await store.loadWithCache({ page: 1, per_page: 10 })
+    const revCountAfterFirst = applyRevSpy.mock.calls.length
+    const countsAfterFirst = updateCountsSpy.mock.calls.length
+    const patchAfterFirst = patchInstalledSpy.mock.calls.length
+
+    expect(store.hasFreshCatalog()).toBe(true)
+
+    // 连续翻页/切换分类查询：目录引用与安装修订号未变，零重复扫描
+    await store.loadWithCache({ category: 'system', page: 1, per_page: 10 })
+    await store.loadWithCache({ category: 'productivity', page: 1, per_page: 10 })
+    expect(applyRevSpy.mock.calls.length).toBe(revCountAfterFirst)
+    expect(updateCountsSpy.mock.calls.length).toBe(countsAfterFirst)
+    expect(patchInstalledSpy.mock.calls.length).toBe(patchAfterFirst)
+
+    // 触发安装修订号变更后重新执行一次
+    store._installedRevision += 1
+    await store.loadWithCache({ page: 1, per_page: 10 })
+    expect(updateCountsSpy.mock.calls.length).toBe(countsAfterFirst + 1)
+  })
+
+  it('loadCategoryOverview 单趟返回各分类分组与去重目录总数，且支持 _updateCategoryCounts 相等跳过赋值', async () => {
+    const store = usePluginsStore()
+    catalogMocks.load.mockResolvedValue([
+      { pluginId: 'multi-tool', name: '双分类工具', category: ['系统工具', '网络工具'], downloads: 500 },
+      { pluginId: 'sys-tool', name: '系统小工具', category: '系统工具', downloads: 100 }
+    ])
+
+    const overview = await store.loadCategoryOverview(
+      [
+        { id: 'system', name: '系统工具' },
+        { id: 'network', name: '网络工具' },
+        { id: 'security', name: '安全工具' }
+      ],
+      1
+    )
+
+    expect(overview.total).toBeGreaterThanOrEqual(2)
+    const sysGroup = overview.groups.find((g) => g.id === 'system')
+    const netGroup = overview.groups.find((g) => g.id === 'network')
+    expect(sysGroup).toBeTruthy()
+    expect(sysGroup.plugins).toHaveLength(1)
+    expect(sysGroup.total).toBeGreaterThanOrEqual(2)
+    expect(netGroup).toBeTruthy()
+    expect(netGroup.plugins[0].pluginId).toBe('multi-tool')
+    expect(overview.groups.find((g) => g.id === 'security')).toBeUndefined()
+
+    // 分类计数未变化时保留原对象引用，避免无效触发侧栏重算
+    const prevCountsRef = store.categoryCounts
+    store._updateCategoryCounts(store._getCatalogManager()._catalog)
+    expect(store.categoryCounts).toBe(prevCountsRef)
+  })
+
+  it('[异常] _applyRevocations 通知宿主失败时清除已通知记录，允许后续重试', async () => {
+    const store = usePluginsStore()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const revoke = vi.fn()
+      .mockRejectedValueOnce(new Error('IPC 暂时断开'))
+      .mockResolvedValueOnce({ success: true })
+    window.ztools.plugin = { revoke }
+    store.installedSet = new Set(['retry-gone'])
+    store.installedPlugins = [{ pluginId: 'retry-gone', enabled: true }]
+    const list = [{ pluginId: 'retry-gone', revoked: true, revokedReason: '临时下架' }]
+
+    store._applyRevocations(list)
+    await Promise.resolve()
+    await Promise.resolve()
+    store._applyRevocations(list)
+    await Promise.resolve()
+
+    expect(revoke).toHaveBeenCalledTimes(2)
+    warn.mockRestore()
   })
 })

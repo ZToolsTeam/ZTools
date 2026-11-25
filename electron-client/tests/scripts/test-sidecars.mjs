@@ -635,13 +635,61 @@ async function runTests() {
         }
       }
 
-      // 4.3 全新进程验证全盘并发扫描 ("*")，验证多盘并发与过滤放开后远超原 701 文件瓶颈
-      const allDrivesClient = createRpcClient(indexerExe)
+      // 4.2.5 热插拔增量同步验证：模拟移动硬盘 / U 盘插入与拔出，验证只扫新增卷且拔出立即清理旧路径
+      const hotplugBase = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-indexer-hotplug-'))
       try {
-        const allDrivesRes = await allDrivesClient.call('index_path', { path: '*', scanner: 'auto' })
-        console.log(`    Indexed ${allDrivesRes.total_indexed} files from all fixed drives in ${allDrivesRes.elapsed_ms}ms (${allDrivesRes.scanner_used})`)
+        const volA = path.join(hotplugBase, 'DriveA_Fixed')
+        const volB = path.join(hotplugBase, 'DriveB_UsbRemovable')
+        fs.mkdirSync(volA, { recursive: true })
+        fs.mkdirSync(volB, { recursive: true })
+        fs.writeFileSync(path.join(volA, 'fixed_report_alpha.docx'), 'alpha')
+        fs.writeFileSync(path.join(volB, 'usb_contract_beta.docx'), 'beta')
+
+        const initSync = await client.call('sync_drives', { roots: [volA] })
+        assert.equal(initSync.changed, true)
+        assert.equal(initSync.added_count, 1)
+        assert.equal(initSync.total_indexed, 1)
+        assert.equal((await client.call('search_files', { query: 'fixed_report_alpha', limit: 10 })).count, 1)
+        assert.equal((await client.call('search_files', { query: 'usb_contract_beta', limit: 10 })).count, 0)
+
+        // 插入 U 盘（volB）：仅增量扫描 volB 并合并
+        const plugSync = await client.call('sync_drives', { roots: [volA, volB] })
+        assert.equal(plugSync.changed, true)
+        assert.equal(plugSync.added_count, 1)
+        assert.equal(plugSync.removed_count, 0)
+        assert.equal(plugSync.total_indexed, 2)
+        assert.equal((await client.call('search_files', { query: '.docx', limit: 10 })).count, 2, 'Both fixed and newly plugged USB drive files must match extension query')
+
+        // 卷列表无变化时零开销跳过
+        const noopSync = await client.call('sync_drives', { roots: [volA, volB] })
+        assert.equal(noopSync.changed, false)
+        assert.equal(noopSync.added_count, 0)
+        assert.equal(noopSync.removed_count, 0)
+
+        // 拔出 U 盘（volB）：立即剔除 volB 条目，保留 volA 条目
+        const unplugSync = await client.call('sync_drives', { roots: [volA] })
+        assert.equal(unplugSync.changed, true)
+        assert.equal(unplugSync.removed_count, 1)
+        assert.equal(unplugSync.total_indexed, 1)
+        assert.equal((await client.call('search_files', { query: 'usb_contract_beta', limit: 10 })).count, 0, 'Unplugged USB drive file must be removed immediately')
+        assert.equal((await client.call('search_files', { query: 'fixed_report_alpha', limit: 10 })).count, 1, 'Fixed drive file must remain intact after USB unplug')
+      } finally {
+        fs.rmSync(hotplugBase, { recursive: true, force: true })
+      }
+
+      // 4.3 全新进程验证全盘并发扫描 ("*")，验证多盘（含固定硬盘与就绪可移动盘）并发索引与多盘结果覆盖
+      const allDrivesClient = createRpcClient(indexerExe, [], 300000)
+      try {
+        const allDrivesRes = await allDrivesClient.call('index_path', { path: '*', scanner: 'auto' }, 300000)
+        const indexedDrives = Array.isArray(allDrivesRes.indexed_drives) ? allDrivesRes.indexed_drives : []
+        console.log(`    Indexed ${allDrivesRes.total_indexed} files from drives [${indexedDrives.join(', ')}] in ${allDrivesRes.elapsed_ms}ms (${allDrivesRes.scanner_used})`)
         assert.equal(allDrivesRes.scanner_used, 'all_drives_concurrent')
+        assert.ok(indexedDrives.length >= 1, 'Must report at least one indexed drive')
         assert.ok(allDrivesRes.total_indexed > 1000, `Full drive index should exceed legacy 701 count (actual: ${allDrivesRes.total_indexed})`)
+
+        const statsRes = await allDrivesClient.call('get_stats')
+        assert.equal(statsRes.indexing, false)
+        assert.ok(Array.isArray(statsRes.indexed_drives) && statsRes.indexed_drives.length === indexedDrives.length)
       } finally {
         await allDrivesClient.close()
       }
@@ -726,7 +774,45 @@ async function runTests() {
       assert.ok(status.indexer.state === 'running', 'Indexer should be running')
       assert.ok(status.indexer.pid !== null, 'Indexer should have a PID')
 
-      // Test indexer via SidecarManager
+      // Verify honest degradation when indexer is running but has 0 indexed entries
+      const emptyFallbackSearch = await manager.searchFiles('nonexistent_empty_index_probe', 10)
+      assert.equal(emptyFallbackSearch.degraded, true, 'Non-empty query falling back to local-fs on empty index must report degraded=true')
+
+      // Test indexer via SidecarManager with real directory so crash recovery can auto re-index
+      const recoveryFixture = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-manager-recovery-'))
+      try {
+        fs.writeFileSync(path.join(recoveryFixture, 'crash_recovery_sentinel.docx'), 'sentinel')
+        const idxRes = await manager.indexPath(recoveryFixture, 'directory')
+        assert.equal(idxRes.total_indexed, 1)
+        const preCrash = await manager.searchFiles('crash_recovery_sentinel', 10)
+        assert.equal(preCrash.count, 1)
+
+        // Test Crash Detection, Automatic Restart & Automatic Re-Indexing:
+        const originalPid = manager['indexerProcess'].pid
+        assert.ok(originalPid !== null, 'Original PID should exist')
+        console.log(`    Simulating crash on indexer PID ${originalPid}...`)
+
+        manager['indexerProcess'].child.kill('SIGKILL')
+
+        // Wait for auto-restart backoff (500ms) + auto re-index
+        await new Promise(r => setTimeout(r, 1800))
+
+        const restartedStatus = manager.getStatus()
+        console.log('    Post-crash Status:', JSON.stringify(restartedStatus))
+        assert.equal(restartedStatus.indexer.state, 'running', 'Indexer should have automatically recovered to running state')
+        assert.notEqual(restartedStatus.indexer.pid, originalPid, 'New process should have a different PID')
+        assert.equal(restartedStatus.indexer.restarts, 1, 'Restart counter should be incremented')
+
+        // Verify that requests succeed AND index was automatically restored on the recovered process
+        const pingRes = await manager['indexerProcess'].sendRequest('ping')
+        assert.equal(pingRes, 'pong', 'Recovered indexer process should respond to RPC')
+        const postCrash = await manager.searchFiles('crash_recovery_sentinel', 10)
+        assert.equal(postCrash.count, 1, 'Indexer must automatically re-index previous target after crash recovery')
+      } finally {
+        fs.rmSync(recoveryFixture, { recursive: true, force: true })
+      }
+
+      // Test mock dataset search via SidecarManager
       const mockRes = await manager.generateMockDataset(10000)
       assert.equal(mockRes.total_indexed, 10000)
       const searchRes = await manager.searchFiles('wx', 10)
@@ -736,28 +822,6 @@ async function runTests() {
       // Test active window query (falls back gracefully if unsigned/background)
       const win = await manager.getActiveWindow()
       assert.ok(typeof win.active === 'boolean')
-
-      // Test Crash Detection & Automatic Restart:
-      // Kill the indexer child process directly to simulate a crash
-      const originalPid = manager['indexerProcess'].pid
-      assert.ok(originalPid !== null, 'Original PID should exist')
-      console.log(`    Simulating crash on indexer PID ${originalPid}...`)
-
-      // Trigger unexpected exit
-      manager['indexerProcess'].child.kill('SIGKILL')
-
-      // Wait for auto-restart backoff (500ms + margin)
-      await new Promise(r => setTimeout(r, 1200))
-
-      const restartedStatus = manager.getStatus()
-      console.log('    Post-crash Status:', JSON.stringify(restartedStatus))
-      assert.equal(restartedStatus.indexer.state, 'running', 'Indexer should have automatically recovered to running state')
-      assert.notEqual(restartedStatus.indexer.pid, originalPid, 'New process should have a different PID')
-      assert.equal(restartedStatus.indexer.restarts, 1, 'Restart counter should be incremented')
-
-      // Verify that requests succeed on the recovered process
-      const pingRes = await manager['indexerProcess'].sendRequest('ping')
-      assert.equal(pingRes, 'pong', 'Recovered indexer process should respond to RPC')
 
       // Test Graceful Degradation:
       // When stopped or unavailable, searchFiles should use in-memory JS fallback without throwing

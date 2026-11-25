@@ -346,32 +346,7 @@ test('launcher_call 拒绝带 attributedPlugin 或 stalePluginSession 的伪装�
   }
 })
 
-test('独立悬浮条快捷键：updateLastActiveSurface=false 不触发 onShow，且 before-input 仅拦截纯 Alt+Space', async () => {
-  let onShowCalls = 0
-  const controller = new Controller({
-    icon: {} as Electron.NativeImage,
-    registry: new WindowRegistry(),
-    showMainWindow: () => undefined,
-    hideMainWindow: () => undefined,
-    onShow: () => { onShowCalls += 1 }
-  })
-  controller.register()
-  try {
-    controller.toggle({ updateLastActiveSurface: false })
-    await new Promise(resolve => setImmediate(resolve))
-    assert.equal(onShowCalls, 0, '独立悬浮条快捷键不得改写 lastActiveSurface')
-    assert.equal(controller.isFocused(), true)
-
-    controller.toggle({ updateLastActiveSurface: false })
-    assert.equal(NativeWindow.latest.visible, false)
-
-    controller.show()
-    await new Promise(resolve => setImmediate(resolve))
-    assert.equal(onShowCalls, 1)
-  } finally {
-    controller.stop()
-  }
-
+test('悬浮窗 before-input 仅拦截纯 Alt+Space，不误拦其它带修饰键的 Space 组合', () => {
   let hideCalls = 0
   let prevented = 0
   const fakeEvent = { preventDefault: () => { prevented += 1 } }

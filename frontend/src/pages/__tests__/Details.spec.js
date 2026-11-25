@@ -637,6 +637,61 @@ describe('Details Page', () => {
         })
       )
     })
+
+    it('[KeepAlive 生命周期] 失活期间跳过下载进度、安装完成 Toast 与路由响应，重新激活且 pluginId 变化时才重载', async () => {
+      const { defineComponent, ref, KeepAlive } = await import('vue')
+      const active = ref(true)
+      const Host = defineComponent({
+        components: { KeepAlive, Details },
+        setup: () => ({ active }),
+        template: '<KeepAlive><Details v-if="active" /></KeepAlive>'
+      })
+
+      await router.push('/details/plugin-1')
+      const hostWrapper = mount(Host, {
+        global: {
+          plugins: [router],
+          stubs: { PluginDetailHeader: true, PluginScreenshots: true, PluginDescription: true }
+        }
+      })
+      try {
+        await flushPromises()
+        const detailsComp = hostWrapper.findComponent(Details)
+        expect(apiMocks.getPluginDetails).toHaveBeenCalledTimes(1)
+
+        // 切走失活
+        active.value = false
+        await flushPromises()
+
+        // 失活期间忽略进度与安装完成事件，不弹重复 Toast
+        detailsComp.vm.handleDownloadProgress({ payload: { pluginId: 'plugin-1', percent: 75 } })
+        await detailsComp.vm.handleInstallComplete({
+          payload: { pluginId: 'plugin-1', operationId: 'bg-op', success: true, isUpdate: false }
+        })
+        expect(detailsComp.vm.downloadProgress).toBe(0)
+        expect(toastSpies.toastSuccess).not.toHaveBeenCalled()
+
+        // 失活期间路由变化不立即发请求
+        apiMocks.getPluginDetails.mockResolvedValueOnce({
+          pluginId: 'plugin-2',
+          name: 'Plugin 2',
+          version: '2.0.0',
+          screenshots: [],
+          changelogs: []
+        })
+        await router.push('/details/plugin-2')
+        await flushPromises()
+        expect(apiMocks.getPluginDetails).toHaveBeenCalledTimes(1)
+
+        // 重新激活时检测到 pluginId 变化，触发一次加载
+        active.value = true
+        await flushPromises()
+        expect(apiMocks.getPluginDetails).toHaveBeenCalledTimes(2)
+        expect(apiMocks.getPluginDetails).toHaveBeenLastCalledWith('plugin-2')
+      } finally {
+        hostWrapper.unmount()
+      }
+    })
   })
 })
 

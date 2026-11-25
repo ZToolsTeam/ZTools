@@ -18,11 +18,18 @@ import {
   isPluginFeatureHotkeyTriggerId
 } from '@/utils/pluginFeatureHotkeys'
 import { useAppI18n } from '@/i18n'
+import { useToast } from '@/composables/useToast'
+import { useAppPreferencesApi } from '@/composables/useAppPreferencesApi'
+import { syncGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
+import { shortcutLabel } from '@/utils/platform'
 import { resolveErrorMessage } from '@/utils/errorMessage'
 
 const { t, locale } = useAppI18n()
+const { success, error } = useToast()
+const { setHotkey } = useAppPreferencesApi()
 const router = useRouter()
 const visible = ref(false)
+const quickSwitchingKey = ref('')
 // 仅保存结构化原始冲突字段，避免在 show() 中静态固化翻译文本导致热切换语言冻结
 const conflicts = ref([])
 
@@ -32,7 +39,6 @@ const isSystemTarget = (item) => {
   return (
     pid === 'system' ||
     tid === 'global_wake_hotkey' ||
-    tid === 'global_launcher_hotkey' ||
     tid === 'mouse_wake_hook'
   )
 }
@@ -42,7 +48,6 @@ const resolveDisplayItemTitle = (item) => {
   if (item?.pluginNameRaw) return item.pluginNameRaw
   const tid = String(item?.triggerId || '').trim()
   if (tid === 'global_wake_hotkey') return t('modals.hotkeyConflict.globalWake')
-  if (tid === 'global_launcher_hotkey') return t('modals.hotkeyConflict.globalLauncher')
   if (tid === 'mouse_wake_hook') return t('modals.hotkeyConflict.mouseWake')
   const featureItem = tid ? getPluginFeatureHotkeyItemByTriggerId(tid) : null
   if (featureItem) return `${featureItem.pluginName} · ${featureItem.featureName}`
@@ -67,9 +72,16 @@ const resolveDisplayConflictWith = (item) => {
   return t(fallbackKey)
 }
 
+const normalizeSuggestions = (raw) =>
+  Array.isArray(raw)
+    ? [...new Set(raw.filter((key) => typeof key === 'string' && key.trim()).map((key) => key.trim()))].slice(0, 3)
+    : []
+
 /** 将不同来源的冲突记录归一化为与语言无关的结构化记录 */
 const normalizeConflictItem = (item) => {
   if (!item || typeof item !== 'object') return null
+
+  const suggestions = normalizeSuggestions(item.suggestions)
 
   // 兼容旧版系统冲突格式 { type: 'keyboard' | 'mouse', key }
   if ((item.type === 'keyboard' || item.type === 'mouse') && !('conflictType' in item)) {
@@ -81,7 +93,8 @@ const normalizeConflictItem = (item) => {
       conflictType: 'system_occupied',
       conflictWithRaw: '',
       triggerId: item.type === 'mouse' ? 'mouse_wake_hook' : 'global_wake_hotkey',
-      conflictTriggerId: ''
+      conflictTriggerId: '',
+      suggestions
     }
   }
 
@@ -95,7 +108,8 @@ const normalizeConflictItem = (item) => {
       conflictType: 'system_occupied',
       conflictWithRaw: typeof item.reason === 'string' ? item.reason.trim() : '',
       triggerId: item.triggerId || '',
-      conflictTriggerId: ''
+      conflictTriggerId: '',
+      suggestions
     }
   }
 
@@ -110,7 +124,8 @@ const normalizeConflictItem = (item) => {
     conflictType: normalizedType,
     conflictWithRaw: typeof item.conflictWith === 'string' ? item.conflictWith.trim() : '',
     triggerId: item.triggerId || '',
-    conflictTriggerId: item.conflictTriggerId || ''
+    conflictTriggerId: item.conflictTriggerId || '',
+    suggestions
   }
 }
 
@@ -258,6 +273,56 @@ const tipText = computed(() => {
 
 const canRenderCombo = (key) => isSafeShortcutKeysCombo(key, 'windows', true)
 
+const isWakeConflictWithSuggestions = (item) =>
+  item?.triggerId === 'global_wake_hotkey' &&
+  Array.isArray(item?.suggestions) &&
+  item.suggestions.length > 0
+
+/** 一键换用经本机实测未被占用的备选全局唤醒热键 */
+const applyQuickWakeSuggestion = async (item, candidate) => {
+  if (quickSwitchingKey.value || !candidate) return
+  const previousKey = typeof item?.key === 'string' ? item.key : ''
+  quickSwitchingKey.value = candidate
+  try {
+    const saved = await setHotkey(candidate)
+    if (!saved) {
+      error(t('modals.hotkeyConflict.quickSwitchFailed', { reason: t('settings.shortcuts.wakeHotkey.saveFailed') }))
+      return
+    }
+    let syncRes
+    try {
+      syncRes = await syncGlobalWakeHotkey({ hotkey: candidate })
+    } catch (err) {
+      if (previousKey) await setHotkey(previousKey)
+      error(t('modals.hotkeyConflict.quickSwitchFailed', { reason: resolveErrorMessage(err, 'common.unknownError') }))
+      return
+    }
+    if (!syncRes?.success) {
+      if (previousKey) await setHotkey(previousKey)
+      const reason = syncRes?.message
+        ? resolveErrorMessage({ error: syncRes.message }, 'common.unknownError')
+        : t('settings.shortcuts.wakeHotkey.reasons.default')
+      error(t('modals.hotkeyConflict.quickSwitchFailed', { reason }))
+      return
+    }
+    try {
+      await window.ztools?.sys?.reloadHotkeys?.()
+    } catch {
+      // 托盘文案刷新失败不影响热键已生效
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('ztools-settings-changed'))
+    }
+    success(t('modals.hotkeyConflict.quickSwitchSuccess', { key: shortcutLabel(candidate) || candidate }))
+    conflicts.value = conflicts.value.filter((c) => c.triggerId !== 'global_wake_hotkey')
+    if (conflicts.value.length === 0) {
+      close()
+    }
+  } finally {
+    quickSwitchingKey.value = ''
+  }
+}
+
 defineExpose({ show, close })
 </script>
 
@@ -292,6 +357,27 @@ defineExpose({ show, close })
               <div class="plugin-conflict-detail">
                 <RcTag tone="error">{{ t('modals.hotkeyConflict.tagSystem') }}</RcTag>
                 <span class="conflict-with">{{ t('modals.hotkeyConflict.conflictWith', { name: item.conflictWith }) }}</span>
+              </div>
+              <div
+                v-if="isWakeConflictWithSuggestions(item)"
+                class="conflict-suggestions"
+                data-testid="wake-conflict-suggestions"
+              >
+                <span class="conflict-suggestions-label">{{ t('modals.hotkeyConflict.quickSwitchLabel') }}</span>
+                <div class="conflict-suggestions-list">
+                  <button
+                    v-for="candidate in item.suggestions"
+                    :key="candidate"
+                    type="button"
+                    class="conflict-suggestion-btn"
+                    :disabled="Boolean(quickSwitchingKey)"
+                    :data-testid="`quick-switch-${candidate}`"
+                    @click="applyQuickWakeSuggestion(item, candidate)"
+                  >
+                    <ShortcutKeys v-if="canRenderCombo(candidate)" :combo="candidate" />
+                    <span v-else>{{ candidate }}</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -423,5 +509,42 @@ defineExpose({ show, close })
   font-size: var(--rc-fs-small);
   color: var(--rc-text-secondary);
   margin-bottom: 0;
+}
+.conflict-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rc-border);
+}
+.conflict-suggestions-label {
+  font-size: var(--rc-fs-small);
+  color: var(--rc-text-secondary);
+}
+.conflict-suggestions-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.conflict-suggestion-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: var(--rc-radius-sm);
+  border: 1px solid var(--rc-border);
+  background: var(--rc-surface);
+  color: var(--rc-text-primary);
+  font-size: var(--rc-fs-small);
+  cursor: pointer;
+  transition: border-color var(--rc-dur) ease, background-color var(--rc-dur) ease;
+}
+.conflict-suggestion-btn:hover:not(:disabled) {
+  border-color: var(--rc-accent);
+  background: var(--rc-surface-hover);
+}
+.conflict-suggestion-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>

@@ -17,7 +17,7 @@
           :placeholder="targetTitle ? t('declarative.actionPanel.searchTargetPlaceholder', { target: targetTitle }) : t('declarative.actionPanel.searchPlaceholder')"
           class="action-panel-input"
         />
-        <ShortcutKeys combo="Ctrl+K" />
+        <ShortcutKeys v-if="SHELL_SHORTCUTS.ACTION_PANEL" :combo="SHELL_SHORTCUTS.ACTION_PANEL" />
       </div>
 
       <!-- Action 列表 -->
@@ -77,6 +77,7 @@ import {
   normalizeEventKeyCombo
 } from "@/utils/keymap.js";
 import { resolveActionKeyBindings, normalizeEventShortcutKey } from "@/utils/actionKeyBindings.js";
+import { SHELL_SHORTCUTS, matchesShellShortcut } from "@/utils/shellShortcuts.js";
 import { useAppI18n } from "@/i18n";
 
 const { t } = useAppI18n();
@@ -292,7 +293,7 @@ function processPanelKeyEvent(e, precomputedCombo) {
   if (handledEvents.has(e)) return true;
 
   const combo = precomputedCombo ?? normalizeEventKeyCombo(e);
-  if (combo === "Ctrl+K") {
+  if (matchesShellShortcut(combo, "ACTION_PANEL")) {
     handledEvents.add(e);
     emit("close");
     return true;

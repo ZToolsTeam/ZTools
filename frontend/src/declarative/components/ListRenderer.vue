@@ -289,7 +289,7 @@
             <!-- Items 遍历 -->
             <div
               v-for="(item, iIdx) in sec.items"
-              :key="item.id || `${sIdx}-${iIdx}`"
+              :key="item.props?.id ?? item.key ?? `${sIdx}-${iIdx}`"
               :ref="el => registerItemEl(item, el)"
               role="option"
               :aria-selected="selectedItem === item ? 'true' : 'false'"
@@ -384,7 +384,7 @@
         >
           <div
             v-for="(fItem, fIdx) in subListItems"
-            :key="fItem.id || `sub-${fIdx}`"
+            :key="fItem.props?.id ?? fItem.key ?? `sub-${fIdx}`"
             :ref="el => registerSubItemEl(fItem, el)"
             role="option"
             :aria-selected="selectedSubItem === fItem ? 'true' : 'false'"

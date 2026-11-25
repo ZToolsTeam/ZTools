@@ -1,11 +1,11 @@
 import { app, Menu, type MenuItemConstructorOptions } from 'electron'
-import { SHELL_SHORTCUTS } from '../../../contracts/hotkey-rules.js'
+import { SHELL_SHORTCUTS, toMenuAccelerator } from '../../../contracts/hotkey-rules.js'
 import { t } from '../../i18n/index.js'
-
-const MACOS_PREFERENCES_ACCELERATOR = SHELL_SHORTCUTS.OPEN_SETTINGS.replace(/^Ctrl\+/i, 'Command+')
 
 export interface MacosApplicationMenuOptions {
   readonly onOpenPreferences?: () => void
+  /** 偏好设置快捷键显示文案（未传回退默认值，空串表示已清空） */
+  readonly settingsAccelerator?: string
 }
 
 /**
@@ -33,11 +33,15 @@ export function macosAppSubmenuItems(options: MacosApplicationMenuOptions = {}):
   ]
 
   if (typeof options.onOpenPreferences === 'function') {
+    const rawSettingsAccelerator = options.settingsAccelerator === undefined
+      ? SHELL_SHORTCUTS.OPEN_SETTINGS
+      : options.settingsAccelerator
+    const settingsAccelerator = toMenuAccelerator(rawSettingsAccelerator, 'darwin')
     appSubmenu.push(
       { type: 'separator' },
       {
         label: t('menu.preferences'),
-        accelerator: MACOS_PREFERENCES_ACCELERATOR,
+        ...(settingsAccelerator ? { accelerator: settingsAccelerator } : {}),
         click: () => options.onOpenPreferences?.()
       }
     )

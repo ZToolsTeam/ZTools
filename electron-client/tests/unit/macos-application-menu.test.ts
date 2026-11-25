@@ -79,3 +79,30 @@ test('macosAppSubmenuItems 在未传或传入无效 onOpenPreferences 时不包�
     assert.deepEqual(items.map(item => item.label ?? item.role ?? item.type), expectedRoles)
   }
 })
+
+test('macosAppSubmenuItems 支持自定义 settingsAccelerator 并在清空或非法时省略 accelerator', () => {
+  const onOpenPreferences = (): void => undefined
+
+  // 自定义 Ctrl 组合在 macOS 上转换为 Command
+  const customCtrl = macosAppSubmenuItems({ onOpenPreferences, settingsAccelerator: 'Ctrl+Shift+,' })
+  const customCtrlItem = customCtrl.find(item => item.label === '偏好设置...')
+  assert.ok(customCtrlItem)
+  assert.equal(customCtrlItem.accelerator, 'Command+Shift+,')
+
+  // CommandOrControl / CmdOrCtrl 也转换为 Command
+  const customCmdOrCtrl = macosAppSubmenuItems({ onOpenPreferences, settingsAccelerator: 'CommandOrControl+;' })
+  assert.equal(customCmdOrCtrl.find(item => item.label === '偏好设置...')?.accelerator, 'Command+;')
+
+  // 物理 Control 保持为 Control
+  const customControl = macosAppSubmenuItems({ onOpenPreferences, settingsAccelerator: 'Control+,' })
+  assert.equal(customControl.find(item => item.label === '偏好设置...')?.accelerator, 'Control+,')
+
+  // 显式清空 "" 或传入不支持的双击修饰键 / 控制字符时，不设置 accelerator 属性
+  for (const cleared of ['', '   ', 'DoubleCtrl', 'Ctrl+,\nInjected']) {
+    const items = macosAppSubmenuItems({ onOpenPreferences, settingsAccelerator: cleared })
+    const prefItem = items.find(item => item.label === '偏好设置...')
+    assert.ok(prefItem, `应保留“偏好设置...”菜单项（input=${JSON.stringify(cleared)}）`)
+    assert.equal('accelerator' in prefItem, false)
+    assert.equal(prefItem.accelerator, undefined)
+  }
+})

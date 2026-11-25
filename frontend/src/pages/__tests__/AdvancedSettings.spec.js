@@ -44,8 +44,6 @@ vi.mock('@/api/apiserver', () => ({
   setAutostart: vi.fn().mockResolvedValue(true),
   getHotkey: vi.fn().mockResolvedValue('Alt+Space'),
   setHotkey: vi.fn().mockResolvedValue(true),
-  getLauncherHotkey: vi.fn().mockResolvedValue('Alt+Shift+Space'),
-  setLauncherHotkey: vi.fn().mockResolvedValue(true),
   getMinimizeToTray: vi.fn().mockResolvedValue(true),
   setMinimizeToTray: vi.fn().mockResolvedValue(true),
   getShowTrayIcon: mocks.getShowTrayIcon,
@@ -61,7 +59,7 @@ vi.mock('@/utils/windowMode', async (importOriginal) => {
 import AdvancedSettings from '../AdvancedSettings.vue'
 import * as api from '@/api/apiserver'
 import { useThemeStore } from '@/stores/theme'
-import { BUILTIN_SHORTCUT_HINTS } from '@/utils/shellShortcuts'
+import { BUILTIN_SHORTCUT_HINTS, SHELL_SHORTCUTS, _resetShellShortcutsForTesting } from '@/utils/shellShortcuts'
 import { MOUSE_WAKE_OPTIONS } from '@/utils/globalWakeHotkey'
 import { setI18nLocale } from '@/i18n'
 
@@ -131,9 +129,7 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
     mocks.isMac = false
     api.getHotkey.mockResolvedValue('Alt+Space')
     api.setHotkey.mockClear()
-    api.getLauncherHotkey.mockResolvedValue('Alt+Shift+Space')
-    api.setLauncherHotkey.mockClear()
-    api.setLauncherHotkey.mockResolvedValue(true)
+    api.setHotkey.mockResolvedValue(true)
     api.getCloseConfirm.mockResolvedValue(true)
     api.setCloseConfirm.mockResolvedValue(true)
     api.getMinimizeToTray.mockResolvedValue(true)
@@ -340,8 +336,7 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
     rows.forEach((row) => expect(row.findAll('kbd').length).toBeGreaterThan(0))
     const openSettingsRow = rows.find((r) => r.find('.setting-label').text() === '打开设置')
     expect(openSettingsRow?.findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', ','])
-    const toggleModeRow = rows.find((r) => r.find('.setting-label').text() === '工作台与悬浮条切换')
-    expect(toggleModeRow?.findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', 'U'])
+    expect(rows.find((r) => r.find('.setting-label').text() === '工作台与悬浮条切换')).toBeUndefined()
     const popoutRow = rows.find((r) => r.find('.setting-label').text() === '弹出为独立常驻窗口')
     expect(popoutRow?.findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', 'Shift', 'P'])
     wrapper.unmount()
@@ -501,8 +496,10 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
         await flushPromises()
         expect(windowKeydownSpy).not.toHaveBeenCalled()
         expect(api.setHotkey).toHaveBeenCalledWith('Alt+Space')
-        // 快捷键 Tab 包含「全局唤醒快捷键」与「显示悬浮条快捷键」两个独立录入框
-        expect(wrapper.findAll('.hotkey-recorder')).toHaveLength(2)
+        // 快捷键 Tab 包含 1 个单一「全局唤醒快捷键」录入框 + 5 个可编辑常用快捷键录入框（不再展示独立悬浮条快捷键，Esc 保持只读）
+        expect(wrapper.findAll('.hotkey-recorder')).toHaveLength(6)
+        expect(wrapper.find('[data-testid="launcher-hotkey-setting"]').exists()).toBe(false)
+        expect(wrapper.find('[data-testid="common-shortcut-row-back"] .hotkey-recorder').exists()).toBe(false)
         wrapper.unmount()
       } finally {
         window.removeEventListener('keydown', windowKeydownSpy)
@@ -696,18 +693,21 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
       wrapper.unmount()
     })
 
-    it('独立显示悬浮条快捷键：展示默认 Alt+Shift+Space，支持录制保存、冲突拦截、清空与恢复默认，且不影响全局唤醒快捷键', async () => {
+    it('单一全局唤醒快捷键与底层 TriggerService 真实注册态对齐：未生效时展示警告，同步失败时回滚配置与界面', async () => {
+      api.getHotkey.mockResolvedValue('Alt+Space')
       const checkConflictMock = vi.fn().mockResolvedValue({ data: { hasConflict: false, conflicts: [] } })
-      const registerMock = vi.fn().mockResolvedValue({ success: true, data: { triggerId: 'global_launcher_hotkey' } })
-      const unregisterMock = vi.fn().mockResolvedValue({ success: true })
+      const registerMock = vi.fn()
+        .mockRejectedValueOnce(new Error('操作系统拒绝注册'))
+        .mockResolvedValue({ success: true, data: { triggerId: 'global_wake_hotkey' } })
       const listMock = vi.fn().mockResolvedValue([
         {
-          id: 'global_launcher_hotkey',
+          id: 'global_wake_hotkey',
           pluginId: 'system',
           type: 'hotkey',
           enabled: true,
-          config: { key: 'Alt+Shift+Space' },
-          action: { mode: 'builtin', target: 'toggle_launcher', params: {} }
+          effectiveEnabled: false,
+          config: { key: 'Ctrl+Space' },
+          action: { mode: 'builtin', target: 'toggle_main_window', params: {} }
         }
       ])
       window.ztools = {
@@ -718,7 +718,7 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
         trigger: {
           list: listMock,
           register: registerMock,
-          unregister: unregisterMock,
+          unregister: vi.fn().mockResolvedValue({ success: true }),
           checkConflict: checkConflictMock
         }
       }
@@ -727,50 +727,177 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
       await flushPromises()
       await switchTab(wrapper, '快捷键')
 
-      const row = wrapper.find('[data-testid="launcher-hotkey-setting"]')
-      expect(row.exists()).toBe(true)
-      expect(row.text()).toContain('显示悬浮条快捷键')
-      const restoreBtn = wrapper.find('[data-testid="restore-default-launcher-hotkey"]')
-      expect(restoreBtn.attributes('disabled')).toBeDefined()
+      // 1. 不再展示独立悬浮条快捷键，改由「默认呼出形态」与单一全局唤醒快捷键配合
+      expect(wrapper.find('[data-testid="launcher-hotkey-setting"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="wake-preference-setting"]').exists()).toBe(true)
 
-      // 1. 录制与全局唤醒冲突的 Alt+Space 时被拦截，不保存也不修改全局唤醒
-      checkConflictMock.mockResolvedValueOnce({
-        data: { hasConflict: true, conflicts: [{ pluginId: 'system', pluginName: '全局唤醒', triggerId: 'global_wake_hotkey', key: 'Alt+Space' }] }
-      })
-      const recorder = row.find('.hotkey-recorder')
-      const hiddenInput = row.find('input.hotkey-hidden-input')
-      await recorder.trigger('click')
-      await flushPromises()
-      await hiddenInput.trigger('keydown', { key: ' ', code: 'Space', altKey: true })
-      await flushPromises()
-      expect(mocks.error).toHaveBeenCalledWith(expect.stringContaining('全局唤醒'))
-      expect(api.setLauncherHotkey).not.toHaveBeenCalled()
-      expect(api.setHotkey).not.toHaveBeenCalled()
+      // 2. 以 TriggerService 真实键位 Ctrl+Space 对齐展示，且 effectiveEnabled=false 时显式提示未生效
+      expect(wrapper.find('.hotkey-item .hotkey-recorder').text()).toContain('Ctrl')
+      expect(wrapper.find('[data-testid="wake-hotkey-inactive-hint"]').exists()).toBe(true)
 
-      // 2. 录制无冲突快捷键 Ctrl+Alt+L 成功写入 hotkey.launcher 并注册 toggle_launcher
+      // 3. 录制新热键注册失败时，必须回滚界面与 hotkey.global 配置为旧键 Ctrl+Space
+      const recorder = wrapper.find('.hotkey-item .hotkey-recorder')
+      const hiddenInput = wrapper.find('.hotkey-item input.hotkey-hidden-input')
       await recorder.trigger('click')
       await flushPromises()
       await hiddenInput.trigger('keydown', { key: 'l', code: 'KeyL', ctrlKey: true, altKey: true })
       await flushPromises()
-      expect(api.setLauncherHotkey).toHaveBeenCalledWith('Ctrl+Alt+L')
-      expect(api.setHotkey).not.toHaveBeenCalled()
-      expect(registerMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: 'global_launcher_hotkey',
-          config: { key: 'Ctrl+Alt+L' },
-          actionMode: 'builtin',
-          actionTarget: 'toggle_launcher'
-        })
-      )
-      expect(restoreBtn.attributes('disabled')).toBeUndefined()
+      expect(api.setHotkey).toHaveBeenCalledWith('Ctrl+Alt+L')
+      expect(api.setHotkey).toHaveBeenLastCalledWith('Ctrl+Space')
+      expect(mocks.error).toHaveBeenCalled()
+      expect(wrapper.find('[data-testid="wake-hotkey-inactive-hint"]').exists()).toBe(true)
 
-      // 3. 点击恢复默认还原为 Alt+Shift+Space
-      await restoreBtn.trigger('click')
+      // 4. 再次录制有效热键注册成功后，清除未生效警告提示
+      await recorder.trigger('click')
       await flushPromises()
-      expect(api.setLauncherHotkey).toHaveBeenLastCalledWith('Alt+Shift+Space')
-      expect(restoreBtn.attributes('disabled')).toBeDefined()
+      await hiddenInput.trigger('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, altKey: true })
+      await flushPromises()
+      expect(api.setHotkey).toHaveBeenLastCalledWith('Ctrl+Alt+K')
+      expect(wrapper.find('[data-testid="wake-hotkey-inactive-hint"]').exists()).toBe(false)
 
       wrapper.unmount()
+    })
+
+    it('[性能与生命周期] 挂载时只调用一次 trigger.list() 供三方复用，失活期间忽略 ztools-settings-changed 与查询参数变化', async () => {
+      const { KeepAlive, ref } = await import('vue')
+      const listMock = vi.fn().mockResolvedValue([
+        {
+          id: 'plugin_hotkey_demo',
+          pluginId: 'demo',
+          type: 'hotkey',
+          enabled: true,
+          config: { key: 'Alt+D' },
+          action: { mode: 'window', target: 'demo', params: {} }
+        }
+      ])
+      window.ztools = {
+        config: { get: vi.fn().mockResolvedValue(null), set: vi.fn().mockResolvedValue(true) },
+        sys: { getInfo: vi.fn().mockResolvedValue({ platform: 'windows' }) },
+        trigger: { list: listMock }
+      }
+
+      const active = ref(true)
+      const Host = defineComponent({
+        components: { KeepAlive, AdvancedSettings },
+        setup: () => ({ active }),
+        template: '<KeepAlive><AdvancedSettings v-if="active" /></KeepAlive>'
+      })
+      const wrapper = mount(Host, {
+        global: {
+          stubs: {
+            ScreenPermissionPanel: true,
+            PluginHotkeyModal: PluginHotkeyModalStub,
+            PluginFeatureHotkeyModal: PluginFeatureHotkeyModalStub,
+            'a-switch': true,
+            'a-select': true,
+            'a-slider': true
+          }
+        }
+      })
+      try {
+        await flushPromises()
+        // loadTriggerWakePreferences + loadPluginHotkeyCount + loadPluginFeatureHotkeyCount 共享单次 trigger.list()
+        expect(listMock).toHaveBeenCalledTimes(1)
+
+        // 失活期间忽略 ztools-settings-changed 与 route.query 变化
+        active.value = false
+        await flushPromises()
+        api.getHotkey.mockClear()
+        window.dispatchEvent(new Event('ztools-settings-changed'))
+        mocks.routeQuery.openPluginHotkey = 'true'
+        await flushPromises()
+        expect(api.getHotkey).not.toHaveBeenCalled()
+        expect(mocks.pluginHotkeyShow).not.toHaveBeenCalled()
+
+        // 重新激活后恢复刷新与深链消费，且同样只调一次 trigger.list()
+        listMock.mockClear()
+        active.value = true
+        await flushPromises()
+        expect(listMock).toHaveBeenCalledTimes(1)
+        expect(mocks.pluginHotkeyShow).toHaveBeenCalledTimes(1)
+      } finally {
+        wrapper.unmount()
+      }
+    })
+
+    it('常用快捷键：除 Esc 外 5 项均支持录制修改、清空与一键恢复默认，同组冲突被拦截', async () => {
+      _resetShellShortcutsForTesting()
+      const savedConfigs = new Map()
+      const reloadHotkeysMock = vi.fn().mockResolvedValue({ success: true })
+      window.ztools = {
+        sys: {
+          getInfo: vi.fn().mockResolvedValue({ platform: 'windows' }),
+          reloadHotkeys: reloadHotkeysMock
+        },
+        config: {
+          get: vi.fn(async (path, fallback) => (savedConfigs.has(path) ? savedConfigs.get(path) : fallback)),
+          set: vi.fn(async (path, value) => {
+            savedConfigs.set(path, value)
+            return true
+          })
+        },
+        trigger: { list: vi.fn().mockResolvedValue([]) }
+      }
+
+      const wrapper = mountPage({ attachTo: document.body })
+      await flushPromises()
+      await switchTab(wrapper, '快捷键')
+
+      try {
+        // 1. Esc（返回上一级 / 主页）保持只读，无录入框与清空按钮
+        const backRow = wrapper.find('[data-testid="common-shortcut-row-back"]')
+        expect(backRow.find('.hotkey-recorder').exists()).toBe(false)
+        expect(backRow.find('.clear-btn').exists()).toBe(false)
+        expect(backRow.findAll('kbd').map((k) => k.text())).toEqual(['Esc'])
+
+        const restoreBtn = wrapper.find('[data-testid="restore-default-shell-shortcuts"]')
+        expect(restoreBtn.attributes('disabled')).toBeDefined()
+
+        // 2. 聚焦搜索录制为与动作面板冲突的 Ctrl+K：被拦截且值不变
+        const focusRow = wrapper.find('[data-testid="common-shortcut-row-focus-search"]')
+        await focusRow.find('.hotkey-recorder').trigger('click')
+        await flushPromises()
+        await focusRow.find('input.hotkey-hidden-input').trigger('keydown', { key: 'k', code: 'KeyK', ctrlKey: true })
+        await flushPromises()
+        expect(mocks.error).toHaveBeenCalledWith(expect.stringContaining('动作面板'))
+        expect(SHELL_SHORTCUTS.FOCUS_SEARCH).toBe('Ctrl+F')
+
+        // 3. 聚焦搜索修改为 Ctrl+J：写入 user_settings.json 且刷新宿主热键菜单
+        await focusRow.find('.hotkey-recorder').trigger('click')
+        await flushPromises()
+        await focusRow.find('input.hotkey-hidden-input').trigger('keydown', { key: 'j', code: 'KeyJ', ctrlKey: true })
+        await flushPromises()
+        expect(SHELL_SHORTCUTS.FOCUS_SEARCH).toBe('Ctrl+J')
+        expect(focusRow.findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', 'J'])
+        expect(restoreBtn.attributes('disabled')).toBeUndefined()
+        expect(reloadHotkeysMock).toHaveBeenCalled()
+
+        // 4. 点击清空按钮清空「打开设置」快捷键：显示「未设置」且值为空串
+        const settingsRow = wrapper.find('[data-testid="common-shortcut-row-open-settings"]')
+        await settingsRow.find('.clear-btn').trigger('click')
+        await flushPromises()
+        expect(SHELL_SHORTCUTS.OPEN_SETTINGS).toBe('')
+        expect(settingsRow.findAll('kbd')).toHaveLength(0)
+        expect(settingsRow.text()).toContain('未设置')
+
+        // 5. 清空后可以重新录入默认逗号组合 Ctrl+,
+        await settingsRow.find('.hotkey-recorder').trigger('click')
+        await flushPromises()
+        await settingsRow.find('input.hotkey-hidden-input').trigger('keydown', { key: ',', code: 'Comma', ctrlKey: true })
+        await flushPromises()
+        expect(SHELL_SHORTCUTS.OPEN_SETTINGS).toBe('Ctrl+,')
+        expect(settingsRow.findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', ','])
+
+        // 6. 点击「恢复默认」还原全部常用快捷键
+        await restoreBtn.trigger('click')
+        await flushPromises()
+        expect(SHELL_SHORTCUTS.FOCUS_SEARCH).toBe('Ctrl+F')
+        expect(SHELL_SHORTCUTS.OPEN_SETTINGS).toBe('Ctrl+,')
+        expect(restoreBtn.attributes('disabled')).toBeDefined()
+      } finally {
+        wrapper.unmount()
+        _resetShellShortcutsForTesting()
+      }
     })
   })
 })
