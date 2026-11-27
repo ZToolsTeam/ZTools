@@ -372,6 +372,20 @@ type PreloadMethod =
   | 'script_commands_execute'
   | 'script_commands_create'
   | 'script_commands_reload'
+  | 'tool_runtime_capabilities'
+  | 'tool_runtime_ensure'
+  | 'tool_task_cancel'
+  | 'tool_commonlibs_list'
+  | 'tool_commonlibs_clean'
+  | 'tool_media_probe'
+  | 'tool_media_transcode_run'
+  | 'tool_download_stream_probe'
+  | 'tool_download_stream_run'
+  | 'tool_download_transfer_add'
+  | 'tool_download_transfer_pause'
+  | 'tool_download_transfer_resume'
+  | 'tool_download_transfer_cancel'
+  | 'tool_download_transfer_status'
 
 function nextMessageId(): string {
   sequence = (sequence + 1) % Number.MAX_SAFE_INTEGER
@@ -889,7 +903,21 @@ const bridge = Object.freeze({
       script_commands_list: (request: unknown) => invokeMethod('script_commands_list', request),
       script_commands_execute: (request: unknown) => invokeMethod('script_commands_execute', request),
       script_commands_create: (request: unknown) => invokeMethod('script_commands_create', request),
-      script_commands_reload: (request: unknown) => invokeMethod('script_commands_reload', request)
+      script_commands_reload: (request: unknown) => invokeMethod('script_commands_reload', request),
+      tool_runtime_capabilities: (request: unknown) => invokeMethod('tool_runtime_capabilities', request),
+      tool_runtime_ensure: (request: unknown) => invokeMethod('tool_runtime_ensure', request),
+      tool_task_cancel: (request: unknown) => invokeMethod('tool_task_cancel', request),
+      tool_commonlibs_list: (request: unknown) => invokeMethod('tool_commonlibs_list', request),
+      tool_commonlibs_clean: (request: unknown) => invokeMethod('tool_commonlibs_clean', request),
+      tool_media_probe: (request: unknown) => invokeMethod('tool_media_probe', request),
+      tool_media_transcode_run: (request: unknown) => invokeMethod('tool_media_transcode_run', request),
+      tool_download_stream_probe: (request: unknown) => invokeMethod('tool_download_stream_probe', request),
+      tool_download_stream_run: (request: unknown) => invokeMethod('tool_download_stream_run', request),
+      tool_download_transfer_add: (request: unknown) => invokeMethod('tool_download_transfer_add', request),
+      tool_download_transfer_pause: (request: unknown) => invokeMethod('tool_download_transfer_pause', request),
+      tool_download_transfer_resume: (request: unknown) => invokeMethod('tool_download_transfer_resume', request),
+      tool_download_transfer_cancel: (request: unknown) => invokeMethod('tool_download_transfer_cancel', request),
+      tool_download_transfer_status: (request: unknown) => invokeMethod('tool_download_transfer_status', request)
     }, referenceTransport?.methods ?? {})),
     ...(Object.keys(cancellations).length ? { cancellations } : {}),
     setMessageCallback: (callback: unknown) => {

@@ -110,18 +110,22 @@ export function buildSidecar(name, sourceDir, options = {}) {
   return { name, exePath, sha256 }
 }
 
-export function buildMacosIndexerSidecar(sourceDir = path.join(nativeDir, 'ztools-indexer')) {
-  const macBinDir = path.join(rootDir, 'out', 'native', `darwin-${process.arch}`, 'bin')
+export function buildMacosIndexerSidecar(sourceDir = path.join(nativeDir, 'ztools-indexer'), options = {}) {
+  const universal = options.universal === true
+  const minimumOs = typeof options.minimumOs === 'string' && options.minimumOs.trim() ? options.minimumOs.trim() : '12.0'
+  const macBinDir = options.outputDir || path.join(rootDir, 'out', 'native', universal ? 'darwin-universal' : `darwin-${process.arch}`, 'bin')
   fs.mkdirSync(macBinDir, { recursive: true })
   const outBinary = path.join(macBinDir, 'ztools-indexer')
   const mainCpp = path.join(sourceDir, 'main.cpp')
   const sharedDir = path.join(nativeDir, 'shared')
 
-  console.log('[build-sidecars] Building ztools-indexer for macOS (clang++)...')
+  const archArgs = universal ? ['-arch', 'arm64', '-arch', 'x86_64', `-mmacosx-version-min=${minimumOs}`] : []
+  console.log(`[build-sidecars] Building ztools-indexer for macOS (${universal ? 'universal arm64+x86_64' : process.arch})...`)
   const buildRes = spawnSync('clang++', [
     '-std=c++20',
     '-O3',
     '-pthread',
+    ...archArgs,
     '-I', sourceDir,
     '-I', sharedDir,
     mainCpp,
@@ -140,7 +144,7 @@ export function buildMacosIndexerSidecar(sourceDir = path.join(nativeDir, 'ztool
   fs.chmodSync(outBinary, 0o755)
   const sha256 = createHash('sha256').update(fs.readFileSync(outBinary)).digest('hex')
   console.log(`[build-sidecars] Successfully built ztools-indexer (${sha256.slice(0, 12)}...)`)
-  return { name: 'ztools-indexer', exePath: outBinary, sha256 }
+  return { name: 'ztools-indexer', exePath: outBinary, executable: outBinary, sha256 }
 }
 
 function computeSidecarSourceSignature(sourceFiles) {
@@ -163,7 +167,16 @@ function getWindowsSidecarSpecs() {
   const uiaccessSources = ['CMakeLists.txt', 'main.cpp', 'uiaccess_worker.hpp', 'app.manifest', 'uiaccess.rc']
     .map(file => path.join(uiaccessDir, file))
     .concat(sharedRpc)
-  const indexerSources = ['CMakeLists.txt', 'main.cpp', 'file_scanner.hpp', 'flat_trie.hpp', 'pinyin.hpp']
+  const indexerSources = [
+    'CMakeLists.txt',
+    'main.cpp',
+    'file_scanner.hpp',
+    'flat_trie.hpp',
+    'index_cache.hpp',
+    'pinyin.hpp',
+    'pinyin_table.hpp',
+    'query_engine.hpp'
+  ]
     .map(file => path.join(indexerDir, file))
     .concat(sharedRpc)
 

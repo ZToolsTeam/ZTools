@@ -408,7 +408,22 @@ export const methodCapabilities = {
   script_commands_list: ['main', 'plugin'],
   script_commands_execute: ['main', 'plugin'],
   script_commands_create: ['main', 'plugin'],
-  script_commands_reload: ['main', 'plugin']
+  script_commands_reload: ['main', 'plugin'],
+  // 第三方引擎工具池与主进程薄原语（14 个统一契约接口）
+  tool_runtime_capabilities: ['main', 'plugin'],
+  tool_runtime_ensure: ['main', 'plugin'],
+  tool_task_cancel: ['main', 'plugin'],
+  tool_commonlibs_list: ['main'],
+  tool_commonlibs_clean: ['main'],
+  tool_media_probe: ['main', 'plugin'],
+  tool_media_transcode_run: ['main', 'plugin'],
+  tool_download_stream_probe: ['main', 'plugin'],
+  tool_download_stream_run: ['main', 'plugin'],
+  tool_download_transfer_add: ['main', 'plugin'],
+  tool_download_transfer_pause: ['main', 'plugin'],
+  tool_download_transfer_resume: ['main', 'plugin'],
+  tool_download_transfer_cancel: ['main', 'plugin'],
+  tool_download_transfer_status: ['main', 'plugin']
 } as const satisfies Record<string, readonly CallerType[]>
 
 export type AllowedMethod = keyof typeof methodCapabilities
@@ -527,7 +542,33 @@ export const PRIVILEGED_METHODS = new Set<AllowedMethod>([
 
   // 7. 运行时授权管理
   'runtime_capability_grants_list',
-  'runtime_capability_grant_revoke'
+  'runtime_capability_grant_revoke',
+
+  // 8. 本机高危命令、脚本与包管理器执行
+  'windows_run_execute',
+  'script_commands_execute',
+  'script_commands_create',
+  'brew_exec',
+
+  // 9. 第三方公共引擎工具池管理（仅主窗口特权可调用）
+  'tool_commonlibs_list',
+  'tool_commonlibs_clean'
+])
+
+/**
+ * 主窗口内带有效会话归属的声明式插件允许调用的只读系统/硬件监控方法集合。
+ * 说明：hardware-info、disk-analyzer、boost、cleaner、process-monitor、multi-download 等
+ * 官方声明式插件在主窗口中运行（带 attributedPlugin）并读取上述只读硬件/卷信息；
+ * 独立第三方插件窗口（caller.type === 'plugin'）以及失效插件会话（stalePluginSession）仍一律拦截。
+ */
+export const DECLARATIVE_SESSION_READONLY_SYSTEM_METHODS = new Set<AllowedMethod>([
+  'system_get_hardware_summary',
+  'system_get_cpu_usage',
+  'system_get_memory_usage',
+  'system_list_volumes',
+  'system_get_disk_usage',
+  'system_get_network_stats',
+  'system_get_battery_status'
 ])
 
 export function isPrivilegedMethod(method: AllowedMethod): boolean {

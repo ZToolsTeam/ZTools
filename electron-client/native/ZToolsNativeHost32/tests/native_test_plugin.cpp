@@ -4,7 +4,9 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
+#include <iostream>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -138,6 +140,35 @@ extern "C" __declspec(dllexport) PluginError __cdecl DllPlugin_Call(
   char** result) {
   if (!g_initialized.load(std::memory_order_acquire)) return PluginError::NotLoaded;
   if (function_name == nullptr || result == nullptr) return PluginError::InvalidParams;
+  if (std::strcmp(function_name, "noisy_stdout") == 0) {
+    // 构造超过 8KB 的模拟污染日志（首字节含 "[SchedulerLoop]"，小端解析即非法帧长 1751339867）
+    const std::string line =
+      "[SchedulerLoop] simulated third-party DLL stdout noise payload 0123456789abcdef\n";
+    std::string chunk;
+    chunk.reserve(4096);
+    while (chunk.size() < 3200) {
+      chunk += line;
+    }
+
+    // 覆盖静态 CRT printf、C++ std::cout 及直接 Win32 WriteFile(STD_OUTPUT_HANDLE) 三条输出路径
+    std::printf("%s", chunk.c_str());
+    std::fflush(stdout);
+    std::cout << chunk << std::flush;
+    const HANDLE std_out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (std_out != nullptr && std_out != INVALID_HANDLE_VALUE) {
+      DWORD written = 0;
+      (void)WriteFile(
+        std_out,
+        chunk.data(),
+        static_cast<DWORD>(chunk.size()),
+        &written,
+        nullptr);
+    }
+
+    return AllocateResult("{\"ok\":true,\"method\":\"noisy_stdout\"}", result)
+      ? PluginError::Success
+      : PluginError::InternalError;
+  }
   if (std::strcmp(function_name, "spawnJobChild") == 0) {
     DWORD process_id = 0;
     if (!SpawnJobChild(process_id)) return PluginError::InternalError;

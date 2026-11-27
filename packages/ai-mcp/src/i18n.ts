@@ -66,7 +66,16 @@ export type AiMcpMessageKey =
   | 'extTools.confirmationHandlerMissing'
   | 'extTools.cannotEnableRevoked'
   | 'extTools.defaultRevokedPolicy'
-  | 'extTools.defaultRevokedSecurityPolicy';
+  | 'extTools.defaultRevokedSecurityPolicy'
+  // security/url-guard.ts
+  | 'security.invalidUrl'
+  | 'security.credentialsInUrlNotAllowed'
+  | 'security.protocolNotAllowed'
+  | 'security.blockedMetadataOrLinkLocal'
+  | 'security.privateNetworkNotAllowed'
+  | 'security.loopbackRequired'
+  | 'security.loopbackProtocolNotAllowed'
+  | 'security.crossOriginRedirectBlocked';
 
 export type AiMcpErrorCode = AiMcpMessageKey;
 
@@ -146,7 +155,16 @@ export const AI_MCP_MESSAGES: Record<AiMcpLocale, Record<AiMcpMessageKey, string
     'extTools.confirmationHandlerMissing': 'Tool "{toolName}" requires confirmation, but no confirmation handler is available',
     'extTools.cannotEnableRevoked': 'Cannot enable revoked extension "{id}": {reason}',
     'extTools.defaultRevokedPolicy': 'revoked by policy',
-    'extTools.defaultRevokedSecurityPolicy': 'Revoked by security policy'
+    'extTools.defaultRevokedSecurityPolicy': 'Revoked by security policy',
+
+    'security.invalidUrl': 'Invalid service URL: "{url}"',
+    'security.credentialsInUrlNotAllowed': 'URL must not contain embedded credentials: "{url}"',
+    'security.protocolNotAllowed': 'URL protocol "{protocol}" is not allowed for host "{host}"; use HTTPS (HTTP is only allowed for loopback hosts)',
+    'security.blockedMetadataOrLinkLocal': 'Access to link-local, unspecified, or cloud metadata address "{host}" is blocked',
+    'security.privateNetworkNotAllowed': 'Access to private network host "{host}" is blocked by default; set allowPrivateNetwork: true to allow explicitly',
+    'security.loopbackRequired': 'Local provider URL must target a loopback host (127.0.0.1, localhost, or [::1]), received "{host}"',
+    'security.loopbackProtocolNotAllowed': 'Local loopback URL must use http: or https:, received "{protocol}"',
+    'security.crossOriginRedirectBlocked': 'Endpoint URL "{endpoint}" violates same-origin policy for "{origin}"'
   },
   'zh-CN': {
     'prompt.emptyName': '模板名称不能为空',
@@ -214,7 +232,16 @@ export const AI_MCP_MESSAGES: Record<AiMcpLocale, Record<AiMcpMessageKey, string
     'extTools.confirmationHandlerMissing': '工具 "{toolName}" 需要二次确认，但当前未提供确认处理器',
     'extTools.cannotEnableRevoked': '无法启用已下架封禁的扩展 "{id}": {reason}',
     'extTools.defaultRevokedPolicy': '已被策略下架',
-    'extTools.defaultRevokedSecurityPolicy': '因安全策略已被下架封禁'
+    'extTools.defaultRevokedSecurityPolicy': '因安全策略已被下架封禁',
+
+    'security.invalidUrl': '无效的服务 URL: "{url}"',
+    'security.credentialsInUrlNotAllowed': 'URL 中禁止内嵌用户名或密码凭据: "{url}"',
+    'security.protocolNotAllowed': '主机 "{host}" 不允许使用协议 "{protocol}"，请使用 HTTPS（仅回环主机允许使用 HTTP）',
+    'security.blockedMetadataOrLinkLocal': '已拦截对链路本地、未指定或云元数据地址 "{host}" 的访问',
+    'security.privateNetworkNotAllowed': '默认拒绝访问私有内网主机 "{host}"；如需放行请显式设置 allowPrivateNetwork: true',
+    'security.loopbackRequired': '本地模型嗅探仅允许回环主机（127.0.0.1、localhost 或 [::1]），当前主机为 "{host}"',
+    'security.loopbackProtocolNotAllowed': '本地回环 URL 仅允许使用 http: 或 https: 协议，当前为 "{protocol}"',
+    'security.crossOriginRedirectBlocked': '端点地址 "{endpoint}" 与基准源 "{origin}" 不同源，已被拦截'
   }
 };
 

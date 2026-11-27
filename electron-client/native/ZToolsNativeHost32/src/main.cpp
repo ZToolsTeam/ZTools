@@ -6,9 +6,11 @@
 #include "protocol.hpp"
 
 #include <Windows.h>
+#include <io.h>
 
 #include <array>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdint>
 #include <deque>
 #include <iostream>
@@ -126,6 +128,137 @@ class FrameWriter {
  private:
   HANDLE output_;
   std::mutex mutex_;
+};
+
+// 协议输出管道隔离守卫：复制专用不可继承写句柄，并将进程默认标准输出与 CRT stdout 解绑重定向
+class ProtocolOutputIsolation final {
+ public:
+  ProtocolOutputIsolation() = default;
+  ProtocolOutputIsolation(const ProtocolOutputIsolation&) = delete;
+  ProtocolOutputIsolation& operator=(const ProtocolOutputIsolation&) = delete;
+
+  ~ProtocolOutputIsolation() {
+    Close();
+  }
+
+  bool Initialize(HANDLE raw_output, DWORD& error) noexcept {
+    Close();
+    if (raw_output == nullptr || raw_output == INVALID_HANDLE_VALUE) {
+      error = ERROR_INVALID_HANDLE;
+      return false;
+    }
+
+    // 复制一份不可继承的专用协议输出句柄，避免子进程或已加载 DLL 获取协议管道写端
+    HANDLE duplicated = nullptr;
+    if (!DuplicateHandle(
+          GetCurrentProcess(),
+          raw_output,
+          GetCurrentProcess(),
+          &duplicated,
+          0,
+          FALSE,
+          DUPLICATE_SAME_ACCESS) ||
+        duplicated == nullptr || duplicated == INVALID_HANDLE_VALUE) {
+      error = GetLastError();
+      return false;
+    }
+    protocol_output_ = duplicated;
+
+    // 切换前先刷新宿主输出缓冲，并记录宿主 CRT stdout 初始绑定的底层 OS 句柄
+    std::fflush(stdout);
+    std::cout.flush();
+    const int stdout_fd = _fileno(stdout);
+    const intptr_t initial_crt_stdout_handle = stdout_fd >= 0 ? _get_osfhandle(stdout_fd) : -1;
+    const bool crt_owns_raw_output =
+      initial_crt_stdout_handle == reinterpret_cast<intptr_t>(raw_output);
+
+    // 准备安全重定向目标：优先使用独立于协议管道的 STD_ERROR_HANDLE，否则回退到 NUL 设备
+    const HANDLE raw_stderr = GetStdHandle(STD_ERROR_HANDLE);
+    const bool has_distinct_stderr =
+      raw_stderr != nullptr &&
+      raw_stderr != INVALID_HANDLE_VALUE &&
+      raw_stderr != raw_output;
+
+    HANDLE redirect_handle = INVALID_HANDLE_VALUE;
+    bool crt_stdout_rebound = false;
+
+    if (has_distinct_stderr && stdout_fd >= 0) {
+      const int stderr_fd = _fileno(stderr);
+      const intptr_t crt_stderr_handle = stderr_fd >= 0 ? _get_osfhandle(stderr_fd) : -1;
+      if (crt_stderr_handle != -1 && crt_stderr_handle != -2 && _dup2(stderr_fd, stdout_fd) == 0) {
+        crt_stdout_rebound = true;
+        // 优先使用 _dup2 复制出的独立 stderr 句柄作为 STD_OUTPUT_HANDLE，避免卸载 DLL 时误伤宿主 stderr
+        const intptr_t rebound_stdout_handle = _get_osfhandle(stdout_fd);
+        if (rebound_stdout_handle != -1 && rebound_stdout_handle != -2) {
+          redirect_handle = reinterpret_cast<HANDLE>(rebound_stdout_handle);
+        } else {
+          redirect_handle = raw_stderr;
+        }
+      }
+    }
+
+    if (!crt_stdout_rebound) {
+      FILE* redirected_stream = nullptr;
+      if (freopen_s(&redirected_stream, "NUL", "w", stdout) == 0 && redirected_stream != nullptr) {
+        crt_stdout_rebound = true;
+      }
+      if (has_distinct_stderr) {
+        redirect_handle = raw_stderr;
+      } else {
+        nul_handle_ = CreateFileW(
+          L"NUL",
+          GENERIC_WRITE,
+          FILE_SHARE_READ | FILE_SHARE_WRITE,
+          nullptr,
+          OPEN_EXISTING,
+          FILE_ATTRIBUTE_NORMAL,
+          nullptr);
+        if (nul_handle_ == nullptr || nul_handle_ == INVALID_HANDLE_VALUE) {
+          error = GetLastError();
+          nul_handle_ = nullptr;
+          Close();
+          return false;
+        }
+        redirect_handle = nul_handle_;
+      }
+    }
+
+    // 清除 C++ 标准输出流状态标志，避免重定向前后残留异常状态
+    std::cout.clear();
+
+    // 显式更新进程 STD_OUTPUT_HANDLE，确保后续 LoadLibrary 加载的任意 /MT 静态 CRT DLL
+    // 初始化 _iob[1] 或直接调用 GetStdHandle(STD_OUTPUT_HANDLE) 时均指向安全目标
+    if (!SetStdHandle(STD_OUTPUT_HANDLE, redirect_handle)) {
+      error = GetLastError();
+      Close();
+      return false;
+    }
+
+    // 仅在 CRT 未通过 _dup2/freopen_s 关闭原 raw_output 时显式关闭，杜绝重复 CloseHandle
+    if ((!crt_owns_raw_output || !crt_stdout_rebound) && raw_output != redirect_handle) {
+      CloseHandle(raw_output);
+    }
+
+    error = ERROR_SUCCESS;
+    return true;
+  }
+
+  HANDLE Get() const noexcept { return protocol_output_; }
+
+ private:
+  void Close() noexcept {
+    if (protocol_output_ != nullptr && protocol_output_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(protocol_output_);
+      protocol_output_ = nullptr;
+    }
+    if (nul_handle_ != nullptr && nul_handle_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(nul_handle_);
+      nul_handle_ = nullptr;
+    }
+  }
+
+  HANDLE protocol_output_ = nullptr;
+  HANDLE nul_handle_ = nullptr;
 };
 
 // 异步事件发送器：用有界队列与独立工作线程解耦低级钩子回调与同步管道 I/O，防止触发 LowLevelHooksTimeout
@@ -729,12 +862,20 @@ int wmain() {
     return 9;
   }
   const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
-  const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+  const HANDLE raw_output = GetStdHandle(STD_OUTPUT_HANDLE);
   if (input == nullptr || input == INVALID_HANDLE_VALUE ||
-      output == nullptr || output == INVALID_HANDLE_VALUE) {
+      raw_output == nullptr || raw_output == INVALID_HANDLE_VALUE) {
     return 10;
   }
-  FrameWriter writer(output);
+  // 隔离协议输出管道并先于 FrameWriter/AsyncEventSender 声明，确保全部写操作完成后再关闭句柄
+  ProtocolOutputIsolation protocol_output;
+  DWORD isolation_error = ERROR_SUCCESS;
+  if (!protocol_output.Initialize(raw_output, isolation_error)) {
+    std::cerr << "NativeHost32 stdout protocol isolation failed, Win32 error "
+      << isolation_error << '\n';
+    return 10;
+  }
+  FrameWriter writer(protocol_output.Get());
   AsyncEventSender event_sender(writer);
 
   std::array<std::uint8_t, kSecretBytes> secret{};

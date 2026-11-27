@@ -1,9 +1,34 @@
 import crypto from 'node:crypto'
 import { tSync } from '../i18n.js'
 
+/**
+ * RFC 9106 推荐的 Argon2id 生产默认内存开销（65536 KiB = 64 MiB）
+ */
+export const DEFAULT_ARGON2_MEMORY_COST = 65536
+
+/**
+ * Node.js 原生 crypto.argon2Sync 函数签名（若当前运行时提供则优先使用）
+ */
+type NativeArgon2SyncFn = (
+  algorithm: 'argon2id',
+  parameters: {
+    message: Buffer
+    nonce: Buffer
+    parallelism: number
+    tagLength: number
+    memory: number
+    passes: number
+  }
+) => Buffer
+
+function getNativeArgon2Sync(): NativeArgon2SyncFn | undefined {
+  const candidate = (crypto as unknown as { argon2Sync?: unknown }).argon2Sync
+  return typeof candidate === 'function' ? (candidate as NativeArgon2SyncFn) : undefined
+}
+
 export interface Argon2idOptions {
   /**
-   * 内存开销（以 KiB 为单位，RFC 9106 建议生产环境 >= 65536 即 64MB，测试可设为 64 或 256）
+   * 内存开销（以 KiB 为单位，RFC 9106 建议生产环境 >= 65536 即 64MiB，测试可设为 64 或 256）
    */
   memoryCost?: number
   /**
@@ -112,35 +137,55 @@ function permuteP(block: BigUint64Array): void {
 
 /**
  * RFC 9106 Section 3.2: 任意长度 Blake2b 派生函数 H'^(outlen)(A)
+ * 内部临时缓冲区在返回前统一清零，避免敏感摘要残留在堆内存中
  */
 function blake2bLong(outlen: number, input: Buffer): Buffer {
-  if (outlen <= 64) {
-    const header = Buffer.alloc(4)
-    header.writeUInt32LE(outlen, 0)
-    const hash = crypto.createHash('blake2b512')
-    hash.update(header)
-    hash.update(input)
-    return hash.digest().subarray(0, outlen)
-  }
-
-  const r = Math.ceil(outlen / 32) - 2
   const header = Buffer.alloc(4)
   header.writeUInt32LE(outlen, 0)
 
-  let cur = crypto.createHash('blake2b512').update(header).update(input).digest()
-  const out = Buffer.alloc(outlen)
-  cur.copy(out, 0, 0, 32)
-  let outPos = 32
-
-  for (let i = 2; i <= r; i++) {
-    cur = crypto.createHash('blake2b512').update(cur).digest()
-    cur.copy(out, outPos, 0, 32)
-    outPos += 32
+  if (outlen <= 64) {
+    let digest: Buffer | undefined
+    try {
+      const hash = crypto.createHash('blake2b512')
+      hash.update(header)
+      hash.update(input)
+      digest = hash.digest()
+      // 拷贝到独立输出缓冲，确保可在 finally 中安全清零完整 digest
+      return Buffer.from(digest.subarray(0, outlen))
+    } finally {
+      header.fill(0)
+      digest?.fill(0)
+    }
   }
 
-  cur = crypto.createHash('blake2b512').update(cur).digest()
-  cur.copy(out, outPos, 0, outlen - outPos)
-  return out
+  const r = Math.ceil(outlen / 32) - 2
+  const out = Buffer.alloc(outlen)
+  let cur: Buffer | undefined
+
+  try {
+    let active: Buffer = crypto.createHash('blake2b512').update(header).update(input).digest()
+    cur = active
+    active.copy(out, 0, 0, 32)
+    let outPos = 32
+
+    for (let i = 2; i <= r; i++) {
+      const next: Buffer = crypto.createHash('blake2b512').update(active).digest()
+      active.fill(0)
+      active = next
+      cur = active
+      active.copy(out, outPos, 0, 32)
+      outPos += 32
+    }
+
+    const last: Buffer = crypto.createHash('blake2b512').update(active).digest()
+    active.fill(0)
+    cur = last
+    last.copy(out, outPos, 0, outlen - outPos)
+    return out
+  } finally {
+    header.fill(0)
+    cur?.fill(0)
+  }
 }
 
 /**
@@ -154,129 +199,176 @@ export function argon2id(
 ): Buffer {
   const p = options.parallelism ?? 1
   const T = options.outputLength ?? 32
-  const m = Math.max(8 * p, options.memoryCost ?? 64) // blocks
+  const m = Math.max(8 * p, options.memoryCost ?? DEFAULT_ARGON2_MEMORY_COST) // blocks (KiB)
   const t = Math.max(1, options.timeCost ?? 3)
   const y = 2 // Argon2id = 2
 
-  const pwdBuf = Buffer.isBuffer(password) ? password : Buffer.from(password, 'utf8')
-  const saltBuf = Buffer.isBuffer(salt) ? salt : Buffer.from(salt, 'utf8')
+  // 仅对内部新建的 Buffer 执行清零，绝不修改调用方直接传入的外部 Buffer
+  const ownsPwdBuf = !Buffer.isBuffer(password)
+  const ownsSaltBuf = !Buffer.isBuffer(salt)
+  const pwdBuf = ownsPwdBuf ? Buffer.from(password, 'utf8') : password
+  const saltBuf = ownsSaltBuf ? Buffer.from(salt, 'utf8') : salt
 
-  if (saltBuf.length < 8) {
-    throw new Error(tSync('argon2.saltTooShort', undefined, options.locale))
-  }
+  let h0Stream: Buffer | undefined
+  let h0: Buffer | undefined
+  let memory: BigUint64Array[] | undefined
+  let initInput: Buffer | undefined
+  let r: BigUint64Array | undefined
+  let z: BigUint64Array | undefined
+  let finalBlock: BigUint64Array | undefined
+  let finalBytes: Buffer | undefined
 
-  // 1. 计算初始哈希 H_0 = BLAKE2b-512(p, T, m, t, v=0x13, y=2, len(P), P, len(S), S, ...)
-  const h0Stream = Buffer.alloc(10 * 4 + pwdBuf.length + saltBuf.length)
-  let offset = 0
-  h0Stream.writeUInt32LE(p, offset); offset += 4
-  h0Stream.writeUInt32LE(T, offset); offset += 4
-  h0Stream.writeUInt32LE(m, offset); offset += 4
-  h0Stream.writeUInt32LE(t, offset); offset += 4
-  h0Stream.writeUInt32LE(0x13, offset); offset += 4 // version
-  h0Stream.writeUInt32LE(y, offset); offset += 4 // Argon2id
-  h0Stream.writeUInt32LE(pwdBuf.length, offset); offset += 4
-  pwdBuf.copy(h0Stream, offset); offset += pwdBuf.length
-  h0Stream.writeUInt32LE(saltBuf.length, offset); offset += 4
-  saltBuf.copy(h0Stream, offset); offset += saltBuf.length
-  h0Stream.writeUInt32LE(0, offset); offset += 4 // key length
-  h0Stream.writeUInt32LE(0, offset); offset += 4 // extra data length
+  try {
+    if (saltBuf.length < 8) {
+      throw new Error(tSync('argon2.saltTooShort', undefined, options.locale))
+    }
 
-  const h0 = crypto.createHash('blake2b512').update(h0Stream).digest()
+    // 若运行时提供原生 crypto.argon2Sync 则优先使用以获得更高性能
+    const nativeArgon2Sync = getNativeArgon2Sync()
+    if (nativeArgon2Sync) {
+      return nativeArgon2Sync('argon2id', {
+        message: pwdBuf,
+        nonce: saltBuf,
+        parallelism: p,
+        tagLength: T,
+        memory: m,
+        passes: t
+      })
+    }
 
-  // 2. 初始化内存矩阵，大小为 m 个 1024 字节区块
-  const q = Math.floor(m / p)
-  const memory: BigUint64Array[] = new Array(m)
-  for (let i = 0; i < m; i++) {
-    memory[i] = new BigUint64Array(128) // 128 * 8 bytes = 1024 bytes
-  }
+    // 1. 计算初始哈希 H_0 = BLAKE2b-512(p, T, m, t, v=0x13, y=2, len(P), P, len(S), S, ...)
+    h0Stream = Buffer.alloc(10 * 4 + pwdBuf.length + saltBuf.length)
+    let offset = 0
+    h0Stream.writeUInt32LE(p, offset); offset += 4
+    h0Stream.writeUInt32LE(T, offset); offset += 4
+    h0Stream.writeUInt32LE(m, offset); offset += 4
+    h0Stream.writeUInt32LE(t, offset); offset += 4
+    h0Stream.writeUInt32LE(0x13, offset); offset += 4 // version
+    h0Stream.writeUInt32LE(y, offset); offset += 4 // Argon2id
+    h0Stream.writeUInt32LE(pwdBuf.length, offset); offset += 4
+    pwdBuf.copy(h0Stream, offset); offset += pwdBuf.length
+    h0Stream.writeUInt32LE(saltBuf.length, offset); offset += 4
+    saltBuf.copy(h0Stream, offset); offset += saltBuf.length
+    h0Stream.writeUInt32LE(0, offset); offset += 4 // key length
+    h0Stream.writeUInt32LE(0, offset); offset += 4 // extra data length
 
-  // 生成初始两个区块 B[i][0] 与 B[i][1]
-  const initInput = Buffer.alloc(72)
-  h0.copy(initInput, 0, 0, 64)
-  for (let lane = 0; lane < p; lane++) {
-    for (let col = 0; col < 2; col++) {
-      initInput.writeUInt32LE(col, 64)
-      initInput.writeUInt32LE(lane, 68)
-      const blockBytes = blake2bLong(1024, initInput)
-      const u64 = memory[lane * q + col]!
-      for (let w = 0; w < 128; w++) {
-        u64[w] = blockBytes.readBigUInt64LE(w * 8)
+    h0 = crypto.createHash('blake2b512').update(h0Stream).digest()
+
+    // 2. 初始化内存矩阵，大小为 m 个 1024 字节区块
+    const q = Math.floor(m / p)
+    memory = new Array<BigUint64Array>(m)
+    for (let i = 0; i < m; i++) {
+      memory[i] = new BigUint64Array(128) // 128 * 8 bytes = 1024 bytes
+    }
+
+    // 生成初始两个区块 B[i][0] 与 B[i][1]
+    initInput = Buffer.alloc(72)
+    h0.copy(initInput, 0, 0, 64)
+    for (let lane = 0; lane < p; lane++) {
+      for (let col = 0; col < 2; col++) {
+        initInput.writeUInt32LE(col, 64)
+        initInput.writeUInt32LE(lane, 68)
+        const blockBytes = blake2bLong(1024, initInput)
+        try {
+          const u64 = memory[lane * q + col]!
+          for (let w = 0; w < 128; w++) {
+            u64[w] = blockBytes.readBigUInt64LE(w * 8)
+          }
+        } finally {
+          blockBytes.fill(0)
+        }
       }
     }
-  }
 
-  // 3. 迭代计算核心段 (Passes & Slices)
-  for (let pass = 0; pass < t; pass++) {
-    for (let slice = 0; slice < 4; slice++) {
-      for (let lane = 0; lane < p; lane++) {
-        const startCol = pass === 0 && slice === 0 ? 2 : Math.floor((slice * q) / 4)
-        const endCol = Math.floor(((slice + 1) * q) / 4)
+    // 3. 迭代计算核心段 (Passes & Slices)，复用临时块 r/z 降低循环 GC 开销
+    r = new BigUint64Array(128)
+    z = new BigUint64Array(128)
+    for (let pass = 0; pass < t; pass++) {
+      for (let slice = 0; slice < 4; slice++) {
+        for (let lane = 0; lane < p; lane++) {
+          const startCol = pass === 0 && slice === 0 ? 2 : Math.floor((slice * q) / 4)
+          const endCol = Math.floor(((slice + 1) * q) / 4)
 
-        for (let col = startCol; col < endCol; col++) {
-          const currIdx = lane * q + col
-          const prevIdx = col === 0 ? lane * q + (q - 1) : lane * q + (col - 1)
+          for (let col = startCol; col < endCol; col++) {
+            const currIdx = lane * q + col
+            const prevIdx = col === 0 ? lane * q + (q - 1) : lane * q + (col - 1)
 
-          // Argon2id 索引规则：pass 0 的前两切片为数据无关寻址，其余为数据依赖寻址
-          const isDataIndependent = pass === 0 && slice < 2
-          const referenceAreaSize = Math.max(1, pass === 0 ? col - 1 : q - 2)
-          let j1: bigint
-          if (isDataIndependent) {
-            // Pseudo-random address generation
-            j1 = (BigInt(pass) * 1048576n + BigInt(slice) * 262144n + BigInt(col) * 1024n + 0x9e3779b9n) & 0xffffffffn
-          } else {
-            j1 = memory[prevIdx]![0]! & 0xffffffffn
-          }
-          const x = (j1 * j1) >> 32n
-          const y = (BigInt(referenceAreaSize) * x) >> 32n
-          const relPos = BigInt(referenceAreaSize) - 1n - y
-          const refCol = pass === 0 ? Number(relPos) : (col + 1 + Number(relPos)) % q
+            // Argon2id 索引规则：pass 0 的前两切片为数据无关寻址，其余为数据依赖寻址
+            const isDataIndependent = pass === 0 && slice < 2
+            const referenceAreaSize = Math.max(1, pass === 0 ? col - 1 : q - 2)
+            let j1: bigint
+            if (isDataIndependent) {
+              // 伪随机地址生成
+              j1 = (BigInt(pass) * 1048576n + BigInt(slice) * 262144n + BigInt(col) * 1024n + 0x9e3779b9n) & 0xffffffffn
+            } else {
+              j1 = memory[prevIdx]![0]! & 0xffffffffn
+            }
+            const x = (j1 * j1) >> 32n
+            const yVal = (BigInt(referenceAreaSize) * x) >> 32n
+            const relPos = BigInt(referenceAreaSize) - 1n - yVal
+            const refCol = pass === 0 ? Number(relPos) : (col + 1 + Number(relPos)) % q
 
-          const refIdx = lane * q + refCol
-          const curBlock = memory[currIdx]!
-          const prevBlock = memory[prevIdx]!
-          const refBlock = memory[refIdx]!
+            const refIdx = lane * q + refCol
+            const curBlock = memory[currIdx]!
+            const prevBlock = memory[prevIdx]!
+            const refBlock = memory[refIdx]!
 
-          // R = prevBlock ^ refBlock
-          const r = new BigUint64Array(128)
-          const z = new BigUint64Array(128)
-          for (let w = 0; w < 128; w++) {
-            const xorVal = prevBlock[w]! ^ refBlock[w]!
-            r[w] = xorVal
-            z[w] = xorVal
-          }
+            // R = prevBlock ^ refBlock
+            for (let w = 0; w < 128; w++) {
+              const xorVal = prevBlock[w]! ^ refBlock[w]!
+              r[w] = xorVal
+              z[w] = xorVal
+            }
 
-          // G 混淆: Z = P(R), G(X, Y) = Z ^ R
-          permuteP(z)
+            // G 混淆: Z = P(R), G(X, Y) = Z ^ R
+            permuteP(z)
 
-          // 结果累加
-          for (let w = 0; w < 128; w++) {
-            curBlock[w] = (pass > 0 ? curBlock[w]! : 0n) ^ z[w]! ^ r[w]!
+            // 结果累加
+            for (let w = 0; w < 128; w++) {
+              curBlock[w] = (pass > 0 ? curBlock[w]! : 0n) ^ z[w]! ^ r[w]!
+            }
           }
         }
       }
     }
-  }
 
-  // 4. 尾区块异或与输出
-  const finalBlock = new BigUint64Array(128)
-  for (let lane = 0; lane < p; lane++) {
-    const lastCol = memory[lane * q + (q - 1)]!
-    for (let w = 0; w < 128; w++) {
-      finalBlock[w] = finalBlock[w]! ^ lastCol[w]!
+    // 4. 尾区块异或与输出
+    finalBlock = new BigUint64Array(128)
+    for (let lane = 0; lane < p; lane++) {
+      const lastCol = memory[lane * q + (q - 1)]!
+      for (let w = 0; w < 128; w++) {
+        finalBlock[w] = finalBlock[w]! ^ lastCol[w]!
+      }
     }
-  }
 
-  const finalBytes = Buffer.alloc(1024)
-  for (let w = 0; w < 128; w++) {
-    finalBytes.writeBigUInt64LE(finalBlock[w]!, w * 8)
-  }
+    finalBytes = Buffer.alloc(1024)
+    for (let w = 0; w < 128; w++) {
+      finalBytes.writeBigUInt64LE(finalBlock[w]!, w * 8)
+    }
 
-  return blake2bLong(T, finalBytes)
+    return blake2bLong(T, finalBytes)
+  } finally {
+    // 彻底清零所有内部创建的敏感中间缓冲区
+    if (ownsPwdBuf) pwdBuf.fill(0)
+    if (ownsSaltBuf) saltBuf.fill(0)
+    h0Stream?.fill(0)
+    h0?.fill(0)
+    if (memory) {
+      for (let i = 0; i < memory.length; i++) {
+        memory[i]?.fill(0n)
+      }
+    }
+    initInput?.fill(0)
+    r?.fill(0n)
+    z?.fill(0n)
+    finalBlock?.fill(0n)
+    finalBytes?.fill(0)
+  }
 }
 
 /**
  * 从用户主密码与盐值派生端到端强加密密钥（32 字节，用于 AES-256-GCM）
- * 支持规范 Argon2id 与硬件加速高安全 scrypt / pbkdf2 统一接口
+ * 默认采用 RFC 9106 推荐的 64 MiB 内存开销（DEFAULT_ARGON2_MEMORY_COST）
  */
 export function deriveMasterKey(
   masterPassword: string | Buffer,
@@ -284,7 +376,7 @@ export function deriveMasterKey(
   options: Argon2idOptions = {}
 ): Buffer {
   return argon2id(masterPassword, salt, {
-    memoryCost: options.memoryCost ?? 64, // 默认 64KiB 测试/运行平衡
+    memoryCost: options.memoryCost ?? DEFAULT_ARGON2_MEMORY_COST,
     timeCost: options.timeCost ?? 3,
     parallelism: options.parallelism ?? 1,
     outputLength: options.outputLength ?? 32,

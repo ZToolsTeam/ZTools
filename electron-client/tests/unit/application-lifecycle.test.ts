@@ -354,3 +354,40 @@ for (const code of [errorCodes.serviceAuthentication, errorCodes.serviceProtocol
     })
   }
 }
+
+test('Windows NativeHost 启动时一次性静默清理旧版 .ztools-native-host.xml，且拒绝删除目录或非普通文件', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-manifest-cleanup-'))
+  const pluginRoot = path.join(root, 'plugins')
+  const oldXml = '<?xml version="1.0" encoding="utf-8"?>\n<nativeHostManifest version="1">\n</nativeHostManifest>\n'
+  try {
+    await fs.mkdir(pluginRoot, { recursive: true })
+    // 模拟老版本客户端遗留的旧 .ztools-native-host.xml
+    await fs.writeFile(path.join(pluginRoot, '.ztools-native-host.xml'), oldXml, 'utf8')
+
+    createWindowsNativeRuntime({
+      isPackaged: false,
+      resourcesPath: path.join(root, 'resources'),
+      appPath: root,
+      pluginRoot,
+      dataRoot: path.join(root, 'data')
+    })
+
+    const afterCleanup = await fs.lstat(path.join(pluginRoot, '.ztools-native-host.xml')).catch(() => undefined)
+    assert.equal(afterCleanup, undefined, '旧版 .ztools-native-host.xml 普通文件应被静默清理')
+
+    // 若目标路径为目录，不得删除
+    const dirPluginRoot = path.join(root, 'plugins-dir-attack')
+    await fs.mkdir(path.join(dirPluginRoot, '.ztools-native-host.xml'), { recursive: true })
+    createWindowsNativeRuntime({
+      isPackaged: false,
+      resourcesPath: path.join(root, 'resources'),
+      appPath: root,
+      pluginRoot: dirPluginRoot,
+      dataRoot: path.join(root, 'data')
+    })
+    const stat = await fs.lstat(path.join(dirPluginRoot, '.ztools-native-host.xml'))
+    assert.equal(stat.isDirectory(), true, '非普通文件目录不得被误删')
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})

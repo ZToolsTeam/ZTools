@@ -372,4 +372,107 @@ describe("端到端移植应用集成渲染验证", () => {
     await submitBtn.trigger("click");
     expect(formSubmitted).toEqual({ masterPwd: "Secret#2026" });
   });
+
+  it("应当监听宿主 tool_runtime_progress 事件，在按需下载运行组件时展示进度条并在终态后自动收起", async () => {
+    const listeners = new Map();
+    const subscribed = [];
+    const originalZtools = window.ztools;
+    window.ztools = {
+      events: {
+        subscribe: vi.fn((key) => {
+          subscribed.push(key);
+          return Promise.resolve({ success: true });
+        }),
+        on: vi.fn((key, handler) => {
+          listeners.set(key, handler);
+          return () => listeners.delete(key);
+        }),
+        off: vi.fn((key) => {
+          listeners.delete(key);
+        })
+      }
+    };
+
+    try {
+      const listDescriptor = List(
+        { navigationTitle: "视频下载" },
+        [List.Item({ id: "v1", title: "示例条目" })]
+      );
+      const wrapper = mount(DeclarativeView, {
+        props: { rootComponent: () => listDescriptor }
+      });
+      await nextTick();
+
+      expect(subscribed).toContain("tool_runtime_progress");
+      // 本地命中无事件时，不渲染提示条
+      expect(wrapper.find("[data-decl-provisioning-banner]").exists()).toBe(false);
+
+      const emitProgress = listeners.get("tool_runtime_progress");
+      expect(typeof emitProgress).toBe("function");
+
+      // 1. 开始获取目录元数据
+      emitProgress({
+        payload: {
+          taskId: "commonlibs_1",
+          phase: "provisioning",
+          stage: "fetching-catalog",
+          percent: 0
+        }
+      });
+      await nextTick();
+      const banner1 = wrapper.find("[data-decl-provisioning-banner]");
+      expect(banner1.exists()).toBe(true);
+      expect(banner1.text()).toContain("正在获取运行组件信息");
+
+      // 2. 下载进度推进
+      emitProgress({
+        payload: {
+          taskId: "commonlibs_1",
+          phase: "provisioning",
+          stage: "downloading",
+          percent: 42
+        }
+      });
+      await nextTick();
+      expect(wrapper.find("[data-decl-provisioning-banner]").text()).toContain("正在下载运行组件… 42%");
+
+      // 3. 终态 completed 后自动隐藏提示条
+      emitProgress({
+        payload: {
+          taskId: "commonlibs_1",
+          phase: "completed",
+          percent: 100
+        }
+      });
+      await nextTick();
+      expect(wrapper.find("[data-decl-provisioning-banner]").exists()).toBe(false);
+
+      // 4. 失败终态同样能清理提示条，避免残留
+      emitProgress({
+        payload: {
+          taskId: "commonlibs_2",
+          phase: "provisioning",
+          stage: "verifying",
+          percent: 99
+        }
+      });
+      await nextTick();
+      expect(wrapper.find("[data-decl-provisioning-banner]").text()).toContain("正在校验运行组件完整性");
+
+      emitProgress({
+        payload: {
+          taskId: "commonlibs_2",
+          phase: "failed",
+          errorCode: "TOOL_CAPABILITY_PROVISION_FAILED"
+        }
+      });
+      await nextTick();
+      expect(wrapper.find("[data-decl-provisioning-banner]").exists()).toBe(false);
+
+      wrapper.unmount();
+      expect(listeners.has("tool_runtime_progress")).toBe(false);
+    } finally {
+      window.ztools = originalZtools;
+    }
+  });
 });

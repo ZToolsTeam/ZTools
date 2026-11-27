@@ -42,9 +42,21 @@ export const PERMISSIONS = [
   'crypto',
   'audio',
   'video',
+  // 宿主薄原语媒体读取/变换能力权限（media.probe / media.transcode）
+  'media.read',
+  'media.process',
   // 结束本机任意进程（宿主 process_terminate_pid 按此权限把关）
   'process'
 ]
+
+export const TOOL_CAPABILITY_IDS = Object.freeze([
+  'media.probe',
+  'media.transcode',
+  'download.stream',
+  'download.transfer'
+])
+
+export const TOOL_CAPABILITY_ID_SET = new Set(TOOL_CAPABILITY_IDS)
 
 export const PERMISSION_SET = new Set(PERMISSIONS)
 
@@ -332,6 +344,26 @@ export function validatePluginManifest(manifest, options = {}) {
   if (manifest.minAppVersion !== undefined && (typeof manifest.minAppVersion !== 'string' || !APP_VERSION_REGEX.test(manifest.minAppVersion))) {
     errors.push(`Invalid minAppVersion format: "${manifest.minAppVersion}" (expected client version such as 1.1.8.3)`)
   }
+  if (manifest.minClientVersion !== undefined && (typeof manifest.minClientVersion !== 'string' || !APP_VERSION_REGEX.test(manifest.minClientVersion))) {
+    errors.push(`Invalid minClientVersion format: "${manifest.minClientVersion}" (expected client version such as 1.1.8.3)`)
+  }
+  if (manifest.requiredCapabilities !== undefined) {
+    if (!Array.isArray(manifest.requiredCapabilities)) {
+      errors.push('requiredCapabilities must be an array')
+    } else {
+      const seenCap = new Set()
+      for (const cap of manifest.requiredCapabilities) {
+        if (typeof cap !== 'string' || !TOOL_CAPABILITY_ID_SET.has(cap)) {
+          errors.push(`Unknown requiredCapability: "${String(cap)}". Valid capabilities: ${TOOL_CAPABILITY_IDS.join(', ')}`)
+          continue
+        }
+        if (seenCap.has(cap)) {
+          errors.push(`Duplicate requiredCapability: "${cap}"`)
+        }
+        seenCap.add(cap)
+      }
+    }
+  }
 
   // 2. id 校验
   if (manifest.id !== undefined) {
@@ -542,7 +574,9 @@ export function validatePluginManifest(manifest, options = {}) {
 }
 
 export const LOCALE_TAG_REGEX = /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-[A-Z]{2}|-[0-9]{3})?$/
+export const MAX_README_LENGTH = 12000
 const I18N_ENTRY_KEYS = new Set(['name', 'description', 'keywords', 'revokedReason', 'features', 'screenshots'])
+const CATALOG_I18N_ENTRY_KEYS = new Set([...I18N_ENTRY_KEYS, 'readme'])
 const I18N_FEATURE_KEYS = new Set(['explain', 'cmds'])
 const I18N_SCREENSHOT_KEYS = new Set(['file', 'title'])
 
@@ -630,12 +664,12 @@ function validateI18nScreenshots(list, label, options, errors) {
   }
 }
 
-function validateI18nEntryFields(entry, label, errors, { topFeatureCodes = null, screenshotValidator = null } = {}) {
+function validateI18nEntryFields(entry, label, errors, { topFeatureCodes = null, screenshotValidator = null, allowedKeys = I18N_ENTRY_KEYS } = {}) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
     errors.push(`${label} must be an object`)
     return
   }
-  const unknownKeys = Object.keys(entry).filter((k) => !I18N_ENTRY_KEYS.has(k))
+  const unknownKeys = Object.keys(entry).filter((k) => !allowedKeys.has(k))
   if (unknownKeys.length > 0) {
     errors.push(`${label} contains unknown fields: ${unknownKeys.join(', ')}`)
   }
@@ -651,6 +685,13 @@ function validateI18nEntryFields(entry, label, errors, { topFeatureCodes = null,
       errors.push(`${label}.description must be a non-empty string`)
     } else if (entry.description.length > 500) {
       errors.push(`${label}.description must not exceed 500 characters`)
+    }
+  }
+  if (entry.readme !== undefined && allowedKeys.has('readme')) {
+    if (typeof entry.readme !== 'string' || entry.readme.trim().length === 0) {
+      errors.push(`${label}.readme must be a non-empty string`)
+    } else if (entry.readme.length > MAX_README_LENGTH) {
+      errors.push(`${label}.readme must not exceed ${MAX_README_LENGTH} characters`)
     }
   }
   if (entry.revokedReason !== undefined) {
@@ -874,7 +915,8 @@ function validateCatalogI18n(item, errors) {
     const label = `i18n["${locale}"]`
     validateI18nEntryFields(entry, label, errors, {
       topFeatureCodes,
-      screenshotValidator: (list, entryLabel) => validateCatalogScreenshots(list, `${entryLabel}.screenshots`, errors)
+      screenshotValidator: (list, entryLabel) => validateCatalogScreenshots(list, `${entryLabel}.screenshots`, errors),
+      allowedKeys: CATALOG_I18N_ENTRY_KEYS
     })
   }
 }
@@ -917,8 +959,35 @@ export function validateCatalogPluginItem(item) {
   if (item.minAppVersion !== undefined && (typeof item.minAppVersion !== 'string' || !APP_VERSION_REGEX.test(item.minAppVersion))) {
     errors.push(`Invalid minAppVersion format: "${item.minAppVersion}"`)
   }
+  if (item.minClientVersion !== undefined && (typeof item.minClientVersion !== 'string' || !APP_VERSION_REGEX.test(item.minClientVersion))) {
+    errors.push(`Invalid minClientVersion format: "${item.minClientVersion}"`)
+  }
+  if (item.requiredCapabilities !== undefined) {
+    if (!Array.isArray(item.requiredCapabilities)) {
+      errors.push('requiredCapabilities must be an array')
+    } else {
+      const seenCap = new Set()
+      for (const cap of item.requiredCapabilities) {
+        if (typeof cap !== 'string' || !TOOL_CAPABILITY_ID_SET.has(cap)) {
+          errors.push(`Unknown requiredCapability: "${String(cap)}"`)
+          continue
+        }
+        if (seenCap.has(cap)) {
+          errors.push(`Duplicate requiredCapability: "${cap}"`)
+        }
+        seenCap.add(cap)
+      }
+    }
+  }
   if (item.revoked !== undefined && typeof item.revoked !== 'boolean') {
     errors.push('revoked must be a boolean')
+  }
+  if (item.readme !== undefined) {
+    if (typeof item.readme !== 'string' || item.readme.trim().length === 0) {
+      errors.push('readme must be a non-empty string')
+    } else if (item.readme.length > MAX_README_LENGTH) {
+      errors.push(`readme must not exceed ${MAX_README_LENGTH} characters`)
+    }
   }
   if (item.screenshots !== undefined) {
     validateCatalogScreenshots(item.screenshots, 'screenshots', errors)

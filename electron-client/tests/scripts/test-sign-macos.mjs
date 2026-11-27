@@ -130,3 +130,50 @@ test('仓库内的 Developer ID 权限声明：主程序与辅助进程都开 JI
   assert.deepEqual(Object.keys(helper), ['com.apple.security.cs.allow-jit'], '辅助进程只给 JIT')
 })
 
+test('stapler 遇 CloudKit 票据传播延迟（退出码 65）自动重试并在传播就绪后通过；耗尽重试仍失败', () => {
+  const sleeps = []
+  let stapleAttempts = 0
+  const retryable = harness()
+  const baseExec = retryable.dependencies.exec
+  retryable.dependencies.exec = (tool, argv, config) => {
+    if (argv[0] === 'stapler' && argv[1] === 'staple' && ++stapleAttempts <= 2) {
+      retryable.calls.push({ tool, argv, config })
+      throw Object.assign(new Error('CloudKit query failed'), { status: 65 })
+    }
+    return baseExec(tool, argv, config)
+  }
+  const ok = signMacosRelease(options, {
+    ...retryable.dependencies,
+    sleep: (ms) => sleeps.push(ms),
+    stapleMaxAttempts: 4,
+    stapleRetryDelayMs: 5000
+  })
+  assert.equal(ok.status, 'PASS')
+  assert.equal(stapleAttempts, 3)
+  assert.deepEqual(sleeps, [5000, 5000])
+
+  const exhaustedSleeps = []
+  let failAttempts = 0
+  const exhausted = harness()
+  const exhaustedBaseExec = exhausted.dependencies.exec
+  exhausted.dependencies.exec = (tool, argv, config) => {
+    if (argv[0] === 'stapler' && argv[1] === 'staple') {
+      failAttempts++
+      exhausted.calls.push({ tool, argv, config })
+      throw Object.assign(new Error('Error 65: record not found'), { status: 65 })
+    }
+    return exhaustedBaseExec(tool, argv, config)
+  }
+  const failResult = signMacosRelease(options, {
+    ...exhausted.dependencies,
+    sleep: (ms) => exhaustedSleeps.push(ms),
+    stapleMaxAttempts: 3,
+    stapleRetryDelayMs: 2000
+  })
+  assert.equal(failResult.status, 'FAIL')
+  assert.equal(failResult.stage, 'staple')
+  assert.equal(failAttempts, 3)
+  assert.deepEqual(exhaustedSleeps, [2000, 2000])
+})
+
+

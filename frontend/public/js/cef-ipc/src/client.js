@@ -94,6 +94,9 @@ class ZToolsClient {
     this.zip = new ZipAPI(this.dllplugin, this.transport)
     this.sqlite = new ReferenceSQLiteAPI(this.transport)
 
+    // 初始化第三方引擎工具池与薄原语 API（依赖 events 推送 tool_runtime_progress）
+    this.toolRuntime = new ToolRuntimeAPI(this.transport, this.events)
+
     // 设置消息接收回调
     this._setupMessageCallback()
 

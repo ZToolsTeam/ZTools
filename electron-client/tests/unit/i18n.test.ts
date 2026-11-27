@@ -1708,6 +1708,7 @@ test('UpdateService preserves changelogI18n and passes --lang=<resolvedLocale> t
     runtimePaths,
     appVersion: '1.0.0',
     webVersion: '1.0.0',
+    verifyWindowsInstallerImpl: async () => undefined,
     updateSource: {
       async fetchLatest() {
         return {
@@ -2367,6 +2368,128 @@ test('DllPluginService syncLocale dispatches __setLocale only to active resident
     )
     assert.equal(hostExitedRes.success, false)
     assert.doesNotMatch(String(hostExitedRes.error), /[\u4e00-\u9fa5]/)
+
+    await service.stop()
+  } finally {
+    setLocale(previous, 'zh-CN')
+  }
+})
+
+test('DllPluginService syncLocale dynamically probes __setLocale capability via getDllInfo for new custom DLLs without client hardcoding', async () => {
+  const previous = getLocaleSetting()
+  try {
+    setLocale('zh-CN')
+    const nativeCalls: Array<{ pluginId: string; dllId: string; func: string; params: unknown }> = []
+    let infoProbeCount = 0
+    let failFirstCustomProbe = true
+    const manifests: Record<string, PluginManifest> = {
+      'custom-ui-tool': {
+        id: 'custom-ui-tool', name: 'Custom UI Tool', version: '1.0.0', entry: 'index.html',
+        dllloader: 'lib/CustomUiToolPlugin.dll', requireAdmin: false, commonLibs: []
+      },
+      'headless-worker': {
+        id: 'headless-worker', name: 'Headless Worker', version: '1.0.0', entry: 'index.html',
+        dllloader: 'lib/HeadlessWorkerPlugin.dll', requireAdmin: false, commonLibs: []
+      }
+    }
+
+    const service = new DllPluginService(
+      {
+        list: async () => ({ success: true, data: Object.values(manifests) }),
+        withPluginManifest: async (id, action) => {
+          const manifest = manifests[id]
+          if (!manifest) throw new Error(`missing manifest ${id}`)
+          return action(manifest, { sdkApiLane: 1 })
+        }
+      },
+      {
+        callDll: async (pluginId, dllId, func, params) => {
+          nativeCalls.push({ pluginId, dllId, func, params })
+          return { code: 0, result: JSON.stringify({ success: true }) }
+        },
+        callDllAsync: async () => 'unused',
+        callDllWithCallback: async () => 'unused',
+        beginDllAsyncTask: (_p, _d, _f, _params, _ctx, _sig, taskId) => ({
+          taskId: taskId ?? 'task_1',
+          outcome: Promise.resolve({ kind: 'started' as const })
+        }),
+        beginDllCallbackTask: (_p, _d, _f, _params, _ctx, _sig, taskId) => ({
+          taskId: taskId ?? 'task_cb',
+          outcome: Promise.resolve({ kind: 'started' as const })
+        }),
+        queryDllTask: async (_p, _d, taskId) => ({
+          taskId, mode: 'async', status: 'completed', progress: 100, functionName: 'Run', error: null
+        }),
+        cancelDllTask: async () => 0,
+        clearDllTask: async () => undefined,
+        getDllInfo: async (_pluginId, dllId) => {
+          infoProbeCount += 1
+          if (dllId === 'CustomUiToolPlugin' && failFirstCustomProbe) {
+            failFirstCustomProbe = false
+            throw new Error('transient probe failure')
+          }
+          return {
+            pluginName: dllId,
+            version: '1.0.0',
+            author: 'ZTools',
+            description: '',
+            functions: dllId === 'CustomUiToolPlugin' ? ['OpenOverlay', '__setLocale'] : ['RunTask'],
+            supportsAsync: true,
+            supportsCallback: false,
+            supportsCancel: false,
+            supportsStopManagedProcesses: false
+          }
+        },
+        onDllEvent: () => () => undefined,
+        acquirePluginMaintenance: async () => () => undefined,
+        unloadDll: async () => undefined
+      },
+      null,
+      { publishHostToOwner: () => ({ success: true, delivered: 0 }) },
+      undefined,
+      undefined,
+      { authorizeCall: async (_dllId: string, _fn: string, params: Record<string, unknown>) => params } as never,
+      undefined,
+      'win32'
+    )
+
+    const mainCaller = { type: 'main' as const, webContentsId: 1 }
+    await service.call({ plugin: 'CustomUiToolPlugin', func: 'OpenOverlay', params: {} }, mainCaller)
+    await service.call({ plugin: 'HeadlessWorkerPlugin', func: 'RunTask', params: {} }, mainCaller)
+    assert.equal(infoProbeCount, 0, '常规业务调用期间不应触发额外 getDllInfo 探测')
+    nativeCalls.length = 0
+
+    // 首次热切换语言：CustomUiToolPlugin 遇到瞬时探测失败不应永久缓存 false，HeadlessWorkerPlugin 正常缓存 false
+    service.syncLocale('en-US')
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.equal(infoProbeCount, 2)
+    assert.equal(nativeCalls.filter((c) => c.func === '__setLocale').length, 0)
+
+    // 二次热切换语言：CustomUiToolPlugin 重新探测成功并派发，HeadlessWorkerPlugin 命中 false 缓存不再重探
+    nativeCalls.length = 0
+    service.syncLocale('en-US')
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.equal(infoProbeCount, 3)
+    const firstDispatched = nativeCalls.filter((c) => c.func === '__setLocale')
+    assert.deepEqual(firstDispatched, [
+      { pluginId: 'custom-ui-tool', dllId: 'CustomUiToolPlugin', func: '__setLocale', params: { locale: 'en-US' } }
+    ])
+
+    // 三次热切换语言：两者均命中缓存，不再重复调 getDllInfo
+    nativeCalls.length = 0
+    service.syncLocale('zh-CN')
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.equal(infoProbeCount, 3)
+    assert.deepEqual(nativeCalls.filter((c) => c.func === '__setLocale'), [
+      { pluginId: 'custom-ui-tool', dllId: 'CustomUiToolPlugin', func: '__setLocale', params: { locale: 'zh-CN' } }
+    ])
+
+    // 卸载后缓存清除，不再派发
+    await service.unloadPlugin('custom-ui-tool')
+    nativeCalls.length = 0
+    service.syncLocale('en-US')
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    assert.equal(nativeCalls.filter((c) => c.func === '__setLocale').length, 0)
 
     await service.stop()
   } finally {

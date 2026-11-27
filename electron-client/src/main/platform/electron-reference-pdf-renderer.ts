@@ -29,6 +29,9 @@ export class ElectronReferencePdfRenderer implements ReferencePdfRenderer {
     const url = 'ztools-reference-pdf://render/' + randomUUID()
     const window = new BrowserWindow({ show: false, webPreferences: { partition: this.#partition,
       nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: false } })
+    window.webContents.on('will-navigate', (event) => event.preventDefault())
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    window.webContents.on('will-attach-webview', (event) => event.preventDefault())
     this.#windows.add(window); this.#documents.set(url, html)
     const abort = () => { if (!window.isDestroyed()) window.destroy() }
     signal.addEventListener('abort', abort, { once: true })

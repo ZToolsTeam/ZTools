@@ -46,7 +46,11 @@ import {
   resolveBundledReplacement,
   resolveBundledReplacementFeature
 } from '@/utils/bundledPlugins'
-import { isPluginVisible } from '@/utils/pluginVisibility'
+import {
+  isPluginVisible,
+  setDevAllowedDraftPluginIds,
+  setDevLocalPluginIds
+} from '@/utils/pluginVisibility'
 import { getLocalizedPluginField, mergePluginI18n } from '@/utils/pluginI18n'
 import { runPluginInstall } from '@/utils/pluginInstallOperation'
 import { resolveErrorMessage } from '@/utils/errorMessage'
@@ -1276,6 +1280,16 @@ export const usePluginsStore = defineStore('plugins', {
         const locals = await apiGetLocalPlugins()
         if (requestId !== this._installedRequestId) return this.installedPlugins
         if (revision !== this._installedRevision) return this.fetchInstalledPlugins()
+        setDevAllowedDraftPluginIds(
+          (locals || [])
+            .filter((p) => p && p.devDraftAllowed === true && p.revoked !== true)
+            .map((p) => normalizePluginId(p.pluginId || p.id))
+        )
+        setDevLocalPluginIds(
+          (locals || [])
+            .filter((p) => p && p.devLocalInstalled === true && p.revoked !== true)
+            .map((p) => normalizePluginId(p.pluginId || p.id))
+        )
         const bundledEntries = getBundledPluginEntries().filter((p) => canShowBundled(p.pluginId))
         const officialList = [...bundledEntries, ...getOfficialPluginsList()]
 

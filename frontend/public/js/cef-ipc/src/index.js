@@ -120,6 +120,9 @@ if (window.ztools && window.ztools.fs) {
     // SQLite 快照查询 API (GAP-03)
     sqlite: bindApiMethods(client.sqlite),
 
+    // 第三方引擎工具池与薄原语 API
+    toolRuntime: bindApiMethods(client.toolRuntime),
+
     // 🆕 高性能协议 API (无需Base64编码)
     protocol: bindApiMethods(ZToolsProtocol),
 

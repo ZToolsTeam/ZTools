@@ -29,6 +29,7 @@ export interface ZToolsAPI {
   features?: FeaturesAPI
   zip: ZipAPI
   sqlite: BrowserSnapshotAPI
+  toolRuntime: ToolRuntimeAPI
   protocol: AnyRecord
   destroy(): Promise<EventsCleanupResult>
   getVersion(): string
@@ -754,6 +755,169 @@ export interface UtoolsAPI {
   removeSubInput(): boolean
   setSubInputValue(value: string): boolean
   [key: string]: unknown
+}
+
+export type ToolDomainId = 'media' | 'download'
+export type ToolCapabilityStatus = 'ready' | 'needs_provisioning' | 'unsupported'
+export type ToolRuntimePermission = 'media.read' | 'media.process' | 'network'
+export type ToolProvisionStage = 'fetching-catalog' | 'downloading' | 'verifying' | 'extracting' | 'retrying'
+export type ToolRuntimeErrorStage = 'validation' | 'provisioning' | 'verifying' | 'executing' | 'finalizing'
+export type ToolRuntimeUserAction =
+  | 'retry'
+  | 'check_network'
+  | 'reinstall_tool'
+  | 'update_client'
+  | 'check_permissions'
+  | 'cancel'
+  | 'none'
+
+export type ToolRuntimeErrorCode =
+  | 'TOOL_INVALID_REQUEST'
+  | 'TOOL_CAPABILITY_UNSUPPORTED'
+  | 'TOOL_CAPABILITY_PROVISION_FAILED'
+  | 'TOOL_PATH_DENIED'
+  | 'TOOL_POLICY_VIOLATION'
+  | 'TOOL_TRUST_VERIFICATION_FAILED'
+  | 'TOOL_REVOKED'
+  | 'TOOL_ROLLBACK_BLOCKED'
+  | 'TOOL_TASK_CANCELLED'
+  | 'TOOL_TASK_NOT_FOUND'
+  | 'TOOL_CONCURRENCY_LIMITED'
+  | 'TOOL_EXECUTION_TIMEOUT'
+  | 'TOOL_BINARY_UNAVAILABLE'
+  | 'TOOL_EXECUTION_FAILED'
+
+export interface ToolRuntimePublicErrorDetails {
+  readonly toolCode: ToolRuntimeErrorCode
+  readonly stage: ToolRuntimeErrorStage
+  readonly retryable: boolean
+  readonly userAction: ToolRuntimeUserAction
+  readonly primitiveId?: string
+  readonly timedOut?: boolean
+  readonly exitCode?: number
+  readonly attempts?: number
+  readonly detail?: string
+}
+
+export interface ToolRuntimeError extends Error {
+  code: string
+  toolCode?: ToolRuntimeErrorCode
+  stage?: ToolRuntimeErrorStage
+  retryable?: boolean
+  userAction?: ToolRuntimeUserAction
+  primitiveId?: string
+  timedOut?: boolean
+  exitCode?: number
+  attempts?: number
+  detail?: string
+  details?: ToolRuntimePublicErrorDetails & AnyRecord
+}
+
+export interface NormalizedToolRuntimeError {
+  readonly code: string
+  readonly toolCode?: ToolRuntimeErrorCode
+  readonly message: string
+  readonly stage: ToolRuntimeErrorStage
+  readonly retryable: boolean
+  readonly userAction: ToolRuntimeUserAction
+  readonly primitiveId?: string
+  readonly timedOut?: boolean
+  readonly exitCode?: number
+  readonly attempts?: number
+  readonly detail?: string
+}
+
+export interface ToolPathSlot {
+  grantId?: string
+  relativePath?: string
+  path?: string
+}
+
+export interface ToolCapabilityDescriptor {
+  readonly primitiveId: string
+  readonly domain: ToolDomainId
+  readonly summary: string
+  readonly ipcMethods: readonly string[]
+  readonly requiredPermissions: readonly ToolRuntimePermission[]
+  readonly status: ToolCapabilityStatus
+  readonly optionalExtensions: readonly string[]
+}
+
+export interface ToolRuntimeCapabilitiesSnapshot {
+  readonly contractVersion: 1
+  readonly platform: 'windows' | 'macos' | 'other'
+  readonly domains: readonly ToolDomainId[]
+  readonly capabilities: readonly ToolCapabilityDescriptor[]
+}
+
+export interface ToolRuntimeEnsureResult {
+  readonly primitiveId: string
+  readonly status: ToolCapabilityStatus
+  readonly provisioned: boolean
+}
+
+export interface ToolTaskCancelResult {
+  readonly taskId: string
+  readonly cancelled: boolean
+}
+
+export interface ToolProgressEvent {
+  readonly taskId: string
+  readonly primitiveId: string
+  readonly phase: 'provisioning' | 'running' | 'finalizing' | 'completed' | 'cancelled' | 'failed'
+  readonly percent?: number
+  readonly transferredBytes?: number
+  readonly totalBytes?: number
+  readonly speedBytesPerSec?: number
+  readonly stage?: ToolProvisionStage
+  readonly errorCode?: ToolRuntimeErrorCode
+  readonly retryable?: boolean
+  readonly userAction?: ToolRuntimeUserAction
+  readonly message?: string
+  readonly timestamp: number
+}
+
+export interface ToolRuntimeProgressFilter {
+  taskId?: string
+  primitiveId?: string
+}
+
+export interface ToolRuntimeAPI {
+  readonly ERROR_CODES: Readonly<Record<string, ToolRuntimeErrorCode>>
+  getCapabilities(): Promise<ToolRuntimeCapabilitiesSnapshot>
+  ensure(primitiveId: string): Promise<ToolRuntimeEnsureResult>
+  cancelTask(taskId: string): Promise<ToolTaskCancelResult>
+  normalizeError(error: unknown): NormalizedToolRuntimeError
+  onProgress(listener: (event: ToolProgressEvent) => void, filter?: ToolRuntimeProgressFilter): () => void
+  offProgress(listener?: (event: ToolProgressEvent) => void): void
+  listCommonLibs(): Promise<AnyRecord>
+  cleanCommonLibs(request?: { toolId?: string; runGc?: boolean }): Promise<AnyRecord>
+  mediaProbe(request: { inputs: ToolPathSlot[] }): Promise<AnyRecord>
+  mediaTranscode(request: AnyRecord, options?: AnyRecord): Promise<AnyRecord>
+  downloadStreamProbe(request: { url: string; timeoutMs?: number }): Promise<AnyRecord>
+  downloadStreamRun(request: AnyRecord, options?: AnyRecord): Promise<AnyRecord>
+  downloadTransferAdd(request: AnyRecord): Promise<AnyRecord>
+  downloadTransferPause(taskId: string): Promise<AnyRecord>
+  downloadTransferResume(taskId: string): Promise<AnyRecord>
+  downloadTransferCancel(taskId: string): Promise<AnyRecord>
+  downloadTransferStatus(taskId?: string): Promise<AnyRecord>
+  commonLibs: {
+    list(): Promise<AnyRecord>
+    clean(request?: { toolId?: string; runGc?: boolean }): Promise<AnyRecord>
+  }
+  media: {
+    probe(request: { inputs: ToolPathSlot[] }): Promise<AnyRecord>
+    transcode(request: AnyRecord, options?: AnyRecord): Promise<AnyRecord>
+  }
+  download: {
+    streamProbe(request: { url: string; timeoutMs?: number }): Promise<AnyRecord>
+    streamRun(request: AnyRecord, options?: AnyRecord): Promise<AnyRecord>
+    transferAdd(request: AnyRecord): Promise<AnyRecord>
+    transferPause(taskId: string): Promise<AnyRecord>
+    transferResume(taskId: string): Promise<AnyRecord>
+    transferCancel(taskId: string): Promise<AnyRecord>
+    transferStatus(taskId?: string): Promise<AnyRecord>
+  }
 }
 
 declare global {

@@ -7,10 +7,14 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { errorCodes, ZToolsError } from '../../out/contracts/errors.js'
 import { NativeHostClient } from '../../out/main/native-host/native-host-client.js'
+import {
+  generateNativeTrustKeyPair,
+  signPluginDirectory
+} from '../../../scripts/sign-native-trust.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const executable = path.resolve(process.env.ZTOOLS_NATIVE_HOST32_TEST_EXE ??
-  path.join(root, 'out', 'native', 'win32-ia32', 'ZToolsNativeHost32.exe'))
+  path.join(root, 'out', 'native', 'test-win32-ia32', 'ZToolsNativeHost32.exe'))
 const fixtureSource = path.resolve(process.env.ZTOOLS_NATIVE_HOST32_TEST_PLUGIN ??
   path.join(root, 'out', 'native', 'test-win32-ia32', 'ZToolsNativeTestPlugin.dll'))
 const evidence = { productionZToolsAcceptance: false, scope: 'real-native-host-isolated-fixture', tests: [] }
@@ -64,7 +68,6 @@ function requestBlockingDllWithTimeout(client) {
   payload.writeUInt16LE(functionName.length, 0)
   functionName.copy(payload, 2)
   params.copy(payload, 2 + functionName.length)
-  // callDll intentionally has no deadline; use the bounded request API to test queue timeout.
   return client.request('dll_call', payload, {
     pluginId: 'native-host-test',
     dllId: 'ZToolsNativeTestPlugin',
@@ -75,27 +78,32 @@ function requestBlockingDllWithTimeout(client) {
 async function createFixtureRoot() {
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-native-host-c13-'))
   const pluginRoot = path.join(runtimeRoot, 'Plugins')
-  const libraryRoot = path.join(pluginRoot, 'native-host-test', 'lib')
+  const pluginDir = path.join(pluginRoot, 'native-host-test')
+  const libraryRoot = path.join(pluginDir, 'lib')
   await fs.mkdir(libraryRoot, { recursive: true })
   const fixtureTarget = path.join(libraryRoot, 'ZToolsNativeTestPlugin.dll')
   await fs.copyFile(fixtureSource, fixtureTarget)
-  const fixtureDigest = sha256(await fs.readFile(fixtureTarget))
-  const manifest = `<?xml version="1.0" encoding="utf-8"?>
-<nativeHostManifest version="1">
-  <plugin id="native-host-test">
-    <dll id="ZToolsNativeTestPlugin" path="lib/ZToolsNativeTestPlugin.dll" sha256="${fixtureDigest}" arch="x86">
-      <function name="blockHostDispatch"/>
-      <function name="callbackTask"/>
-      <function name="progressTask"/>
-    </dll>
-  </plugin>
-</nativeHostManifest>
-`
-  await fs.writeFile(path.join(pluginRoot, '.ztools-native-host.xml'), manifest, 'utf8')
+
+  const testKey = generateNativeTrustKeyPair('test-ephemeral', ['native'])
+  signPluginDirectory({
+    pluginDir,
+    pluginId: 'native-host-test',
+    pluginVersion: '1.0.0',
+    requireAdmin: false,
+    keyId: testKey.keyId,
+    mainEntries: [{
+      path: 'lib/ZToolsNativeTestPlugin.dll',
+      dllId: 'ZToolsNativeTestPlugin',
+      functions: ['blockHostDispatch', 'callbackTask', 'progressTask']
+    }],
+    privateKeyPem: testKey.privateKeyPem,
+    keyUsages: testKey.usages
+  })
+
   return {
     runtimeRoot,
     pluginRoot,
-    trustedManifestSha256: sha256(Buffer.from(manifest, 'utf8'))
+    testTrustPublicKeyHex: testKey.publicKeyHex
   }
 }
 
@@ -109,12 +117,18 @@ async function removeFixtureRoot(runtimeRoot) {
 
 async function verifyLateStartCancelAndClear(mode = 'callback') {
   const fixtureRoot = await createFixtureRoot()
-  const record = { mode, test: 'late-start-cancel-clear', fixtureRoot: fixtureRoot.runtimeRoot,
-    trustedManifestSha256: fixtureRoot.trustedManifestSha256, completed: false, cleanup: false }
+  const record = {
+    mode,
+    test: 'late-start-cancel-clear',
+    fixtureRoot: fixtureRoot.runtimeRoot,
+    completed: false,
+    cleanup: false
+  }
   evidence.tests.push(record)
   const client = new NativeHostClient(executable, {
     pluginRoot: fixtureRoot.pluginRoot,
-    trustedManifestSha256: fixtureRoot.trustedManifestSha256
+    testTrustPublicKeyHex: fixtureRoot.testTrustPublicKeyHex,
+    testDisableLegacyTrust: true
   })
   const events = []
   const stopCollectingEvents = client.onDllEvent((event) => events.push(event))
@@ -130,7 +144,6 @@ async function verifyLateStartCancelAndClear(mode = 'callback') {
     void attempt.outcome.then(() => { startSettled = true })
     assert.match(attempt.taskId, /^task_[A-Za-z0-9_-]+$/u)
 
-    // This cancel frame follows callback-start in the Host's serial stdin queue.
     const cancel = client.cancelDllTask(
       'native-host-test', 'ZToolsNativeTestPlugin', attempt.taskId
     )
@@ -182,6 +195,7 @@ async function verifyLateStartCancelAndClear(mode = 'callback') {
     else assert.equal(JSON.parse(terminalStatus.result).result, attempt.taskId)
     await client.clearDllTask('native-host-test', 'ZToolsNativeTestPlugin', attempt.taskId)
 
+    // 保留 unlistedFixtureFunction 拒绝语义，由签名载荷 functions[] 驱动
     const rejectedAttempt = mode === 'async'
       ? client.beginDllAsyncTask('native-host-test', 'ZToolsNativeTestPlugin', 'unlistedFixtureFunction', {})
       : client.beginDllCallbackTask('native-host-test', 'ZToolsNativeTestPlugin', 'unlistedFixtureFunction', {})
@@ -209,12 +223,18 @@ async function verifyLateStartCancelAndClear(mode = 'callback') {
 
 async function verifyHostExitResolvesUnknownStart(mode = 'callback') {
   const fixtureRoot = await createFixtureRoot()
-  const record = { mode, test: 'host-exit-unknown-start', fixtureRoot: fixtureRoot.runtimeRoot,
-    trustedManifestSha256: fixtureRoot.trustedManifestSha256, completed: false, cleanup: false }
+  const record = {
+    mode,
+    test: 'host-exit-unknown-start',
+    fixtureRoot: fixtureRoot.runtimeRoot,
+    completed: false,
+    cleanup: false
+  }
   evidence.tests.push(record)
   const client = new NativeHostClient(executable, {
     pluginRoot: fixtureRoot.pluginRoot,
-    trustedManifestSha256: fixtureRoot.trustedManifestSha256
+    testTrustPublicKeyHex: fixtureRoot.testTrustPublicKeyHex,
+    testDisableLegacyTrust: true
   })
   try {
     await client.start()

@@ -81,6 +81,8 @@
           "crypto",
           "audio",
           "video",
+          "media.read",
+          "media.process",
           "process"
         ]
       },
@@ -180,6 +182,25 @@
       "type": "string",
       "pattern": "^\\d+(\\.\\d+){1,3}$",
       "description": "运行插件所需的最低客户端版本（如 1.1.8.3）；发布时还会按插件用到的宿主接口自动提高"
+    },
+    "minClientVersion": {
+      "type": "string",
+      "pattern": "^\\d+(\\.\\d+){1,3}$",
+      "description": "运行插件所需的最低客户端版本别名（与 minAppVersion 同语义，两者同时存在时取更高版本）"
+    },
+    "requiredCapabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "media.probe",
+          "media.transcode",
+          "download.stream",
+          "download.transfer"
+        ]
+      },
+      "description": "插件依赖的宿主平台无关薄原语能力列表（由宿主按平台异构驱动或按需拉取 CommonLibs 签名工具池承接）"
     },
     "requireAdmin": {
       "type": "boolean",

@@ -1,4 +1,4 @@
-param(
+﻿param(
   [ValidateSet('Debug', 'Release')]
   [string]$Configuration = 'Release',
   [switch]$BuildTestFixture
@@ -8,10 +8,17 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $root 'native'
-$build = Join-Path $root 'out\native\build-win32'
-$output = Join-Path $root 'out\native\win32-ia32'
-$serviceOutput = Join-Path $root 'out\native\service-win32-ia32'
-$testOutput = Join-Path $root 'out\native\test-win32-ia32'
+if ($BuildTestFixture) {
+  $build = Join-Path $root 'out\native\build-win32-test'
+  $output = Join-Path $root 'out\native\test-win32-ia32'
+  $serviceOutput = Join-Path $root 'out\native\test-win32-ia32'
+  $testOutput = Join-Path $root 'out\native\test-win32-ia32'
+} else {
+  $build = Join-Path $root 'out\native\build-win32'
+  $output = Join-Path $root 'out\native\win32-ia32'
+  $serviceOutput = Join-Path $root 'out\native\service-win32-ia32'
+  $testOutput = Join-Path $root 'out\native\test-win32-ia32'
+}
 . (Join-Path $PSScriptRoot 'resolve-cmake.ps1')
 $cmake = Resolve-ZToolsCMake
 
@@ -22,10 +29,12 @@ if ($BuildTestFixture) {
 }
 
 $buildTests = if ($BuildTestFixture) { 'ON' } else { 'OFF' }
+# 发布构建目录严格关闭两项测试开关；测试构建目录统一同时开启两项测试开关，避免两脚本交替覆写 CMakeCache
 & $cmake -S $source -B $build -G 'Visual Studio 17 2022' -A Win32 `
   "-DZTOOLS_NATIVE_OUTPUT_DIR=$($output.Replace('\', '/'))" `
   "-DZTOOLS_SERVICE_OUTPUT_DIR=$($serviceOutput.Replace('\', '/'))" `
   "-DZTOOLS_BUILD_NATIVE_TEST_FIXTURE=$buildTests" `
+  "-DZTOOLS_BUILD_SERVICE_MANIFEST_TESTS=$buildTests" `
   "-DZTOOLS_NATIVE_TEST_OUTPUT_DIR=$($testOutput.Replace('\', '/'))"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -42,6 +51,14 @@ if ($BuildTestFixture) {
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   & (Join-Path $testOutput 'ZToolsDllCancelTest.exe')
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  $vectorsPath = Join-Path (Split-Path -Parent $root) 'tests\fixtures\native-trust-vectors\vectors.json'
+  if (Test-Path -LiteralPath $vectorsPath -PathType Leaf) {
+    & $cmake --build $build --config $Configuration --target ZToolsNativeTrustVectorTest -- "/p:SolutionDir=$solutionDirectory"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $testOutput 'ZToolsNativeTrustVectorTest.exe') $vectorsPath
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  }
 }
 
 $executable = Join-Path $output 'ZToolsNativeHost32.exe'

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:net'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
@@ -11,7 +12,10 @@ import { ServiceBridgeTransport } from '../../out/main/service/service-transport
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const output = process.env.ZTOOLS_SERVICE_TEST_OUTPUT_ROOT ?? path.join(root, 'out', 'native')
-const executable = path.join(output, 'service-win32-ia32', 'ZToolsService.exe')
+const testCandidate = path.join(output, 'test-win32-ia32', 'ZToolsService.exe')
+const executable = fs.existsSync(testCandidate)
+  ? testCandidate
+  : path.join(output, 'service-win32-ia32', 'ZToolsService.exe')
 const pipeName = () => String.raw`\\.\pipe\ztools-bridge-integration-${randomUUID()}`
 
 async function deadline(promise, milliseconds) {

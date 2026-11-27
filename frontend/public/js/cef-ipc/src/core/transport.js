@@ -382,6 +382,30 @@ class Transport {
         if (response.success === false) {
           const error = new Error(response.error?.message || resolveSdkText('请求失败', 'Request failed'))
           error.code = response.error?.code || 'REQUEST_FAILED'
+          if (response.error?.details && typeof response.error.details === 'object') {
+            error.details = { ...response.error.details }
+            if (typeof error.details.toolCode === 'string') {
+              error.toolCode = error.details.toolCode
+            }
+            if (typeof error.details.stage === 'string') {
+              error.stage = error.details.stage
+            }
+            if (typeof error.details.retryable === 'boolean') {
+              error.retryable = error.details.retryable
+            }
+            if (typeof error.details.userAction === 'string') {
+              error.userAction = error.details.userAction
+            }
+            if (typeof error.details.primitiveId === 'string') {
+              error.primitiveId = error.details.primitiveId
+            }
+            if (typeof error.details.timedOut === 'boolean') {
+              error.timedOut = error.details.timedOut
+            }
+            if (typeof error.details.detail === 'string') {
+              error.detail = error.details.detail
+            }
+          }
           throw error
         }
         resolve(response.data)

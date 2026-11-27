@@ -45,33 +45,107 @@ export interface ExecuteRunOptions {
   workingDirectory?: string | undefined
 }
 
+export interface RunLaunchOptions {
+  detached?: boolean | undefined
+  windowsHide?: boolean | undefined
+  cwd?: string | undefined
+  env?: NodeJS.ProcessEnv | undefined
+}
+
 export interface RunProcessLauncher {
-  launch(file: string, args: readonly string[], options?: { detached?: boolean | undefined; windowsHide?: boolean | undefined; cwd?: string | undefined } | undefined): ChildProcess
+  launch(file: string, args: readonly string[], options?: RunLaunchOptions | undefined): ChildProcess
   launchAsAdmin(file: string, args?: string | undefined): Promise<{ success: boolean; error?: string | undefined }>
 }
 
-function defaultLauncher(): RunProcessLauncher {
+/** 固定 UAC 提权 PowerShell 脚本：仅从环境变量读取目标文件与参数，严禁任何用户输入拼接进 -Command */
+export const ADMIN_ELEVATION_PS_SCRIPT =
+  '$f = $env:ZTOOLS_RUN_FILE; $a = $env:ZTOOLS_RUN_ARGS; ' +
+  'if ([string]::IsNullOrEmpty($a)) { Start-Process -FilePath $f -Verb RunAs } ' +
+  'else { Start-Process -FilePath $f -ArgumentList $a -Verb RunAs }'
+
+/** 固定交互式 PowerShell 启动脚本：通过环境变量传递可执行文件与 JSON 参数数组，防止命令注入 */
+export const POWERSHELL_LAUNCH_SCRIPT =
+  '$f = $env:ZTOOLS_RUN_FILE; $raw = $env:ZTOOLS_RUN_ARGS_JSON; ' +
+  'if ([string]::IsNullOrEmpty($raw)) { & $f } ' +
+  'else { $a = @(ConvertFrom-Json -InputObject $raw); & $f @a }'
+
+export interface AdminElevationSpawnSpec {
+  readonly executable: 'powershell.exe'
+  readonly args: readonly string[]
+  readonly env: NodeJS.ProcessEnv
+}
+
+function assertNoNullByte(value: string, label: string): void {
+  if (value.includes('\0')) {
+    throw new Error(_windowsRunText(`${label}包含非法空字节`, `${label} contains illegal null byte`))
+  }
+}
+
+/** 构造安全的 UAC 提权进程派生参数（固定脚本 + 环境变量传参） */
+export function buildAdminElevationSpawnSpec(
+  file: string,
+  args = '',
+  baseEnv: NodeJS.ProcessEnv = process.env
+): AdminElevationSpawnSpec {
+  const normalizedFile = typeof file === 'string' ? file.trim() : ''
+  if (!normalizedFile) {
+    throw new Error(_windowsRunText('提权目标文件不能为空', 'Elevation target file cannot be empty'))
+  }
+  assertNoNullByte(normalizedFile, 'file')
+  const normalizedArgs = typeof args === 'string' ? args : ''
+  assertNoNullByte(normalizedArgs, 'args')
+
+  return {
+    executable: 'powershell.exe',
+    args: [
+      '-NoProfile',
+      '-NonInteractive',
+      '-WindowStyle', 'Hidden',
+      '-Command',
+      ADMIN_ELEVATION_PS_SCRIPT
+    ],
+    env: {
+      ...baseEnv,
+      ZTOOLS_RUN_FILE: normalizedFile,
+      ZTOOLS_RUN_ARGS: normalizedArgs
+    }
+  }
+}
+
+/** 创建默认进程启动器，允许单测注入自定义 spawnImpl 验证参数与环境变量 */
+export function createDefaultRunProcessLauncher(spawnImpl: typeof spawn = spawn): RunProcessLauncher {
   return {
     launch(file, args, options = {}) {
-      return spawn(file, [...args], {
+      assertNoNullByte(file, 'file')
+      for (const arg of args) {
+        assertNoNullByte(arg, 'args')
+      }
+      if (options.cwd !== undefined) {
+        assertNoNullByte(options.cwd, 'cwd')
+      }
+      return spawnImpl(file, [...args], {
         detached: options.detached ?? true,
         shell: false,
         stdio: 'ignore',
         windowsHide: options.windowsHide ?? false,
-        cwd: options.cwd
+        cwd: options.cwd,
+        ...(options.env ? { env: options.env } : {})
       })
     },
     async launchAsAdmin(file, args = '') {
+      let spec: AdminElevationSpawnSpec
+      try {
+        spec = buildAdminElevationSpawnSpec(file, args)
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) }
+      }
       return new Promise((resolve) => {
-        // 使用 PowerShell Start-Process -Verb RunAs 实现 Win32 UAC 提权派生
-        const psArgs = [
-          '-NoProfile',
-          '-NonInteractive',
-          '-WindowStyle', 'Hidden',
-          '-Command',
-          `Start-Process -FilePath "${file}" ${args ? `-ArgumentList "${args}"` : ''} -Verb RunAs`
-        ]
-        const child = spawn('powershell.exe', psArgs, { windowsHide: true })
+        // 使用固定 PowerShell 脚本 + 环境变量传递目标路径和参数，杜绝命令注入
+        const child = spawnImpl(spec.executable, [...spec.args], {
+          windowsHide: true,
+          shell: false,
+          env: spec.env
+        })
         child.on('error', (err) => resolve({ success: false, error: err.message }))
         child.on('exit', (code) => {
           if (code === 0) resolve({ success: true })
@@ -80,6 +154,10 @@ function defaultLauncher(): RunProcessLauncher {
       })
     }
   }
+}
+
+function defaultLauncher(): RunProcessLauncher {
+  return createDefaultRunProcessLauncher()
 }
 
 export class WindowsRunService {
@@ -240,6 +318,10 @@ export class WindowsRunService {
   ): Promise<{ success: boolean; pid?: number | undefined; message?: string | undefined }> {
     const trimmed = (commandOrAlias || '').trim()
     if (!trimmed) throw new Error(_windowsRunText('执行指令不能为空', 'Command cannot be empty'))
+    assertNoNullByte(trimmed, 'command')
+    if (options.workingDirectory !== undefined) {
+      assertNoNullByte(options.workingDirectory, 'workingDirectory')
+    }
 
     // 检查是否命中别名
     const matched = this.getByAlias(trimmed)
@@ -249,6 +331,8 @@ export class WindowsRunService {
       ...(options.args && options.args.length > 0 ? [options.args.join(' ')] : []),
       ...(options.arguments ? [options.arguments] : [])
     ].join(' ').trim()
+    assertNoNullByte(actualCommand, 'command')
+    assertNoNullByte(mergedArgs, 'args')
 
     const asAdmin = options.asAdministrator ?? options.runAsAdmin ?? (matched?.runAsAdminByDefault ?? false)
     const shell = options.shell ?? 'none'
@@ -262,19 +346,29 @@ export class WindowsRunService {
       return { success: true, message: _windowsRunText('已请求管理员权限启动', 'Administrator elevation requested') }
     }
 
-    const launchOpts = options.workingDirectory ? { cwd: options.workingDirectory } : {}
+    const launchOpts: RunLaunchOptions = options.workingDirectory ? { cwd: options.workingDirectory } : {}
 
     // 2. 指定 Shell 窗口执行并保持打开
     if (shell === 'cmd') {
+      if (/[\r\n]/.test(actualCommand) || /[\r\n]/.test(mergedArgs)) {
+        throw new Error(_windowsRunText('cmd 指令不能包含换行符', 'cmd command cannot contain newline characters'))
+      }
       const cmdArgs = ['/k', actualCommand, ...(mergedArgs ? [mergedArgs] : [])]
       const child = this.launcher.launch('cmd.exe', cmdArgs, launchOpts)
       return { success: true, ...(child.pid !== undefined ? { pid: child.pid } : {}) }
     }
 
     if (shell === 'powershell') {
-      const psScript = `${actualCommand} ${mergedArgs}`.trim()
-      const psArgs = ['-NoExit', '-Command', psScript]
-      const child = this.launcher.launch('powershell.exe', psArgs, launchOpts)
+      const rawArgs = mergedArgs ? mergedArgs.split(/\s+/).filter(Boolean) : []
+      const psArgs = ['-NoProfile', '-NoExit', '-Command', POWERSHELL_LAUNCH_SCRIPT]
+      const child = this.launcher.launch('powershell.exe', psArgs, {
+        ...launchOpts,
+        env: {
+          ...process.env,
+          ZTOOLS_RUN_FILE: actualCommand,
+          ZTOOLS_RUN_ARGS_JSON: rawArgs.length > 0 ? JSON.stringify(rawArgs) : ''
+        }
+      })
       return { success: true, ...(child.pid !== undefined ? { pid: child.pid } : {}) }
     }
 

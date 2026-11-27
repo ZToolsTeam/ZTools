@@ -35,7 +35,10 @@ export const HOST_API_REQUIREMENTS = Object.freeze([
   { api: 'ssh_proxy', minAppVersion: '1.1.8.5', pattern: /\bssh_proxy\b/ },
   { api: 'startup_manager', minAppVersion: '1.1.8.5', pattern: /\bstartup_manager\b/ },
   { api: 'tls_inspect', minAppVersion: '1.1.8.5', pattern: /\btls_inspect\b/ },
-  { api: 'image_ocr', minAppVersion: '1.1.8.9', pattern: /\bimage_ocr\b/ }
+  { api: 'image_ocr', minAppVersion: '1.1.8.9', pattern: /\bimage_ocr\b/ },
+  { api: 'tool_runtime', minAppVersion: '1.3.0.0', pattern: /\btool_(?:runtime_(?:capabilities|ensure)|task_cancel)\b/ },
+  { api: 'tool_media', minAppVersion: '1.3.0.0', pattern: /\btool_media_(?:probe|transcode_run)\b/ },
+  { api: 'tool_download', minAppVersion: '1.3.0.0', pattern: /\btool_download_(?:stream_(?:probe|run)|transfer_(?:add|pause|resume|cancel|status))\b/ }
 ])
 
 export const APP_VERSION_REGEX = /^\d+(?:\.\d+){1,3}$/
@@ -78,6 +81,11 @@ export function resolvePluginMinAppVersion(pluginDir, manifest = {}) {
   let minAppVersion = typeof manifest.minAppVersion === 'string' && APP_VERSION_REGEX.test(manifest.minAppVersion)
     ? manifest.minAppVersion
     : undefined
+  if (typeof manifest.minClientVersion === 'string' && APP_VERSION_REGEX.test(manifest.minClientVersion)) {
+    if (!minAppVersion || compareAppVersion(manifest.minClientVersion, minAppVersion) > 0) {
+      minAppVersion = manifest.minClientVersion
+    }
+  }
   const apis = []
   const sources = collectRuntimeFiles(pluginDir).map((file) => fs.readFileSync(file, 'utf8'))
   for (const requirement of HOST_API_REQUIREMENTS) {
@@ -85,6 +93,11 @@ export function resolvePluginMinAppVersion(pluginDir, manifest = {}) {
     apis.push(requirement.api)
     if (!minAppVersion || compareAppVersion(requirement.minAppVersion, minAppVersion) > 0) {
       minAppVersion = requirement.minAppVersion
+    }
+  }
+  if (Array.isArray(manifest.requiredCapabilities) && manifest.requiredCapabilities.length > 0) {
+    if (!minAppVersion || compareAppVersion('1.3.0.0', minAppVersion) > 0) {
+      minAppVersion = '1.3.0.0'
     }
   }
   return { minAppVersion, apis }

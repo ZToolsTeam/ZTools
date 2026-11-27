@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -9,10 +9,14 @@ import { createConnection } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { errorCodes, ZToolsError } from '../../out/contracts/errors.js'
 import { ServiceClient } from '../../out/main/service/service-client.js'
+import {
+  generateNativeTrustKeyPair,
+  signPluginDirectory
+} from '../../../scripts/sign-native-trust.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const nativeOutput = process.env.ZTOOLS_SERVICE_TEST_OUTPUT_ROOT ?? path.join(root, 'out', 'native')
-const executable = path.resolve(nativeOutput, 'service-win32-ia32', 'ZToolsService.exe')
+const executable = path.resolve(nativeOutput, 'test-win32-ia32', 'ZToolsService.exe')
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -89,7 +93,7 @@ async function runMissingPluginRootIntegration() {
     })
     await assert.rejects(
       client.contextMenuCheckAdmin(),
-      (error) => error instanceof ZToolsError && error.code === errorCodes.notSupported && error.details?.hostCode === 'MANIFEST_UNTRUSTED'
+      (error) => error instanceof ZToolsError && error.code === errorCodes.pluginIntegrity && error.details?.hostCode === 'DLL_PATH_INVALID'
     )
     assert.equal(client.diagnostics.state, 'ready')
     await assert.rejects(
@@ -146,11 +150,14 @@ async function makeTrustedFixture() {
     path.join(os.tmpdir(), `ZTools-service-fixture-${randomUUID()}`))
   await fs.mkdir(fixtureRoot, { recursive: false })
   const dataRoot = path.join(fixtureRoot, 'Data')
-  const serviceRoot = path.join(dataRoot, 'Service')
-  const contextDllRoot = path.join(dataRoot, 'Plugins', 'context-menu', 'lib')
-  const batchDllRoot = path.join(dataRoot, 'Plugins', 'batch-rename', 'lib')
+  const snapshotRoot = path.join(fixtureRoot, 'TrustedSnapshots')
+  const trustStateFile = path.join(fixtureRoot, 'trust-state.json')
+  const contextPluginDir = path.join(dataRoot, 'Plugins', 'context-menu')
+  const batchPluginDir = path.join(dataRoot, 'Plugins', 'batch-rename')
+  const contextDllRoot = path.join(contextPluginDir, 'lib')
+  const batchDllRoot = path.join(batchPluginDir, 'lib')
   await Promise.all([
-    fs.mkdir(serviceRoot, { recursive: true }),
+    fs.mkdir(snapshotRoot, { recursive: true }),
     fs.mkdir(contextDllRoot, { recursive: true }),
     fs.mkdir(batchDllRoot, { recursive: true })
   ])
@@ -161,25 +168,33 @@ async function makeTrustedFixture() {
     fs.copyFile(contextSource, contextTarget),
     fs.copyFile(batchSource, batchTarget)
   ])
-  const contextDigest = createHash('sha256').update(await fs.readFile(contextTarget)).digest('hex')
-  const batchDigest = createHash('sha256').update(await fs.readFile(batchTarget)).digest('hex')
-  const manifest = `<?xml version="1.0" encoding="utf-8"?>
-<privilegedDllManifest version="1">
-  <plugin id="context-menu">
-    <dll id="ContextMenuPlugin" path="lib/ContextMenuPlugin.dll" sha256="${contextDigest}" arch="x86">
-      <function name="CheckAdmin"/>
-    </dll>
-  </plugin>
-  <plugin id="batch-rename">
-    <dll id="BatchRenamePlugin" path="lib/BatchRenamePlugin.dll" sha256="${batchDigest}" arch="x86">
-      <function name="batchRename"/>
-    </dll>
-  </plugin>
-</privilegedDllManifest>
-`
-  await fs.writeFile(path.join(serviceRoot, 'privileged-dlls-v1.xml'), manifest, 'utf8')
-  const manifestSha256 = createHash('sha256').update(manifest).digest('hex')
-  return { dataRoot, fixtureRoot, manifestSha256 }
+  // 使用临时特权测试公钥对两个特权插件目录签发 native-trust.json / .sig
+  const privKey = generateNativeTrustKeyPair('test-ephemeral-priv', ['native-privileged'])
+  signPluginDirectory({
+    pluginDir: contextPluginDir,
+    pluginId: 'context-menu',
+    pluginVersion: '1.0.0',
+    requireAdmin: true,
+    mainEntries: [{ path: 'lib/ContextMenuPlugin.dll', dllId: 'ContextMenuPlugin', functions: ['CheckAdmin'] }],
+    keyId: privKey.keyId,
+    privateKeyPem: privKey.privateKeyPem
+  })
+  signPluginDirectory({
+    pluginDir: batchPluginDir,
+    pluginId: 'batch-rename',
+    pluginVersion: '1.0.0',
+    requireAdmin: true,
+    mainEntries: [{ path: 'lib/BatchRenamePlugin.dll', dllId: 'BatchRenamePlugin', functions: ['batchRename'] }],
+    keyId: privKey.keyId,
+    privateKeyPem: privKey.privateKeyPem
+  })
+  return {
+    dataRoot,
+    fixtureRoot,
+    snapshotRoot,
+    trustStateFile,
+    testPrivPubKeyHex: privKey.publicKeyHex
+  }
 }
 
 async function waitForTask(client, pluginId, dllId, taskId, predicate) {
@@ -196,7 +211,14 @@ async function waitForTask(client, pluginId, dllId, taskId, predicate) {
 async function runTrustedTaskIntegration() {
   const fixture = await makeTrustedFixture()
   const pipeName = `\\\\.\\pipe\\ZToolsPrivilegedService.v1.integration.${process.pid}.${Date.now()}.trusted`
-  const server = spawnIntegrationServer(pipeName, [fixture.dataRoot, fixture.manifestSha256])
+  const server = spawnIntegrationServer(pipeName, [
+    fixture.dataRoot,
+    fixture.testPrivPubKeyHex,
+    '--snapshot-root',
+    fixture.snapshotRoot,
+    '--trust-state-file',
+    fixture.trustStateFile
+  ])
   const client = new ServiceClient({ pipeName, createTransport: createConnection })
   let testError
   try {

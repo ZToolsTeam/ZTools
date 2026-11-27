@@ -2505,12 +2505,40 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, [])
       return
     case 'filesearch_query': {
-      rejectUnknownKeys(params, ['query', 'limit'])
+      rejectUnknownKeys(params, ['query', 'limit', 'offset', 'contentType', 'typeFilter', 'kind', 'sortBy', 'includeHidden', 'pathPrefix'])
       const obj = typeof params === 'object' && params !== null
         ? (params as Record<string, unknown>)
         : {}
       if ('query' in obj && obj.query !== undefined) {
         requireString(params, 'query', { min: 0, max: 1024 })
+      }
+      if ('limit' in obj && obj.limit !== undefined) {
+        requireInteger(params, 'limit', { min: 1, max: 500 })
+      }
+      if ('offset' in obj && obj.offset !== undefined) {
+        requireInteger(params, 'offset', { min: 0, max: 5000 })
+      }
+      if ('contentType' in obj && obj.contentType !== undefined) {
+        if (typeof obj.contentType === 'number') {
+          requireInteger(params, 'contentType', { min: 0, max: 65535 })
+        } else {
+          requireString(params, 'contentType', { min: 1, max: 32 })
+        }
+      }
+      if ('typeFilter' in obj && obj.typeFilter !== undefined) {
+        requireString(params, 'typeFilter', { min: 1, max: 32 })
+      }
+      if ('kind' in obj && obj.kind !== undefined) {
+        requireString(params, 'kind', { min: 1, max: 16 })
+      }
+      if ('sortBy' in obj && obj.sortBy !== undefined) {
+        requireString(params, 'sortBy', { min: 1, max: 32 })
+      }
+      if ('includeHidden' in obj && obj.includeHidden !== undefined) {
+        requireBoolean(params, 'includeHidden')
+      }
+      if ('pathPrefix' in obj && obj.pathPrefix !== undefined) {
+        requireString(params, 'pathPrefix', { min: 0, max: 1024 })
       }
       return
     }
@@ -2556,8 +2584,73 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'developer_diagnostics':
       rejectUnknownKeys(params, [])
       return
-    case 'mcp_install_server':
+    case 'mcp_install_server': {
+      rejectUnknownKeys(params, [
+        'name',
+        'title',
+        'description',
+        'mentionName',
+        'icon',
+        'transportType',
+        'command',
+        'args',
+        'env',
+        'url',
+        'apiKey',
+        'headers'
+      ])
+      requireString(params, 'name', { min: 1, max: 128 })
+      optionalString(params, 'title', 256)
+      optionalString(params, 'description', 1024)
+      optionalString(params, 'mentionName', 128)
+      optionalString(params, 'icon', 256)
+      optionalString(params, 'command', 1024)
+      optionalString(params, 'url', 2048)
+      optionalString(params, 'apiKey', 4096)
+      if (
+        params.transportType !== undefined &&
+        params.transportType !== 'stdio' &&
+        params.transportType !== 'sse' &&
+        params.transportType !== 'in-memory'
+      ) {
+        throw new ZToolsError(errorCodes.invalidRequest, 'Invalid transportType', { path: 'transportType' })
+      }
+      if (params.args !== undefined) {
+        if (
+          !Array.isArray(params.args) ||
+          params.args.length > 64 ||
+          params.args.some((item) => typeof item !== 'string' || item.length > 4096)
+        ) {
+          throw new ZToolsError(errorCodes.invalidRequest, 'Invalid args', { path: 'args' })
+        }
+      }
+      for (const mapKey of ['env', 'headers'] as const) {
+        const rawMap = params[mapKey]
+        if (rawMap === undefined) continue
+        if (!isRecord(rawMap)) {
+          throw new ZToolsError(errorCodes.invalidRequest, `${mapKey} must be a string record`, { path: mapKey })
+        }
+        const entries = Object.entries(rawMap)
+        if (
+          entries.length > 64 ||
+          entries.some(([k, v]) => k.length < 1 || k.length > 128 || typeof v !== 'string' || v.length > 8192)
+        ) {
+          throw new ZToolsError(errorCodes.invalidRequest, `${mapKey} contains invalid entries`, { path: mapKey })
+        }
+      }
+      if (typeof params.url === 'string' && params.url.trim() !== '') {
+        let parsed: URL
+        try {
+          parsed = new URL(params.url.trim())
+        } catch {
+          throw new ZToolsError(errorCodes.invalidRequest, 'Invalid url', { path: 'url' })
+        }
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          throw new ZToolsError(errorCodes.invalidRequest, 'url must use http or https protocol', { path: 'url' })
+        }
+      }
       return
+    }
     case 'mcp_manage_servers':
       rejectUnknownKeys(params, ['search'])
       return
@@ -2976,6 +3069,92 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       return
     case 'script_commands_reload':
       rejectUnknownKeys(params, [])
+      return
+    case 'tool_runtime_capabilities':
+      rejectUnknownKeys(params, [])
+      return
+    case 'tool_runtime_ensure':
+      rejectUnknownKeys(params, ['primitiveId'])
+      requireString(params, 'primitiveId', { min: 1, max: 128 })
+      return
+    case 'tool_task_cancel':
+      rejectUnknownKeys(params, ['taskId'])
+      requireString(params, 'taskId', { min: 1, max: 128 })
+      return
+    case 'tool_commonlibs_list':
+      rejectUnknownKeys(params, [])
+      return
+    case 'tool_commonlibs_clean':
+      rejectUnknownKeys(params, ['toolId', 'runGc'])
+      if (params.toolId !== undefined) requireString(params, 'toolId', { min: 1, max: 128 })
+      if (params.runGc !== undefined) requireBoolean(params, 'runGc')
+      return
+    case 'tool_media_probe':
+      rejectUnknownKeys(params, ['inputs'])
+      return
+    case 'tool_media_transcode_run':
+      rejectUnknownKeys(params, [
+        'taskId',
+        'input',
+        'output',
+        'overwrite',
+        'container',
+        'videoCodec',
+        'audioCodec',
+        'videoBitrateKbps',
+        'audioBitrateKbps',
+        'frameRate',
+        'audioSampleRateHz',
+        'audioChannels',
+        'extractAudioOnly',
+        'stripAudio',
+        'scale',
+        'trim',
+        'watermark'
+      ])
+      return
+    case 'tool_download_stream_probe':
+      rejectUnknownKeys(params, ['url', 'timeoutMs'])
+      requireString(params, 'url', { min: 1, max: 4096 })
+      return
+    case 'tool_download_stream_run':
+      rejectUnknownKeys(params, [
+        'taskId',
+        'url',
+        'outputDir',
+        'fileName',
+        'trackId',
+        'preferAudioOnly',
+        'audioFormat',
+        'mergeContainer',
+        'maxRateBytesPerSec',
+        'timeoutMs',
+        'overwrite'
+      ])
+      requireString(params, 'url', { min: 1, max: 4096 })
+      return
+    case 'tool_download_transfer_add':
+      rejectUnknownKeys(params, [
+        'taskId',
+        'url',
+        'outputDir',
+        'fileName',
+        'maxConnections',
+        'maxRateBytesPerSec',
+        'overwrite',
+        'expectedSha256'
+      ])
+      requireString(params, 'url', { min: 1, max: 4096 })
+      return
+    case 'tool_download_transfer_pause':
+    case 'tool_download_transfer_resume':
+    case 'tool_download_transfer_cancel':
+      rejectUnknownKeys(params, ['taskId'])
+      requireString(params, 'taskId', { min: 1, max: 128 })
+      return
+    case 'tool_download_transfer_status':
+      rejectUnknownKeys(params, ['taskId'])
+      if (params.taskId !== undefined) requireString(params, 'taskId', { min: 1, max: 128 })
       return
     default: {
       const exhaustive: never = method

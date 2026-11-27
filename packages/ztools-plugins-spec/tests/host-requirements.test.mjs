@@ -95,6 +95,38 @@ describe('最低客户端版本（minAppVersion）', () => {
     assert.equal(resolvePluginMinAppVersion(dir).minAppVersion, undefined)
   })
 
+  it('依赖 1.3.0.0 薄原语接口或声明 requiredCapabilities 时自动要求 1.3.0.0，且兼容 minClientVersion', (t) => {
+    const methods = [
+      'tool_runtime_capabilities',
+      'tool_runtime_ensure',
+      'tool_task_cancel',
+      'tool_media_probe',
+      'tool_media_transcode_run',
+      'tool_download_stream_probe',
+      'tool_download_stream_run',
+      'tool_download_transfer_add',
+      'tool_download_transfer_pause',
+      'tool_download_transfer_resume',
+      'tool_download_transfer_cancel',
+      'tool_download_transfer_status'
+    ]
+    for (const method of methods) {
+      const dir = makePlugin({ 'dist/logic.js': `transport.call('${method}', {})` })
+      t.after(() => removeTempDir(dir))
+      assert.equal(resolvePluginMinAppVersion(dir, { minAppVersion: '1.2.0.0' }).minAppVersion, '1.3.0.0', method)
+    }
+    const capDir = makePlugin({ 'dist/index.js': 'export default {}' })
+    t.after(() => removeTempDir(capDir))
+    assert.equal(
+      resolvePluginMinAppVersion(capDir, { requiredCapabilities: ['download.stream'] }).minAppVersion,
+      '1.3.0.0'
+    )
+    assert.equal(
+      resolvePluginMinAppVersion(capDir, { minAppVersion: '1.2.0.0', minClientVersion: '1.3.1.0' }).minAppVersion,
+      '1.3.1.0'
+    )
+  })
+
   it('清单与目录条目里的 minAppVersion 格式不对时报错', () => {
     const manifest = { id: 'demo-tool', name: 'Demo', version: '1.0.0', description: 'd', author: 'a', entry: 'dist/index.js', icon: 'icon.svg', permissions: [], minAppVersion: 'latest' }
     assert.ok(validatePluginManifest(manifest).errors.some((e) => e.includes('minAppVersion')))

@@ -80,6 +80,13 @@ async function fixtureNetwork({ outputRoot }) {
   fs.writeFileSync(executable, 'fixture network helper')
   return { executable }
 }
+async function fixtureIndexer({ outputRoot }) {
+  const nativeRoot = path.join(outputRoot, 'native')
+  fs.mkdirSync(nativeRoot, { recursive: true })
+  const executable = path.join(nativeRoot, 'ztools-indexer')
+  fs.writeFileSync(executable, 'fixture indexer helper')
+  return { executable, exePath: executable }
+}
 async function fixtureDisplay({ outputRoot }) {
   fs.mkdirSync(outputRoot, { recursive: true })
   const executable = path.join(outputRoot, 'ZToolsMacDisplay'), notice = path.join(outputRoot, 'NOTICE.md')
@@ -314,7 +321,7 @@ test('rejects a pre-existing staging directory before building or invoking Packa
       sourcePackage,
       minimumOs: '13.0',
       buildNative: fixtureNative,
-      buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork,
+      buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork, buildIndexerNative: fixtureIndexer,
       build: async () => { buildCalled = true },
       packageApp: async () => { packageCalled = true }
     }), /输出目录已存在/)
@@ -360,7 +367,7 @@ test('writes the versioned read-only runtime target marker only after the final 
       sourcePackage,
       minimumOs: '13.0',
       buildNative: fixtureNative,
-      buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork,
+      buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork, buildIndexerNative: fixtureIndexer,
       build: async () => {},
       packageApp: async () => {
         fs.mkdirSync(path.dirname(addonPath), { recursive: true })
@@ -374,7 +381,7 @@ test('writes the versioned read-only runtime target marker only after the final 
         assert.equal(fs.readFileSync(path.join(resourcesPath, 'native', 'ZToolsMacClipboard'), 'utf8'), 'fixture native helper')
         assert.equal(fs.readFileSync(path.join(resourcesPath, 'native', 'ZToolsPathAccessBroker'), 'utf8'), 'fixture path access broker')
         verificationCalled = true
-        return { machoFiles: [NETWORK_HELPER_EXECUTABLE, 'Contents/MacOS/ZTools', 'Contents/Resources/native/ZToolsMacClipboard', 'Contents/Resources/native/ZToolsPathAccessBroker', 'Contents/Resources/native/ZToolsMacVision', 'Contents/Resources/native/ZToolsMacAudio', 'Contents/Resources/native/ZToolsMacInputLock', 'Contents/Resources/native/ZToolsMacDns', 'Contents/Resources/native/ZToolsMacHosts', 'Contents/Resources/native/ZToolsMacHotkeys', 'Contents/Resources/native/ZToolsMacStartup', 'Contents/Resources/native/ZToolsMacDisplay'] }
+        return { machoFiles: [NETWORK_HELPER_EXECUTABLE, 'Contents/MacOS/ZTools', 'Contents/Resources/native/ZToolsMacClipboard', 'Contents/Resources/native/ZToolsPathAccessBroker', 'Contents/Resources/native/ZToolsMacVision', 'Contents/Resources/native/ZToolsMacAudio', 'Contents/Resources/native/ZToolsMacInputLock', 'Contents/Resources/native/ZToolsMacDns', 'Contents/Resources/native/ZToolsMacHosts', 'Contents/Resources/native/ZToolsMacHotkeys', 'Contents/Resources/native/ZToolsMacStartup', 'Contents/Resources/native/ZToolsMacDisplay', 'Contents/Resources/native/ztools-indexer'] }
       },
       stdout: () => {}
     })
@@ -417,7 +424,7 @@ test('passes universal options to the injected packager after reserving a fresh 
       sourcePackage,
       minimumOs: '13.0',
       buildNative: fixtureNative,
-      buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork,
+      buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork, buildIndexerNative: fixtureIndexer,
       build: async () => {},
       packageApp: async (options) => {
         receivedOptions = options
@@ -434,7 +441,7 @@ test('passes universal options to the injected packager after reserving a fresh 
 })
 
 test('staging refuses either required native helper missing from the Mach-O audit before writing its target marker', async () => {
-  for (const missing of ['ZToolsMacNetwork', 'ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision', 'ZToolsMacAudio', 'ZToolsMacInputLock', 'ZToolsMacDns', 'ZToolsMacHosts', 'ZToolsMacHotkeys', 'ZToolsMacStartup', 'ZToolsMacDisplay']) {
+  for (const missing of ['ZToolsMacNetwork', 'ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision', 'ZToolsMacAudio', 'ZToolsMacInputLock', 'ZToolsMacDns', 'ZToolsMacHosts', 'ZToolsMacHotkeys', 'ZToolsMacStartup', 'ZToolsMacDisplay', 'ztools-indexer']) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-macos-required-helper-'))
     try {
       seedIcon(root)
@@ -442,11 +449,11 @@ test('staging refuses either required native helper missing from the Mach-O audi
       const app = path.join(packagePath, 'ZTools.app'), resources = path.join(app, 'Contents', 'Resources')
       await assert.rejects(stageMacUniversal({ appBundleId: 'org.example.ztools', shortVersion: '1.1.7', buildVersion: '1171',
         platform: 'darwin', sourceRoot: root, sourcePackage, minimumOs: '13.0', buildNative: fixtureNative,
-        buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork, build: async () => {}, stdout: () => {},
+        buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork, buildIndexerNative: fixtureIndexer, build: async () => {}, stdout: () => {},
         packageApp: async () => {
           const addon = path.join(resources, 'app.asar.unpacked', 'node_modules', 'classic-level', 'prebuilds', 'darwin-x64+arm64', 'classic-level.node')
           fs.mkdirSync(path.dirname(addon), { recursive: true }); fs.writeFileSync(addon, 'fixture addon'); packIcon(root, app); return [packagePath]
-        }, verifyBundle: () => ({ machoFiles: [...(missing === 'ZToolsMacNetwork' ? [] : [NETWORK_HELPER_EXECUTABLE]), 'Contents/MacOS/ZTools', ...['ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision', 'ZToolsMacAudio', 'ZToolsMacInputLock', 'ZToolsMacDns', 'ZToolsMacHosts', 'ZToolsMacHotkeys', 'ZToolsMacStartup', 'ZToolsMacDisplay']
+        }, verifyBundle: () => ({ machoFiles: [...(missing === 'ZToolsMacNetwork' ? [] : [NETWORK_HELPER_EXECUTABLE]), 'Contents/MacOS/ZTools', ...['ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision', 'ZToolsMacAudio', 'ZToolsMacInputLock', 'ZToolsMacDns', 'ZToolsMacHosts', 'ZToolsMacHotkeys', 'ZToolsMacStartup', 'ZToolsMacDisplay', 'ztools-indexer']
           .filter(name => name !== missing).map(name => `Contents/Resources/native/${name}`)] })
       }), /REQUIRED_MAC_HELPER_MACHO_MISSING/)
       assert.equal(fs.existsSync(path.join(resources, 'ztools-runtime-target.json')), false)
@@ -471,7 +478,7 @@ test('Universal staging rejects a PathAccessBroker result outside its fresh buil
         fs.writeFileSync(executable, 'fixture')
         return { executable }
       },
-      buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork,
+      buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork, buildIndexerNative: fixtureIndexer,
       build: async () => {},
       stdout: () => {}
     }), /INVALID_MAC_PATH_ACCESS_HELPER_LOCATION/)
@@ -509,7 +516,7 @@ test('[破坏性] 图标缺失或不是 ICNS 时在构建之前就失败', async
       await assert.rejects(stageMacUniversal({
         appBundleId: 'org.example.ztools', shortVersion: '1.1.7', buildVersion: '1171',
         platform: 'darwin', sourceRoot: root, sourcePackage, minimumOs: '13.0',
-        buildNative: fixtureNative, buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork,
+        buildNative: fixtureNative, buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork, buildIndexerNative: fixtureIndexer,
         build: async () => { buildCalled = true }, packageApp: async () => []
       }), pattern, label)
       assert.equal(buildCalled, false, label)

@@ -138,7 +138,7 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
     mocks.setShowTrayIcon.mockResolvedValue(true)
   })
 
-  it('顶部为带外框分段槽 4 个 Tab，按 Tab 分组互斥渲染且不渲染装饰图标', async () => {
+  it('顶部为带外框分段槽 5 个 Tab，按 Tab 分组互斥渲染且不渲染装饰图标', async () => {
     const wrapper = mountPage()
     await flushPromises()
 
@@ -148,7 +148,7 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
     expect(tabGroup.classes()).toContain('is-marker')
 
     const tabBtns = tabGroup.findAll('.seg-btn')
-    expect(tabBtns.map((b) => b.text())).toEqual(['常规与外观', '快捷键', '内置插件', '隐私与权限'])
+    expect(tabBtns.map((b) => b.text())).toEqual(['常规与外观', '快捷键', '内置插件', '隐私与权限', '工具与存储'])
     expect(tabBtns[0].classes()).toContain('active')
     expect(tabBtns[0].attributes('aria-checked')).toBe('true')
 
@@ -171,6 +171,10 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
     await switchTab(wrapper, '隐私与权限')
     expect(wrapper.find('[data-testid="screen-permission-panel"]').exists()).toBe(true)
 
+    // Tab 5: 工具与存储
+    await switchTab(wrapper, '工具与存储')
+    expect(wrapper.find('[data-testid="commonlibs-settings"]').exists()).toBe(true)
+
     wrapper.unmount()
   })
 
@@ -188,10 +192,10 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
 
     await buttons()[1].trigger('keydown', { key: 'End' })
     await flushPromises()
-    expect(buttons()[3].classes()).toContain('active')
-    expect(wrapper.find('[data-testid="screen-permission-panel"]').exists()).toBe(true)
+    expect(buttons()[4].classes()).toContain('active')
+    expect(wrapper.find('[data-testid="commonlibs-settings"]').exists()).toBe(true)
 
-    await buttons()[3].trigger('keydown', { key: 'Home' })
+    await buttons()[4].trigger('keydown', { key: 'Home' })
     await flushPromises()
     expect(buttons()[0].classes()).toContain('active')
     expect(wrapper.findAll('.card-title').map((t) => t.text())).toEqual(['外观', '通用'])

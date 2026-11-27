@@ -1,5 +1,9 @@
 import { pinnedLibraryMetadataSource, resolvePinnedLibraryChecksum, type LibraryMetadataSource } from './library-integrity-pins.js'
 import { verifyWindowsPluginNativeFiles } from './plugin-native-file-integrity.js'
+import {
+  directoryHasPeOrTrustFiles,
+  type WindowsNativeTrustInstallVerifier
+} from './native-trust-verifier.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
@@ -69,6 +73,8 @@ export interface PluginManifest extends Record<string, unknown> {
 export interface PluginManifestRuntimeMetadata {
   readonly sdkApiLane: SdkApiLane
   readonly macNativeComponents?: readonly PluginNativeComponent[]
+  /** 仅 Windows 普通权限官方签名原生插件：经 native 公钥离线验签后的 CommonLibs 逻辑工具 ID 列表 */
+  readonly signedCommonLibs?: readonly string[]
 }
 
 interface LibraryMetadata {
@@ -96,11 +102,29 @@ interface InstallResult {
   error?: string
 }
 
+export interface SignedCommonLibProvisionProgress {
+  readonly toolId: string
+  readonly stage: string
+  readonly transferredBytes?: number
+  readonly totalBytes?: number
+  readonly percent?: number
+  readonly attempt?: number
+  readonly maxAttempts?: number
+}
+
+export type EnsureSignedCommonLibFn = (
+  toolId: string,
+  signal?: AbortSignal,
+  onProgress?: (progress: SignedCommonLibProvisionProgress) => void
+) => Promise<void>
+
 export interface PluginInstallServiceOptions {
   preparePluginReplace?: (manifest: PluginManifest, signal: AbortSignal) => Promise<() => void>
   fetchImpl?: typeof fetch
   /** 公共库元数据来源（由主进程版本提供）；不传时只用内置完整性锚点，不请求任何后台 */
   libraryMetadata?: LibraryMetadataSource
+  /** 安装/更新 Windows 普通权限官方签名原生插件时，预拉取并离线验签 CommonLibs V2 工具池 */
+  ensureSignedCommonLib?: EnsureSignedCommonLibFn
   renameImpl?: typeof fs.rename
   runtimeTarget?: PluginRuntimeIdentity
   /** 宿主版本号（用于构造请求 User-Agent） */
@@ -110,8 +134,12 @@ export interface PluginInstallServiceOptions {
   hostMaximumSdkContractVersion?: number
   referenceRuntimeReady?: () => boolean
   macNativeCatalogLookup?: MacNativeCatalogLookup
+  /** Windows 安装期原生 DLL 签名信任校验器（生产主进程在 Windows 下强制注入） */
+  nativeTrustVerifier?: WindowsNativeTrustInstallVerifier
   state?: PluginStateService
   analytics?: (event: 'plugin_install' | 'plugin_updatecomplete' | 'plugin_uninstall', pluginId: string, data?: unknown) => void
+  /** 仅非打包开发态生效：允许展示并运行本地数据目录中已预置的 draft 草稿插件 */
+  allowDevDrafts?: boolean
 }
 
 export interface PluginDirectoryProvider {
@@ -274,6 +302,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
   readonly #dataRecovery: PluginDataRecoveryService
   readonly #fetch: typeof fetch
   readonly #libraryMetadata: LibraryMetadataSource
+  readonly #ensureSignedCommonLib: EnsureSignedCommonLibFn | undefined
   readonly #rename: typeof fs.rename
   readonly #preparePluginReplace: PluginInstallServiceOptions['preparePluginReplace']
   readonly #runtimeTarget: PluginRuntimeIdentity
@@ -281,8 +310,10 @@ export class PluginInstallService implements PluginDirectoryProvider {
   readonly #hostMaximumSdkContractVersion: SdkApiLane
   readonly #referenceRuntimeReady: () => boolean
   readonly #macNativeCatalogLookup: MacNativeCatalogLookup | undefined
+  readonly #nativeTrustVerifier: WindowsNativeTrustInstallVerifier | undefined
   readonly #pluginState: PluginStateService
   readonly #analytics: PluginInstallServiceOptions['analytics']
+  readonly #allowDevDrafts: boolean
   readonly #operations = new Map<string, ActiveOperation>()
   readonly #installResults = new Map<string, { result: InstallResult; completedAt: number }>()
   readonly #pluginLocks = new Set<string>()
@@ -305,6 +336,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     this.#dataRecovery = new PluginDataRecoveryService(dataRoot)
     this.#fetch = options.fetchImpl ?? fetch
     this.#libraryMetadata = options.libraryMetadata ?? pinnedLibraryMetadataSource
+    this.#ensureSignedCommonLib = options.ensureSignedCommonLib
     this.#rename = options.renameImpl ?? fs.rename
     this.#preparePluginReplace = options.preparePluginReplace
     this.#hostMaximumSdkContractVersion = validateSdkApiHostMaximum(
@@ -312,6 +344,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     )
     this.#referenceRuntimeReady = options.referenceRuntimeReady ?? (() => false)
     this.#macNativeCatalogLookup = options.macNativeCatalogLookup
+    this.#nativeTrustVerifier = options.nativeTrustVerifier
     this.#runtimeTarget = options.runtimeTarget ?? {
       platform: process.platform,
       runtime: 'electron',
@@ -328,6 +361,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
     this.#userAgent = `ZTools-Electron/${appVersion} (${platform}; ${arch})`
     this.#pluginState = options.state ?? new PluginStateService(dataRoot)
     this.#analytics = options.analytics
+    this.#allowDevDrafts = options.allowDevDrafts === true
     this.#ready = this.#initialize()
     void this.#ready.catch(() => undefined)
   }
@@ -359,8 +393,13 @@ export class PluginInstallService implements PluginDirectoryProvider {
           : normalizedCategoryIds.length > 1
             ? normalizedCategoryIds
             : undefined
+        const {
+          devLocalInstalled: _ignoredDevLocalInstalled,
+          devDraftAllowed: _ignoredDevDraftAllowed,
+          ...safeManifest
+        } = manifest
         data.push({
-          ...manifest,
+          ...safeManifest,
           id: manifest.id,
           pluginId: manifest.id,
           entry: manifest.entry,
@@ -368,6 +407,13 @@ export class PluginInstallService implements PluginDirectoryProvider {
           ...(iconUrl ? { icon: iconUrl, localIconUrl: iconUrl } : {}),
           revoked: isRevoked,
           ...(isRevoked && revokedReason ? { revoked_reason: revokedReason, revokedReason } : {}),
+          // 仅非打包开发态输出保留字段；非开发态已通过上方解构剥离不可信 manifest 伪造字段，保持线上返回结构零新增字段
+          ...(this.#allowDevDrafts
+            ? {
+                devLocalInstalled: !isRevoked,
+                devDraftAllowed: manifest.draft === true && !isRevoked
+              }
+            : {}),
           enabled: isRevoked ? false : (typeof stateValue?.enabled === 'boolean'
             ? stateValue.enabled
             : manifest.enabled !== false)
@@ -393,6 +439,43 @@ export class PluginInstallService implements PluginDirectoryProvider {
       }
     }
     return { success: true, data }
+  }
+
+  /**
+   * 扫描已安装的 Windows 普通权限官方签名原生插件，返回经离线验签后的 CommonLibs 依赖列表。
+   * 仅采信经 native 公钥验签通过的 native-trust.json.commonLibs，严禁读取未签名 plugin.json。
+   */
+  async listSignedCommonLibDependencies(): Promise<
+    readonly { readonly pluginId: string; readonly toolIds: readonly string[] }[]
+  > {
+    await this.#ready
+    this.#requireRunning()
+    if (this.#runtimeTarget.platform !== 'win32' || !this.#nativeTrustVerifier?.resolveVerifiedCommonLibs) {
+      return []
+    }
+    const entries = await fs.readdir(this.#pluginRoot, { withFileTypes: true })
+    const results: Array<{ readonly pluginId: string; readonly toolIds: readonly string[] }> = []
+    for (const entry of entries.slice(0, 1000)) {
+      if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name.startsWith('.')) continue
+      if (isCommonPluginRoot(entry.name)) continue
+      const pluginDir = path.join(this.#pluginRoot, entry.name)
+      try {
+        const manifest = await this.#readManifest(pluginDir, entry.name)
+        if (!manifest.dllloader || manifest.requireAdmin) continue
+        const toolIds = this.#nativeTrustVerifier.resolveVerifiedCommonLibs({
+          pluginDir,
+          pluginId: manifest.id,
+          pluginVersion: manifest.version,
+          requireAdmin: false
+        })
+        if (toolIds.length > 0) {
+          results.push({ pluginId: manifest.id, toolIds: [...toolIds] })
+        }
+      } catch (error) {
+        console.warn(`跳过无法验证签名 CommonLibs 依赖的插件目录 ${entry.name}:`, error)
+      }
+    }
+    return results
   }
 
   async markRevoked(pluginId: string, revoked: boolean, reason?: string | undefined): Promise<void> {
@@ -511,12 +594,29 @@ export class PluginInstallService implements PluginDirectoryProvider {
       const manifest = await this.#readManifest(target, pluginId)
       const resolvedTarget = await this.#assertRuntimeTarget(manifest, target)
       this.#requireRunning()
+      let signedCommonLibs: readonly string[] | undefined
+      if (
+        this.#runtimeTarget.platform === 'win32' &&
+        manifest.dllloader &&
+        this.#nativeTrustVerifier?.resolveVerifiedCommonLibs
+      ) {
+        const verifiedLibs = this.#nativeTrustVerifier.resolveVerifiedCommonLibs({
+          pluginDir: target,
+          pluginId: manifest.id,
+          pluginVersion: manifest.version,
+          requireAdmin: manifest.requireAdmin
+        })
+        if (verifiedLibs.length > 0) {
+          signedCommonLibs = verifiedLibs
+        }
+      }
       const runtimeMetadata: PluginManifestRuntimeMetadata = {
         sdkApiLane: selectSdkApiLane(
           resolvedTarget.target?.minSdkContractVersion,
           this.#hostMaximumSdkContractVersion
         ),
-        ...(this.#runtimeTarget.platform === 'darwin' ? { macNativeComponents: resolvedTarget.nativeComponents } : {})
+        ...(this.#runtimeTarget.platform === 'darwin' ? { macNativeComponents: resolvedTarget.nativeComponents } : {}),
+        ...(signedCommonLibs !== undefined ? { signedCommonLibs } : {})
       }
       return await action(manifest, target, runtimeMetadata)
     } finally {
@@ -737,18 +837,31 @@ export class PluginInstallService implements PluginDirectoryProvider {
       await verifyArchiveSha256(archive, params.checksum, signal)
       await this.#extractArchive(archive, staging, PLUGIN_EXPANDED_LIMIT, signal)
       const { manifest, sha256: manifestSha256 } = await this.#readManifestSnapshot(staging, params.pluginId)
-      await this.#assertRuntimeTarget(manifest, staging, signal, true)
+      const resolvedTarget = await this.#assertRuntimeTarget(manifest, staging, signal, true)
       if (manifest.version !== params.version) {
         throw new ZToolsError(errorCodes.pluginPackageInvalid, 'Plugin package version does not match authorized version')
       }
+      this.#assertWindowsNativeTrust(manifest, resolvedTarget, staging, signal)
       this.#progress(params.pluginId, 80, 'validate')
-      for (let index = 0; index < manifest.commonLibs.length; index += 1) {
+      const signedCommonLibs = this.#resolveInstallSignedCommonLibs(manifest, staging)
+      const legacyLibCount = manifest.commonLibs.length
+      const totalLibCount = legacyLibCount + signedCommonLibs.length
+      for (let index = 0; index < legacyLibCount; index += 1) {
         requireNotAborted(signal)
         const libId = manifest.commonLibs[index] as string
-        this.#progress(params.pluginId, 82, 'library', index + 1, manifest.commonLibs.length)
+        this.#progress(params.pluginId, 82, 'library', index + 1, totalLibCount)
         await this.#ensureLibrary(libId, signal, (percent) => {
-          this.#progress(params.pluginId, percent, 'library', index + 1, manifest.commonLibs.length)
+          this.#progress(params.pluginId, percent, 'library', index + 1, totalLibCount)
         })
+      }
+      if (signedCommonLibs.length > 0 && this.#ensureSignedCommonLib) {
+        await this.#prefetchSignedCommonLibs(
+          params.pluginId,
+          signedCommonLibs,
+          legacyLibCount,
+          totalLibCount,
+          signal
+        )
       }
       requireNotAborted(signal)
       await this.#assertRuntimeTarget(manifest, staging, signal, true)
@@ -771,7 +884,8 @@ export class PluginInstallService implements PluginDirectoryProvider {
         if (finalManifest.sha256 !== manifestSha256) {
           throw new ZToolsError(errorCodes.pluginIntegrity, 'plugin.json bytes changed during installation')
         }
-        await this.#assertRuntimeTarget(finalManifest.manifest, staging, signal, true)
+        const finalResolvedTarget = await this.#assertRuntimeTarget(finalManifest.manifest, staging, signal, true)
+        this.#assertWindowsNativeTrust(finalManifest.manifest, finalResolvedTarget, staging, signal)
         if ((await this.#readManifestSnapshot(staging, params.pluginId)).sha256 !== manifestSha256) {
           throw new ZToolsError(errorCodes.pluginIntegrity, 'plugin.json bytes changed during installation verification')
         }
@@ -805,6 +919,98 @@ export class PluginInstallService implements PluginDirectoryProvider {
           })
         }
       } finally { releaseNative?.() }
+    }
+  }
+
+  #resolveInstallSignedCommonLibs(manifest: PluginManifest, staging: string): readonly string[] {
+    if (
+      this.#runtimeTarget.platform !== 'win32' ||
+      manifest.requireAdmin ||
+      manifest.dllloader === '' ||
+      !this.#nativeTrustVerifier?.resolveVerifiedCommonLibs
+    ) {
+      return []
+    }
+    return this.#nativeTrustVerifier.resolveVerifiedCommonLibs({
+      pluginDir: staging,
+      pluginId: manifest.id,
+      pluginVersion: manifest.version,
+      requireAdmin: false
+    })
+  }
+
+  async #prefetchSignedCommonLibs(
+    pluginId: string,
+    toolIds: readonly string[],
+    legacyOffset: number,
+    totalLibCount: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    const ensureTool = this.#ensureSignedCommonLib
+    if (!ensureTool || toolIds.length === 0) return
+    const batchController = new AbortController()
+    const onOuterAbort = (): void => {
+      if (!batchController.signal.aborted) {
+        batchController.abort(signal.reason)
+      }
+    }
+    if (signal.aborted) {
+      batchController.abort(signal.reason)
+    } else {
+      signal.addEventListener('abort', onOuterAbort, { once: true })
+    }
+
+    const perToolPercent = new Array<number>(toolIds.length).fill(0)
+    let completedCount = 0
+    let lastEmittedPercent = -1
+    let lastEmittedIndex = -1
+    let settled = false
+    const emitAggregatedProgress = (): void => {
+      if (settled) return
+      const sum = perToolPercent.reduce((acc, value) => acc + value, 0)
+      const avgPercent = Math.min(100, Math.max(0, Math.floor(sum / toolIds.length)))
+      const currentIndex = Math.min(totalLibCount, legacyOffset + completedCount + 1)
+      if (avgPercent > lastEmittedPercent || currentIndex !== lastEmittedIndex) {
+        lastEmittedPercent = Math.max(lastEmittedPercent, avgPercent)
+        lastEmittedIndex = currentIndex
+        this.#progress(pluginId, lastEmittedPercent, 'library', currentIndex, totalLibCount)
+      }
+    }
+
+    try {
+      emitAggregatedProgress()
+      await Promise.all(
+        toolIds.map(async (toolId, idx) => {
+          requireNotAborted(signal)
+          await ensureTool(toolId, batchController.signal, (progress) => {
+            if (settled) return
+            const reported =
+              typeof progress.percent === 'number' && Number.isFinite(progress.percent)
+                ? Math.min(99, Math.max(0, Math.floor(progress.percent)))
+                : progress.stage === 'extracting' || progress.stage === 'verifying'
+                  ? 99
+                  : perToolPercent[idx] ?? 0
+            if (reported > (perToolPercent[idx] ?? 0)) {
+              perToolPercent[idx] = reported
+              emitAggregatedProgress()
+            }
+          })
+          if (settled) return
+          perToolPercent[idx] = 100
+          completedCount += 1
+          emitAggregatedProgress()
+        })
+      )
+      settled = true
+    } catch (error) {
+      settled = true
+      if (!batchController.signal.aborted) {
+        batchController.abort(errorCodes.callerDestroyed)
+      }
+      throw error
+    } finally {
+      settled = true
+      signal.removeEventListener('abort', onOuterAbort)
     }
   }
 
@@ -1302,6 +1508,50 @@ export class PluginInstallService implements PluginDirectoryProvider {
       }
     }
     return resolved
+  }
+
+  #assertWindowsNativeTrust(
+    manifest: PluginManifest,
+    resolved: ResolvedPluginRuntimeTarget,
+    staging: string,
+    signal: AbortSignal
+  ): void {
+    requireNotAborted(signal)
+    if (this.#runtimeTarget.platform !== 'win32') {
+      return
+    }
+    // 仅当命中 Windows 原生三大触发条件之一时校验：
+    // 1) 当前 Windows 目标声明了 nativeComponents（避免误拒仅在 macOS 声明 nativeComponents 的跨平台纯 JS 插件）
+    // 2) plugin.json 声明了非空 dllloader
+    // 3) staging 目录内扫描到任意 PE 文件或存在 native-trust.json/.sig（防止未声明夹带 PE 绕过）
+    const hasNativeTarget = resolved.nativeComponents.length > 0
+    const hasDllLoader = manifest.dllloader !== ''
+    const hasPeOrTrustFiles = hasNativeTarget || hasDllLoader ? true : directoryHasPeOrTrustFiles(staging)
+    if (!hasPeOrTrustFiles) return
+
+    // 命中原生插件条件但校验器未注入时必须 Fail-Fast，严禁静默跳过验签
+    if (this.#nativeTrustVerifier === undefined) {
+      throw new ZToolsError(
+        errorCodes.permissionDenied,
+        'Windows native trust verifier is not configured',
+        { hostCode: 'MANIFEST_UNTRUSTED' }
+      )
+    }
+
+    const declaredMainEntries: string[] = []
+    if (hasDllLoader) declaredMainEntries.push(manifest.dllloader)
+    for (const component of resolved.nativeComponents) {
+      if (component.kind === 'dll' && component.entry !== '') {
+        declaredMainEntries.push(component.entry)
+      }
+    }
+    this.#nativeTrustVerifier.verifyInstallDirectory({
+      pluginDir: staging,
+      pluginId: manifest.id,
+      pluginVersion: manifest.version,
+      requireAdmin: manifest.requireAdmin,
+      declaredMainEntries
+    })
   }
 
   #isReferenceRuntimeReady(): boolean {

@@ -7,8 +7,13 @@ export type SyncMessageKey =
   | 'aesGcm.invalidIvLength'
   | 'aesGcm.invalidTagLength'
   | 'aesGcm.decryptionFailed'
+  | 'aesGcm.missingExpectedAad'
   | 'payload.invalidConfig'
   | 'payload.invalidClipboard'
+  | 'webdav.invalidEndpoint'
+  | 'webdav.insecureHttpNotAllowed'
+  | 'webdav.invalidBasePath'
+  | 'webdav.invalidSubPath'
   | 'webdav.propfindFailed'
   | 'webdav.mkcolFailed'
   | 'webdav.getFailed'
@@ -33,6 +38,7 @@ export type SyncMessageKey =
   | 'engine.gistSyncFileNotFound'
   | 'engine.gistSyncFileEmpty'
   | 'engine.invalidSyncState'
+  | 'engine.destroyed'
 
 export type SyncMessageParams = Record<string, string | number>
 
@@ -51,8 +57,13 @@ export const SYNC_MESSAGES: Record<SyncLocale, Record<SyncMessageKey, string>> =
     'aesGcm.invalidIvLength': 'Invalid IV length: {length} bytes',
     'aesGcm.invalidTagLength': 'Invalid authentication tag length: {length} bytes',
     'aesGcm.decryptionFailed': 'AES-256-GCM authenticated decryption failed: ciphertext tampered, key mismatch, or corrupted data',
+    'aesGcm.missingExpectedAad': 'AES-256-GCM decryption failed: expected AAD prefix "{prefix}" is missing or does not match',
     'payload.invalidConfig': 'Decrypted configuration payload format is invalid',
     'payload.invalidClipboard': 'Decrypted clipboard payload format is invalid',
+    'webdav.invalidEndpoint': 'Invalid WebDAV endpoint URL: "{endpoint}"',
+    'webdav.insecureHttpNotAllowed': 'WebDAV endpoint must use HTTPS by default; set allowInsecureHttp: true to allow HTTP explicitly',
+    'webdav.invalidBasePath': 'Invalid WebDAV basePath (path traversal or illegal characters detected): "{basePath}"',
+    'webdav.invalidSubPath': 'Invalid WebDAV path (absolute URL, path traversal, or illegal characters detected): "{subPath}"',
     'webdav.propfindFailed': 'PROPFIND failed [{status} {statusText}]: {remotePath}',
     'webdav.mkcolFailed': 'MKCOL failed to create directory [{status} {statusText}]: {remotePath}',
     'webdav.getFailed': 'GET failed to download file [{status} {statusText}]: {remotePath}',
@@ -76,7 +87,8 @@ export const SYNC_MESSAGES: Record<SyncLocale, Record<SyncMessageKey, string>> =
     'engine.gistRawUrlFetchFailed': 'Failed to fetch truncated ciphertext via raw_url [{status} {statusText}]',
     'engine.gistSyncFileNotFound': 'Encrypted sync file not found in Gist [{gistId}]: {filename}',
     'engine.gistSyncFileEmpty': 'Sync file content is empty in Gist [{gistId}]: {filename}',
-    'engine.invalidSyncState': 'Decrypted sync state payload format is invalid'
+    'engine.invalidSyncState': 'Decrypted sync state payload format is invalid',
+    'engine.destroyed': 'E2eeSyncEngine has been destroyed and its derived key has been zeroed'
   },
   'zh-CN': {
     'argon2.saltTooShort': 'Argon2id 盐值长度至少需要 8 字节',
@@ -85,8 +97,13 @@ export const SYNC_MESSAGES: Record<SyncLocale, Record<SyncMessageKey, string>> =
     'aesGcm.invalidIvLength': '无效的 IV 长度: {length} 字节',
     'aesGcm.invalidTagLength': '无效的认证标签 Tag 长度: {length} 字节',
     'aesGcm.decryptionFailed': 'AES-256-GCM 认证解密失败：密文被篡改、密钥不匹配或数据损坏',
+    'aesGcm.missingExpectedAad': 'AES-256-GCM 解密失败：缺少预期的 AAD 前缀 "{prefix}" 或业务上下文不匹配',
     'payload.invalidConfig': '解密后的配置数据格式无效',
     'payload.invalidClipboard': '解密后的剪贴板数据格式无效',
+    'webdav.invalidEndpoint': '无效的 WebDAV 服务端点 URL: "{endpoint}"',
+    'webdav.insecureHttpNotAllowed': 'WebDAV 端点默认强制使用 HTTPS；如需允许明文 HTTP 请显式设置 allowInsecureHttp: true',
+    'webdav.invalidBasePath': '无效的 WebDAV basePath（检测到路径穿越或非法字符）: "{basePath}"',
+    'webdav.invalidSubPath': '无效的 WebDAV 路径（检测到绝对 URL、路径穿越或非法字符）: "{subPath}"',
     'webdav.propfindFailed': 'PROPFIND 失败 [{status} {statusText}]: {remotePath}',
     'webdav.mkcolFailed': 'MKCOL 创建目录失败 [{status} {statusText}]: {remotePath}',
     'webdav.getFailed': 'GET 下载文件失败 [{status} {statusText}]: {remotePath}',
@@ -110,7 +127,8 @@ export const SYNC_MESSAGES: Record<SyncLocale, Record<SyncMessageKey, string>> =
     'engine.gistRawUrlFetchFailed': '通过 raw_url 拉取截断密文失败 [{status} {statusText}]',
     'engine.gistSyncFileNotFound': 'Gist [{gistId}] 中未找到加密同步文件: {filename}',
     'engine.gistSyncFileEmpty': 'Gist [{gistId}] 中同步文件内容为空: {filename}',
-    'engine.invalidSyncState': '解密后的同步状态数据格式无效'
+    'engine.invalidSyncState': '解密后的同步状态数据格式无效',
+    'engine.destroyed': 'E2eeSyncEngine 已销毁且派生密钥已清零，无法继续操作'
   }
 }
 

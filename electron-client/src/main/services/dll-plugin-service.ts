@@ -30,6 +30,15 @@ import {
   findCommonPlugin,
   type CommonPluginDefinition
 } from './common-plugin-registry.js'
+import type {
+  ToolProgressEvent,
+  ToolRuntimeErrorCode
+} from '../../contracts/tool-runtime/common.js'
+import {
+  toCommonLibProvisionProgressPayload,
+  type CommonLibDownloadProgress,
+  type CommonLibDownloadProgressListener
+} from '../tool-runtime/core/commonlibs-manager.js'
 import { getResolvedLocale, syncProcessLocaleEnv, t, type SupportedLocale } from '../i18n/index.js'
 
 interface PluginManifestSource {
@@ -52,6 +61,18 @@ interface ResolvedDll {
   dllId: string
   requireAdmin: boolean
   manifest?: PluginManifest
+  /** 仅普通权限官方签名插件：经离线验签后的 CommonLibs 逻辑工具 ID 列表 */
+  signedCommonLibs?: readonly string[]
+}
+
+/** 供 DllPluginService 按需拉取并离线验签签名 CommonLibs 目录的最小端口 */
+export interface NativePluginCommonLibsPort {
+  ensureAndVerifyToolDir(
+    toolId: string,
+    signal?: AbortSignal,
+    onProgress?: CommonLibDownloadProgressListener
+  ): Promise<{ readonly toolId: string; readonly toolDir: string }>
+  recordLease(toolId: string, pluginId: string): void
 }
 
 type PrivilegedDllTaskClientPort = PrivilegedDllClientPort & Pick<
@@ -158,15 +179,15 @@ const DLL_ERROR_CODE_PATTERN = /^[A-Z0-9_]{1,64}$/
 const DLL_PARAM_CJK_PATTERN = /[\u4e00-\u9fa5]/
 const MAX_DLL_PARAM_STRING_LENGTH = 512
 
-/** 有常驻原生界面、需在热切换语言时接收 __setLocale 推送的三款 DLL（键为小写 dllId） */
-const RESIDENT_UI_DLL_IDS: ReadonlySet<string> = new Set([
+/** 历史 3 款常驻原生界面 DLL（键为小写 dllId）：仅当动态能力探测返回空 functions 或暂不可用时作为兼容兜底 */
+const LEGACY_RESIDENT_UI_DLL_IDS: ReadonlySet<string> = new Set([
   'screencaptureplugin',
   'recordplugin',
   'screencolorpickerplugin'
 ])
 
-function isResidentUiDll(dllId: string): boolean {
-  return RESIDENT_UI_DLL_IDS.has(dllId.toLowerCase())
+function isLegacyResidentUiDll(dllId: string): boolean {
+  return LEGACY_RESIDENT_UI_DLL_IDS.has(dllId.toLowerCase())
 }
 
 /**
@@ -261,6 +282,26 @@ export function withDllLocale(
   locale?: SupportedLocale
 ): Record<string, unknown> {
   return { ...params, __locale: locale ?? getResolvedLocale() }
+}
+
+/**
+ * 安全构造传给原生 DLL 的 __commonLibs 只读工具目录映射：
+ * - 无条件剥离前端/调用方传入的同名 __commonLibs 字段，阻断任意目录路径伪造；
+ * - 仅当宿主已通过官方签名校验并完成工具离线验签落盘时，写入受信任的只读目录映射。
+ */
+export function withDllCommonLibs(
+  params: Record<string, unknown>,
+  resolvedDirs?: Readonly<Record<string, string>>
+): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(params)) {
+    if (key === '__commonLibs') continue
+    sanitized[key] = value
+  }
+  if (resolvedDirs && Object.keys(resolvedDirs).length > 0) {
+    sanitized.__commonLibs = { ...resolvedDirs }
+  }
+  return sanitized
 }
 
 function translateDllTemplate(
@@ -668,6 +709,7 @@ export class DllPluginService {
   readonly #quiescingPlugins = new Set<string>()
   readonly #pluginUnloads = new Map<string, Promise<void>>()
   readonly #activeResidentDlls = new Map<string, { pluginId: string; dllId: string; context?: NativeDllInvocationContext }>()
+  readonly #localeCapableDllCache = new Map<string, boolean>()
   #nativeGeneration = 0n
   readonly #removeNativeListener: (() => void) | null
   readonly #removeServiceListener: (() => void) | null
@@ -691,7 +733,8 @@ export class DllPluginService {
     private readonly nativeMediaPolicy?: NativeMediaPathPolicy,
     private readonly watermarkSettingsDatabase?: WatermarkSettingsDatabase,
     private readonly runtimePlatform: NodeJS.Platform = process.platform,
-    private readonly capabilityAuthorization?: Pick<RuntimeCapabilityAuthorizationService, 'beginOperation'>
+    private readonly capabilityAuthorization?: Pick<RuntimeCapabilityAuthorizationService, 'beginOperation'>,
+    private readonly commonLibs?: NativePluginCommonLibsPort
   ) {
     this.#taskQuiesceTimeoutMs = Number.isInteger(lifecycleOptions.taskQuiesceTimeoutMs) &&
       Number(lifecycleOptions.taskQuiesceTimeoutMs) > 0
@@ -747,7 +790,7 @@ export class DllPluginService {
 
   /**
    * 将当前生效的规范 locale 同步写入进程环境 ZTOOLS_LOCALE，
-   * 并仅向 3 款常驻原生界面 DLL（screenshot / record / screen-color-picker）中当前已加载/活跃的实例派发 __setLocale。
+   * 并基于 DllPlugin_GetInfo 动态能力探测向支持 __setLocale 的已活跃普通原生 DLL 派发语言热更新。
    * 单款失败仅记录告警日志，不中断其他派发也不抛错。
    */
   syncLocale(locale?: SupportedLocale): SupportedLocale {
@@ -760,7 +803,7 @@ export class DllPluginService {
       targets.set(key, entry)
     }
     for (const task of this.#tasks.values()) {
-      if (task.backend !== 'native' || finalTaskStatus(task.status) || !isResidentUiDll(task.dllId)) {
+      if (task.backend !== 'native' || finalTaskStatus(task.status)) {
         continue
       }
       const key = `${task.pluginId.toLowerCase()}::${task.dllId.toLowerCase()}`
@@ -772,34 +815,69 @@ export class DllPluginService {
         })
       }
     }
-    for (const target of targets.values()) {
+    for (const [key, target] of targets.entries()) {
       if (this.#quiescingPlugins.has(target.pluginId.toLowerCase())) continue
-      void Promise.resolve()
-        .then(() => this.nativeHost?.callDll(
-          target.pluginId,
-          target.dllId,
-          '__setLocale',
-          { locale: resolved },
-          target.context
-        ))
-        .catch((error: unknown) => {
-          console.warn(
-            `向常驻界面 DLL 派发 __setLocale 失败: pluginId=${target.pluginId}, dllId=${target.dllId}`,
-            error
-          )
-        })
+      void this.#dispatchLocaleToTarget(key, target, resolved)
     }
     return resolved
+  }
+
+  async #supportsSetLocale(
+    key: string,
+    target: { pluginId: string; dllId: string; context?: NativeDllInvocationContext }
+  ): Promise<boolean> {
+    const cached = this.#localeCapableDllCache.get(key)
+    if (cached !== undefined) return cached
+    const native = this.nativeHost
+    if (!native) return false
+    try {
+      const info = await native.getDllInfo(target.pluginId, target.dllId, target.context)
+      if (Array.isArray(info?.functions) && info.functions.length > 0) {
+        const capable = info.functions.includes('__setLocale')
+        this.#localeCapableDllCache.set(key, capable)
+        return capable
+      }
+    } catch {
+      // 动态探测失败时回退兼容历史 3 款常驻原生界面 DLL，避免阻断其他插件
+    }
+    // 动态探测失败或返回空列表时仅作当次兼容回退，不持久化写入缓存，避免瞬时异常永久锁死新 DLL 的热更新能力
+    return isLegacyResidentUiDll(target.dllId)
+  }
+
+  async #dispatchLocaleToTarget(
+    key: string,
+    target: { pluginId: string; dllId: string; context?: NativeDllInvocationContext },
+    resolved: SupportedLocale
+  ): Promise<void> {
+    try {
+      if (!(await this.#supportsSetLocale(key, target))) return
+      if (this.#stopped || this.#quiescingPlugins.has(target.pluginId.toLowerCase())) return
+      await this.nativeHost?.callDll(
+        target.pluginId,
+        target.dllId,
+        '__setLocale',
+        { locale: resolved },
+        target.context
+      )
+    } catch (error: unknown) {
+      console.warn(
+        `向支持 __setLocale 的原生 DLL 派发语言热更新失败: pluginId=${target.pluginId}, dllId=${target.dllId}`,
+        error
+      )
+    }
   }
 
   #rememberActiveResidentDll(
     target: ResolvedDll,
     context?: NativeDllInvocationContext
   ): void {
-    if (this.runtimePlatform === 'darwin' || target.requireAdmin || !isResidentUiDll(target.dllId)) {
+    if (this.runtimePlatform === 'darwin' || target.requireAdmin) {
       return
     }
     const key = `${target.pluginId.toLowerCase()}::${target.dllId.toLowerCase()}`
+    if (this.#localeCapableDllCache.get(key) === false) {
+      return
+    }
     this.#activeResidentDlls.set(key, {
       pluginId: target.pluginId,
       dllId: target.dllId,
@@ -812,6 +890,12 @@ export class DllPluginService {
     for (const [key, entry] of this.#activeResidentDlls.entries()) {
       if (entry.pluginId.toLowerCase() === normalized) {
         this.#activeResidentDlls.delete(key)
+      }
+    }
+    const prefix = `${normalized}::`
+    for (const key of this.#localeCapableDllCache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.#localeCapableDllCache.delete(key)
       }
     }
   }
@@ -852,6 +936,12 @@ export class DllPluginService {
         }
         try {
           const info = await this.nativeHost.getDllInfo(pluginId, dllId, this.#nativeContext(caller))
+          if (Array.isArray(info?.functions) && info.functions.length > 0) {
+            this.#localeCapableDllCache.set(
+              `${pluginId.toLowerCase()}::${dllId.toLowerCase()}`,
+              info.functions.includes('__setLocale')
+            )
+          }
           plugins.push({ ...base, ...info, id: dllId, name: dllId, isLoaded: true })
         } catch {
           plugins.push(base)
@@ -911,7 +1001,14 @@ export class DllPluginService {
         }
         const { params: callParams, settingsToSave } = this.#prepareNativeMediaCall(target, params.func, nativeParams)
         const currentLocale = syncProcessLocaleEnv()
-        const localizedCallParams = withDllLocale(callParams, currentLocale)
+        const localizedCallParams = await this.#injectSignedCommonLibs(
+          target,
+          withDllLocale(callParams, currentLocale),
+          owner,
+          operationSignal
+        )
+        requireNotAborted(operationSignal)
+        capabilityLease?.assertCurrent()
         if (target.requireAdmin) {
           const service = this.#requireService()
           const data = localizeDllErrorPayload(await service.callDll(target.pluginId, target.dllId, params.func, localizedCallParams))
@@ -976,9 +1073,16 @@ export class DllPluginService {
     }
     const { params: callParams, settingsToSave } = this.#prepareNativeMediaCall(target, params.func, nativeParams)
     const currentLocale = syncProcessLocaleEnv()
+    const localizedCallParams = await this.#injectSignedCommonLibs(
+      target,
+      withDllLocale(callParams, currentLocale),
+      owner,
+      capabilityLease?.signal
+    )
+    capabilityLease?.assertCurrent()
     return {
       target,
-      localizedCallParams: withDllLocale(callParams, currentLocale),
+      localizedCallParams,
       ...(settingsToSave ? { settingsToSave } : {})
     }
   }
@@ -1484,6 +1588,7 @@ export class DllPluginService {
     if (this.#stopPromise) return this.#stopPromise
     this.#stopped = true
     this.#activeResidentDlls.clear()
+    this.#localeCapableDllCache.clear()
     this.#stopDeadlineMs = Date.now() + this.#taskQuiesceTimeoutMs
     this.#removeWindowListener?.()
     for (const task of this.#tasks.values()) {
@@ -1562,7 +1667,10 @@ export class DllPluginService {
         pluginId,
         dllId: declaredDllId,
         requireAdmin: manifest.requireAdmin,
-        manifest
+        manifest,
+        ...(metadata?.signedCommonLibs && metadata.signedCommonLibs.length > 0
+          ? { signedCommonLibs: metadata.signedCommonLibs }
+          : {})
       }
     })
   }
@@ -1701,6 +1809,147 @@ export class DllPluginService {
         result: callbackResult.serializedResult ?? result
       }, task.owner)
     }
+  }
+
+  async #injectSignedCommonLibs(
+    target: ResolvedDll,
+    params: Record<string, unknown>,
+    owner: CallerIdentity,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    const declaredLibs = target.signedCommonLibs
+    // 护栏 2 二次防线：特权 DLL（SYSTEM）严禁消费用户可写目录 CommonLibs，同时始终剥离伪造入参
+    if (target.requireAdmin) {
+      if (declaredLibs && declaredLibs.length > 0) {
+        throw new ZToolsError(
+          errorCodes.permissionDenied,
+          'Privileged native plugins are forbidden from consuming CommonLibs'
+        )
+      }
+      return withDllCommonLibs(params)
+    }
+    if (!declaredLibs || declaredLibs.length === 0) {
+      return withDllCommonLibs(params)
+    }
+    if (!this.commonLibs) {
+      throw new ZToolsError(
+        errorCodes.notSupported,
+        'CommonLibs manager is not configured for signed native plugin'
+      )
+    }
+    const commonLibs = this.commonLibs
+    const batchController = new AbortController()
+    const onOuterAbort = (): void => {
+      if (!batchController.signal.aborted) {
+        batchController.abort(signal?.reason)
+      }
+    }
+    if (signal?.aborted) {
+      batchController.abort(signal.reason)
+    } else if (signal) {
+      signal.addEventListener('abort', onOuterAbort, { once: true })
+    }
+
+    const provisionTaskId = `commonlibs_${randomUUID()}`
+    const perToolPercent = new Array<number>(declaredLibs.length).fill(0)
+    let emittedProvisioning = false
+    let maxAggregatedPercent = 0
+    let settled = false
+
+    const publishProvisionEvent = (payload: ToolProgressEvent): void => {
+      try {
+        this.events.publishHostToOwner('tool_runtime_progress', payload, owner)
+      } catch (error) {
+        console.warn('推送原生插件 CommonLibs 进度事件失败:', error)
+      }
+    }
+
+    const handleToolProgress = (index: number, progress: CommonLibDownloadProgress): void => {
+      if (settled) return
+      emittedProvisioning = true
+      const base = toCommonLibProvisionProgressPayload(progress)
+      const reportedPercent =
+        typeof base.percent === 'number'
+          ? base.percent
+          : progress.stage === 'extracting' || progress.stage === 'verifying'
+            ? 99
+            : perToolPercent[index] ?? 0
+      if (reportedPercent > (perToolPercent[index] ?? 0)) {
+        perToolPercent[index] = reportedPercent
+      }
+      const avgPercent = Math.min(
+        99,
+        Math.max(
+          maxAggregatedPercent,
+          Math.floor(perToolPercent.reduce((acc, value) => acc + value, 0) / declaredLibs.length)
+        )
+      )
+      maxAggregatedPercent = avgPercent
+      publishProvisionEvent({
+        taskId: provisionTaskId,
+        primitiveId: 'native.commonlibs',
+        phase: 'provisioning',
+        stage: progress.stage,
+        percent: avgPercent,
+        ...(base.transferredBytes !== undefined ? { transferredBytes: base.transferredBytes } : {}),
+        ...(base.totalBytes !== undefined ? { totalBytes: base.totalBytes } : {}),
+        ...(base.message !== undefined ? { message: base.message } : {}),
+        timestamp: Date.now()
+      })
+    }
+
+    const resolvedDirs: Record<string, string> = {}
+    try {
+      const results = await Promise.all(
+        declaredLibs.map(async (toolId, index) => {
+          requireNotAborted(signal)
+          const verified = await commonLibs.ensureAndVerifyToolDir(toolId, batchController.signal, (progress) => {
+            handleToolProgress(index, progress)
+          })
+          perToolPercent[index] = 100
+          return [toolId, verified.toolDir] as const
+        })
+      )
+      settled = true
+      for (const [toolId, toolDir] of results) {
+        commonLibs.recordLease(toolId, target.pluginId)
+        resolvedDirs[toolId] = toolDir
+      }
+      if (emittedProvisioning) {
+        publishProvisionEvent({
+          taskId: provisionTaskId,
+          primitiveId: 'native.commonlibs',
+          phase: 'completed',
+          percent: 100,
+          timestamp: Date.now()
+        })
+      }
+    } catch (error) {
+      settled = true
+      if (!batchController.signal.aborted) {
+        batchController.abort(errorCodes.callerDestroyed)
+      }
+      if (emittedProvisioning) {
+        const hostCode =
+          typeof (error as { details?: { hostCode?: unknown } } | null)?.details?.hostCode === 'string'
+            ? ((error as { details?: { hostCode?: string } }).details?.hostCode as ToolRuntimeErrorCode)
+            : undefined
+        const isCancelled = Boolean(signal?.aborted) || hostCode === 'TOOL_TASK_CANCELLED'
+        publishProvisionEvent({
+          taskId: provisionTaskId,
+          primitiveId: 'native.commonlibs',
+          phase: isCancelled ? 'cancelled' : 'failed',
+          ...(hostCode ? { errorCode: hostCode } : {}),
+          message: error instanceof Error ? error.message : String(error),
+          timestamp: Date.now()
+        })
+      }
+      throw error
+    } finally {
+      settled = true
+      signal?.removeEventListener('abort', onOuterAbort)
+    }
+    return withDllCommonLibs(params, resolvedDirs)
   }
 
   async #authorizeMediaParams(
@@ -2108,6 +2357,12 @@ export class DllPluginService {
     const nativeOwner = this.#nativeOwners.get(ownerKey)
     if (nativeOwner) {
       this.#nativeOwners.delete(ownerKey)
+      // 同步清理绑定该已释放 ownerToken 的活跃原生记录，防止后续 syncLocale 持失效上下文触发孤儿调用
+      for (const [key, entry] of this.#activeResidentDlls.entries()) {
+        if (entry.context?.ownerToken === nativeOwner.context.ownerToken) {
+          this.#activeResidentDlls.delete(key)
+        }
+      }
       void Promise.resolve().then(() => this.nativeHost?.releaseOwner?.(nativeOwner.context))
         .catch(() => undefined)
     }

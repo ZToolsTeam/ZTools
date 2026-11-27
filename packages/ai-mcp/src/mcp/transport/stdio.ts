@@ -8,11 +8,184 @@ export interface StdioClientOptions {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  /**
+   * 允许额外从宿主 process.env 透传给子进程的环境变量名白名单
+   */
+  envAllowlist?: string[];
 }
 
 export interface StdioProcessStreams {
   stdin: Writable;
   stdout: Readable;
+}
+
+// Windows 最小跨平台安全环境变量白名单（按大写归一化匹配）
+const WINDOWS_SAFE_ENV_KEYS = new Set([
+  'PATH',
+  'PATHEXT',
+  'SYSTEMROOT',
+  'COMSPEC',
+  'TEMP',
+  'TMP',
+  'USERPROFILE',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'WINDIR',
+  'NODE_ENV'
+]);
+
+// POSIX 最小跨平台安全环境变量白名单
+const POSIX_SAFE_ENV_KEYS = new Set([
+  'PATH',
+  'HOME',
+  'USER',
+  'SHELL',
+  'TMPDIR',
+  'LANG',
+  'NODE_ENV'
+]);
+
+/**
+ * 构造最小权限的子进程环境变量，避免将宿主敏感密钥（Token / API Key）无条件泄露给外部 MCP 子进程
+ */
+function buildSanitizedChildEnv(
+  options: StdioClientOptions,
+  hostEnv: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  const isWindows = platform === 'win32';
+  const extraAllowlist = new Set(
+    (options.envAllowlist || []).map((key) => (isWindows ? key.toUpperCase() : key))
+  );
+
+  for (const [key, value] of Object.entries(hostEnv)) {
+    if (value === undefined) continue;
+    if (isWindows) {
+      const upper = key.toUpperCase();
+      if (WINDOWS_SAFE_ENV_KEYS.has(upper) || extraAllowlist.has(upper)) {
+        sanitized[key] = value;
+      }
+    } else {
+      if (
+        POSIX_SAFE_ENV_KEYS.has(key) ||
+        key.startsWith('LC_') ||
+        extraAllowlist.has(key)
+      ) {
+        sanitized[key] = value;
+      }
+    }
+  }
+
+  // 合并调用方显式指定的子进程环境变量
+  if (options.env) {
+    for (const [key, value] of Object.entries(options.env)) {
+      sanitized[key] = value;
+    }
+  }
+
+  return sanitized;
+}
+
+/**
+ * Windows 下使用 taskkill /F /T /PID 清理整棵子进程树，防止孤儿进程驻留占锁
+ */
+function terminateWindowsProcessTree(child: ChildProcess): Promise<void> {
+  const pid = child.pid;
+  if (typeof pid !== 'number') {
+    try {
+      child.kill();
+    } catch (err: unknown) {
+      void err;
+    }
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(fallbackTimer);
+      resolve();
+    };
+
+    const fallbackTimer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch (err: unknown) {
+        void err;
+      }
+      finish();
+    }, 3000);
+
+    try {
+      const killer = spawn('taskkill', ['/F', '/T', '/PID', String(pid)], {
+        windowsHide: true,
+        stdio: 'ignore'
+      });
+      killer.once('error', () => {
+        try {
+          child.kill();
+        } catch (err: unknown) {
+          void err;
+        }
+        finish();
+      });
+      killer.once('close', () => {
+        finish();
+      });
+    } catch (err: unknown) {
+      void err;
+      try {
+        child.kill();
+      } catch (killErr: unknown) {
+        void killErr;
+      }
+      finish();
+    }
+  });
+}
+
+/**
+ * POSIX 下先发送 SIGTERM，超时仍未退出时再发送 SIGKILL
+ */
+function terminatePosixProcess(child: ChildProcess, graceMs = 2000): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(forceTimer);
+      child.removeListener('exit', onExit);
+      resolve();
+    };
+
+    const onExit = () => finish();
+    child.once('exit', onExit);
+
+    const forceTimer = setTimeout(() => {
+      try {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+        }
+      } catch (err: unknown) {
+        void err;
+      }
+      finish();
+    }, graceMs);
+
+    try {
+      child.kill('SIGTERM');
+    } catch (err: unknown) {
+      void err;
+      finish();
+    }
+  });
 }
 
 export class StdioTransport implements McpTransport {
@@ -26,6 +199,9 @@ export class StdioTransport implements McpTransport {
   private connected: boolean = false;
   private closedEmitted: boolean = false;
   private options?: StdioClientOptions;
+  private onOutData?: (chunk: Buffer) => void;
+  private onOutError?: (err: Error) => void;
+  private onOutEnd?: () => void;
 
   constructor(optionsOrStreams: StdioClientOptions | StdioProcessStreams) {
     if ('command' in optionsOrStreams) {
@@ -42,9 +218,10 @@ export class StdioTransport implements McpTransport {
 
   public async connect(): Promise<void> {
     if (this.options) {
+      const sanitizedEnv = buildSanitizedChildEnv(this.options);
       const child = spawn(this.options.command, this.options.args || [], {
         cwd: this.options.cwd,
-        env: { ...process.env, ...this.options.env },
+        env: sanitizedEnv,
         stdio: ['pipe', 'pipe', 'inherit']
       });
 
@@ -69,18 +246,20 @@ export class StdioTransport implements McpTransport {
     this.connected = true;
     this.closedEmitted = false;
 
-    this.outStream.on('data', (chunk: Buffer) => {
+    this.onOutData = (chunk: Buffer) => {
       this.handleData(chunk.toString('utf-8'));
-    });
-
-    this.outStream.on('error', (err: Error) => {
+    };
+    this.onOutError = (err: Error) => {
       this.emitError(err);
-    });
-
-    this.outStream.on('end', () => {
+    };
+    this.onOutEnd = () => {
       this.connected = false;
       this.emitClose();
-    });
+    };
+
+    this.outStream.on('data', this.onOutData);
+    this.outStream.on('error', this.onOutError);
+    this.outStream.on('end', this.onOutEnd);
   }
 
   private handleData(text: string): void {
@@ -123,18 +302,52 @@ export class StdioTransport implements McpTransport {
   }
 
   public async close(): Promise<void> {
-    if (!this.connected) return;
+    const wasConnected = this.connected;
     this.connected = false;
 
-    if (this.childProcess) {
-      try {
-        this.childProcess.kill();
-      } catch {
-        // 忽略已退出子进程的 kill 异常
+    // 卸载输出流事件监听，避免关闭过程中触发多余回调
+    if (this.outStream) {
+      if (this.onOutData) this.outStream.removeListener('data', this.onOutData);
+      if (this.onOutError) this.outStream.removeListener('error', this.onOutError);
+      if (this.onOutEnd) this.outStream.removeListener('end', this.onOutEnd);
+    }
+    this.onOutData = undefined;
+    this.onOutError = undefined;
+    this.onOutEnd = undefined;
+
+    const child = this.childProcess;
+    this.childProcess = undefined;
+
+    if (child) {
+      // 先安全关闭 stdin/stdout/stderr 并移除监听，防止句柄占锁
+      const streams = [child.stdin, child.stdout, child.stderr];
+      for (const stream of streams) {
+        if (!stream) continue;
+        try {
+          stream.removeAllListeners();
+          if ('end' in stream && typeof stream.end === 'function' && !stream.destroyed) {
+            stream.end();
+          }
+          if (!stream.destroyed) {
+            stream.destroy();
+          }
+        } catch (err: unknown) {
+          void err;
+        }
+      }
+
+      if (child.exitCode === null && child.signalCode === null) {
+        if (process.platform === 'win32') {
+          await terminateWindowsProcessTree(child);
+        } else {
+          await terminatePosixProcess(child);
+        }
       }
     }
 
-    this.emitClose();
+    if (wasConnected || child) {
+      this.emitClose();
+    }
   }
 
   public onMessage(handler: (message: JsonRpcMessage) => void): void {
@@ -153,8 +366,8 @@ export class StdioTransport implements McpTransport {
     for (const handler of this.errorHandlers) {
       try {
         handler(err);
-      } catch {
-        // 忽略错误监听器自身抛出的异常
+      } catch (handlerErr: unknown) {
+        void handlerErr;
       }
     }
   }
@@ -165,8 +378,8 @@ export class StdioTransport implements McpTransport {
     for (const handler of this.closeHandlers) {
       try {
         handler();
-      } catch {
-        // 忽略关闭监听器自身抛出的异常
+      } catch (handlerErr: unknown) {
+        void handlerErr;
       }
     }
   }

@@ -13,15 +13,27 @@ export function startMacos(argv = [], {
   run = spawnSync, stdout = console.log, stderr = console.error
 } = {}) {
   if (argv.length === 1 && argv[0] === '--help') {
-    stdout('npm run start:mac -- [--remote-debugging-port=1024..65535]')
+    stdout('npm run start:mac -- [--remote-debugging-port=1024..65535] [--data-root=<dir>] [--dev-allow-drafts|--dev-exclude-drafts] [--dev-commonlibs-public-keys=<file>]')
     return 0
   }
-  if (argv.length > 1 || (argv.length === 1 && !/^--remote-debugging-port=\d+$/.test(argv[0]))) {
+  for (const arg of argv) {
+    if (/^--remote-debugging-port=\d+$/.test(arg)) {
+      const port = Number(arg.split('=')[1])
+      if (port < 1024 || port > 65535) {
+        stderr('调试端口必须为 1024..65535')
+        return 1
+      }
+      continue
+    }
+    if (
+      arg === '--dev-allow-drafts' ||
+      arg === '--dev-exclude-drafts' ||
+      (arg.startsWith('--data-root=') && arg.length > '--data-root='.length) ||
+      (arg.startsWith('--dev-commonlibs-public-keys=') && arg.length > '--dev-commonlibs-public-keys='.length)
+    ) {
+      continue
+    }
     stderr('start:mac 参数无效；使用 --help 查看允许参数')
-    return 1
-  }
-  if (argv.length && (Number(argv[0].split('=')[1]) < 1024 || Number(argv[0].split('=')[1]) > 65535)) {
-    stderr('调试端口必须为 1024..65535')
     return 1
   }
   if (platform !== 'darwin') {

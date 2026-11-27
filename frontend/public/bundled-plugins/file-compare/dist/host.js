@@ -1,5 +1,5 @@
 import { t } from "./i18n.js";
-import { resolveErrorMessage } from './error-i18n.js';
+import { extractErrorCode, extractHostCode, extractRawErrorText, resolveErrorMessage } from './error-i18n.js';
 /**
  * 调用 ZTools 宿主能力（选择文件、读取文本文件）
  */
@@ -14,8 +14,21 @@ async function callHost(method, params = {}) {
     const envelope = await fn({ messageId: `cmp_${Date.now()}_${seq}`, params });
     if (!envelope || typeof envelope !== "object")
         throw new Error(t("hostUnrecognizedResult"));
-    if (!envelope.success)
-        throw new Error(resolveErrorMessage(envelope.error, t("hostMethodFailed", { method })));
+    if (!envelope.success) {
+        const err = new Error(resolveErrorMessage(envelope.error, t("hostMethodFailed", { method })));
+        const code = extractErrorCode(envelope.error);
+        const hostCode = extractHostCode(envelope.error);
+        const rawMessage = extractRawErrorText(envelope.error);
+        if (code)
+            err.code = code;
+        if (hostCode) {
+            err.hostCode = hostCode;
+            err.details = { hostCode };
+        }
+        if (rawMessage)
+            err.rawMessage = rawMessage;
+        throw err;
+    }
     return envelope.data;
 }
 /** 单个文本文件读取上限 */
@@ -32,15 +45,22 @@ export async function readTextFileByPath(filePath) {
         read = await callHost("filesystem_read_file", { path: filePath, encoding: "utf8" });
     }
     catch (err) {
-        const errRec = err && typeof err === "object" ? err : null;
+        const errRec = err && typeof err === "object"
+            ? err
+            : null;
         const code = typeof errRec?.code === "string" ? errRec.code : "";
-        const hostCode = typeof errRec?.details?.hostCode === "string" ? errRec.details.hostCode : "";
+        const hostCode = typeof errRec?.hostCode === "string"
+            ? errRec.hostCode
+            : typeof errRec?.details?.hostCode === "string"
+                ? errRec.details.hostCode
+                : "";
         const msg = err instanceof Error ? err.message : String(err ?? "");
+        const rawMsg = typeof errRec?.rawMessage === "string" ? errRec.rawMessage : msg;
         const isEncodingErr = code === "INVALID_UTF8" ||
             hostCode === "INVALID_UTF8" ||
-            /utf|decode/i.test(msg) ||
+            /utf|decode/i.test(rawMsg) ||
             // i18n-allow: legacy host fallback
-            (!code && !hostCode && /编码/.test(msg));
+            (!code && !hostCode && /编码/.test(rawMsg));
         throw new Error(isEncodingErr ? t("fileNotUtf8") : msg || t("readFileFailed"));
     }
     return { name: filePath.split(/[\\/]/).pop() || filePath, text: read.content };

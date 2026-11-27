@@ -1211,39 +1211,17 @@ export class NetworkHostPluginHandler {
   }
 
   async handleVideoDownloader(
-    fn: string,
-    params: Record<string, unknown>,
-    caller?: CallerIdentity,
-    signal?: AbortSignal
+    _fn: string,
+    _params: Record<string, unknown>,
+    _caller?: CallerIdentity,
+    _signal?: AbortSignal
   ): Promise<unknown> {
-    const lowerFn = fn.toLowerCase()
-    if (lowerFn === 'parseurl' || lowerFn === 'extractinfo' || lowerFn === 'getvideoinfo') {
-      const url = String(params.url ?? '').trim()
-      if (!url) {
-        return { ok: false, success: false, errorCode: 'INVALID_REQUEST', error: t('hostPlugin.network.video.invalidUrl') }
-      }
-      const parsed = new URL(url, 'https://localhost')
-      return {
-        ok: true,
-        success: true,
-        url,
-        title: parsed.pathname.split('/').filter(Boolean).pop() || 'Online Video Stream',
-        site: parsed.hostname,
-        formats: [
-          { id: 'best', labelKey: 'hostPlugin.network.video.formatBest', label: t('hostPlugin.network.video.formatBest'), ext: 'mp4' },
-          { id: 'audio', labelKey: 'hostPlugin.network.video.formatAudio', label: t('hostPlugin.network.video.formatAudio'), ext: 'mp3' }
-        ]
-      }
-    }
-
-    if (lowerFn === 'download' || lowerFn === 'startdownload') {
-      return this.handleMultiDownload('startDownload', params, caller, signal)
-    }
-
+    // 视频解析与下载仅允许走 Windows 原生 VideoDownloaderPlugin，严禁返回伪造解析结果或静态格式占位
     return {
-      ok: true,
-      success: true,
-      tasks: Array.from(this.#downloadTasks.values())
+      ok: false,
+      success: false,
+      errorCode: 'NOT_SUPPORTED',
+      error: t('hostPlugin.network.video.nativeRequired')
     }
   }
 

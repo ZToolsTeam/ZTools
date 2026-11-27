@@ -62,17 +62,52 @@ export function encryptAesGcm(
   return payload
 }
 
+export interface DecryptAesGcmOptions {
+  /**
+   * 显式指定错误文案语言（覆盖运行时默认语言）
+   */
+  locale?: string
+  /**
+   * 预期 AAD 业务前缀（提供时强制校验 payload.aad 非空且 UTF-8 解码后以此开头，防止跨业务密文混淆）
+   */
+  expectedAadPrefix?: string
+}
+
+function resolveDecryptOptions(
+  localeOrOptions?: string | DecryptAesGcmOptions,
+  expectedAadPrefix?: string
+): DecryptAesGcmOptions {
+  if (typeof localeOrOptions === 'object' && localeOrOptions !== null) {
+    return {
+      locale: localeOrOptions.locale,
+      expectedAadPrefix: expectedAadPrefix ?? localeOrOptions.expectedAadPrefix
+    }
+  }
+  return {
+    locale: localeOrOptions,
+    expectedAadPrefix
+  }
+}
+
 /**
  * 采用 AES-256-GCM 对密文进行认证解密
- * 包含完整的消息认证码校验（防重放与防篡改）
+ * 包含完整的消息认证码校验（防重放与防篡改）以及可选的 AAD 业务前缀校验
  * @param payload 加密封包
  * @param key 32 字节 (256-bit) 对称密钥
+ * @param localeOrOptions 语言标识或解密选项对象
+ * @param expectedAadPrefix 可选预期 AAD 业务前缀（向后兼容末尾参数形式）
  */
 export function decryptAesGcm(
   payload: EncryptedPayload,
   key: Buffer,
-  locale?: string
+  localeOrOptions?: string | DecryptAesGcmOptions,
+  expectedAadPrefix?: string
 ): Buffer {
+  const { locale, expectedAadPrefix: aadPrefix } = resolveDecryptOptions(
+    localeOrOptions,
+    expectedAadPrefix
+  )
+
   if (key.length !== 32) {
     throw new DecryptionError(tSync('aesGcm.invalidKeyLength', { length: key.length }, locale))
   }
@@ -102,11 +137,27 @@ export function decryptAesGcm(
       throw new DecryptionError(tSync('aesGcm.invalidTagLength', { length: tag.length }, locale))
     }
 
+    let aadBuf: Buffer | undefined
+    if (aadPrefix !== undefined) {
+      if (typeof payload.aad !== 'string' || payload.aad.length === 0) {
+        throw new DecryptionError(
+          tSync('aesGcm.missingExpectedAad', { prefix: aadPrefix }, locale)
+        )
+      }
+      aadBuf = Buffer.from(payload.aad, 'base64')
+      if (!aadBuf.toString('utf8').startsWith(aadPrefix)) {
+        throw new DecryptionError(
+          tSync('aesGcm.missingExpectedAad', { prefix: aadPrefix }, locale)
+        )
+      }
+    } else if (payload.aad !== undefined) {
+      aadBuf = Buffer.from(payload.aad, 'base64')
+    }
+
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
     decipher.setAuthTag(tag)
 
-    if (payload.aad !== undefined) {
-      const aadBuf = Buffer.from(payload.aad, 'base64')
+    if (aadBuf !== undefined) {
       decipher.setAAD(aadBuf)
     }
 
@@ -126,7 +177,8 @@ export function decryptAesGcm(
 export function decryptAesGcmString(
   payload: EncryptedPayload,
   key: Buffer,
-  locale?: string
+  localeOrOptions?: string | DecryptAesGcmOptions,
+  expectedAadPrefix?: string
 ): string {
-  return decryptAesGcm(payload, key, locale).toString('utf8')
+  return decryptAesGcm(payload, key, localeOrOptions, expectedAadPrefix).toString('utf8')
 }

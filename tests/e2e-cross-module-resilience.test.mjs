@@ -574,7 +574,7 @@ describe('【链路 5】AI 智能调度与 MCP 工具链全链路串联及容灾
 // =========================================================================
 describe('【链路 6】去中心化 E2EE 存储篡改与冲突容灾测试', () => {
   it('密码学破损测试 6.1: AES-256-GCM 密文篡改 1 字节，解密必须立刻抛出 DecryptionError', () => {
-    const masterKey = deriveMasterKey('SuperSecretUserPassword@2026', 'test_salt_123456');
+    const masterKey = deriveMasterKey('SuperSecretUserPassword@2026', 'test_salt_123456', { memoryCost: 64, timeCost: 2 });
     const plaintext = JSON.stringify({ snippets: ['hello world', 'git commit'] });
 
     const payload = encryptAesGcm(plaintext, masterKey);
@@ -593,8 +593,8 @@ describe('【链路 6】去中心化 E2EE 存储篡改与冲突容灾测试', ()
   });
 
   it('密码学认证测试 6.2: 错误的主密码尝试解密，解密必须被拦截拒绝', () => {
-    const correctKey = deriveMasterKey('CorrectPassword123', 'salt_salt_salt');
-    const wrongKey = deriveMasterKey('WrongPassword888', 'salt_salt_salt');
+    const correctKey = deriveMasterKey('CorrectPassword123', 'salt_salt_salt', { memoryCost: 64, timeCost: 2 });
+    const wrongKey = deriveMasterKey('WrongPassword888', 'salt_salt_salt', { memoryCost: 64, timeCost: 2 });
 
     const payload = encryptAesGcm('敏感数据不可泄露', correctKey);
 

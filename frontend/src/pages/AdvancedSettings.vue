@@ -16,6 +16,7 @@ import { useToast } from '@/composables/useToast'
 import { track } from '@edition'
 import AppearanceSettings from '@/components/settings/AppearanceSettings.vue'
 import BundledPluginsSettings, { queueBundledPluginFocus } from '@/components/settings/BundledPluginsSettings.vue'
+import CommonLibsSettings from '@/components/settings/CommonLibsSettings.vue'
 import { ROUTES } from '@/router/routes'
 import { useAppPreferencesApi } from '@/composables/useAppPreferencesApi'
 import {
@@ -130,12 +131,13 @@ const refreshAutostartStatus = async () => {
   } catch { autostartStatus.value = '' }
 }
 
-// 设置页 4 个主 Tab 及其查询参数别名映射（唯一信源）
+// 设置页 5 个主 Tab 及其查询参数别名映射（唯一信源）
 const settingsTabOptions = computed(() => [
   { value: 'general', label: t('settings.tabs.general') },
   { value: 'shortcuts', label: t('settings.tabs.shortcuts') },
   { value: 'bundled', label: t('settings.tabs.bundled') },
-  { value: 'privacy', label: t('settings.tabs.privacy') }
+  { value: 'privacy', label: t('settings.tabs.privacy') },
+  { value: 'storage', label: t('settings.tabs.storage') }
 ])
 
 const SETTINGS_TAB_ALIASES = Object.freeze({
@@ -147,7 +149,10 @@ const SETTINGS_TAB_ALIASES = Object.freeze({
   bundled: 'bundled',
   privacy: 'privacy',
   permission: 'privacy',
-  permissions: 'privacy'
+  permissions: 'privacy',
+  storage: 'storage',
+  commonlibs: 'storage',
+  tools: 'storage'
 })
 
 function resolveSettingsTab(rawTab) {
@@ -1376,6 +1381,12 @@ onBeforeUnmount(() => {
         <!-- Tab 4: 隐私与权限 -->
         <ScreenPermissionPanel
           v-else-if="activeTab === 'privacy'"
+          class="wide-card"
+        />
+
+        <!-- Tab 5: 工具与存储 -->
+        <CommonLibsSettings
+          v-else-if="activeTab === 'storage'"
           class="wide-card"
         />
       </div>

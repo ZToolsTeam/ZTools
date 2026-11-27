@@ -5,9 +5,10 @@
 #include "ztools_service/named_pipe_server.hpp"
 #include "ztools_service/pipe_protocol.hpp"
 #include "ztools_service/privileged_dll_resolver.hpp"
-#include "ztools_service/privileged_manifest.hpp"
 #include "ztools_service/service_auth.hpp"
 #include "ztools_service/service_secret.hpp"
+#include "native_trust_bundle.generated.hpp"
+#include "../../shared/dll_paths.hpp"
 
 #include <Windows.h>
 
@@ -30,6 +31,9 @@ std::wstring g_data_root_override;
 
 #if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
 std::wstring g_test_console_pipe;
+std::wstring g_test_priv_pubkey_hex;
+std::wstring g_test_snapshot_root;
+std::wstring g_test_trust_state_file;
 
 bool IsIsolatedTestPipe(const std::wstring_view value) noexcept {
   constexpr std::wstring_view prefix = L"\\\\.\\pipe\\ZToolsPrivilegedService.v1.integration.";
@@ -778,6 +782,14 @@ int RunConsole() {
   std::wstring pipe_name(ztools::service::kServicePipeName);
 #if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
   if (!g_test_console_pipe.empty()) pipe_name = g_test_console_pipe;
+  if (!g_test_snapshot_root.empty()) manifest_config.snapshot_root_override = g_test_snapshot_root;
+  if (!g_test_trust_state_file.empty()) manifest_config.trust_state_file_override = g_test_trust_state_file;
+  if (!g_test_priv_pubkey_hex.empty()) {
+    std::array<std::uint8_t, ztools::native_trust::kP256PublicKeyBytes> pub{};
+    if (ztools::dll_paths::ParseHex(g_test_priv_pubkey_hex, pub)) {
+      manifest_config.test_overrides.ephemeral_privileged_pub = pub;
+    }
+  }
 #endif
   ServiceRuntime runtime({
       ztools::service::RuntimeMode::console,
@@ -910,6 +922,8 @@ int RunSelfTest() {
     return 34;
   }
   ztools::service::SecureEraseServiceBytes(secret);
+  std::wstring bundle_sha_wide;
+  ztools::dll_paths::Utf8ToWide(ztools::native_trust::kNativeTrustBundleSha256, bundle_sha_wide);
   std::wcout << L"{\"service\":\"ZToolsService\",\"protocolVersion\":"
              << ztools::service::kServiceProtocolVersion
              << L",\"transport\":\"named-pipe\",\"acl\":\"system+service+user\""
@@ -917,7 +931,8 @@ int RunSelfTest() {
              << L",\"auth\":\"hmac-sha256\",\"replay\":\"strict\",\"clientPid\":"
              << pipe_server->last_client_process_id()
              << L",\"clientSessionId\":" << pipe_server->last_client_session_id()
-             << L",\"dllResolution\":\"plugin-directory\",\"dependencies\":\"system32-only\""
+             << L",\"dllResolution\":\"trusted-snapshot\",\"dependencies\":\"system32+trusted-snapshot\""
+             << L",\"trustBundleSha256\":\"" << bundle_sha_wide << L"\""
              << L",\"commandPolicy\":\"single-owner\",\"state\":\""
              << ztools::service::StateName(runtime.state()) << L"\"}" << L'\n';
   return 0;
@@ -925,28 +940,42 @@ int RunSelfTest() {
 
 #if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
 int RunIntegrationTestServer(
-    const std::wstring_view pipe_name,
-    const std::wstring_view data_root = {},
-    const std::wstring_view manifest_sha256 = {}) {
-  if (!IsIsolatedTestPipe(pipe_name) ||
-      data_root.find(L'\0') != std::wstring_view::npos ||
-      manifest_sha256.find(L'\0') != std::wstring_view::npos ||
-      (!manifest_sha256.empty() && data_root.empty())) {
-    return 40;
-  }
+    const int argument_count,
+    wchar_t* arguments[]) {
+  if (argument_count < 3) return 40;
+  const std::wstring_view pipe_name(arguments[2]);
+  if (!IsIsolatedTestPipe(pipe_name)) return 40;
+
   ztools::service::RuntimeOptions options;
   options.mode = ztools::service::RuntimeMode::console;
   options.pipe_name = std::wstring(pipe_name);
   auto& dll_path_config = options.privileged_dll_resolver;
-  dll_path_config.data_root = std::wstring(data_root);
-  dll_path_config.manifest_trust.data_root = std::wstring(data_root);
-  if (!manifest_sha256.empty()) {
-    if (!ztools::service::ParsePrivilegedManifestSha256(
-            std::wstring(manifest_sha256),
-            &dll_path_config.manifest_trust.manifest_sha256)) {
-      return 40;
+
+  std::vector<std::wstring_view> positional;
+  for (int i = 3; i < argument_count; ++i) {
+    const std::wstring_view arg(arguments[i]);
+    if (arg == L"--disable-legacy") {
+      dll_path_config.test_overrides.disable_legacy = true;
+    } else if (arg == L"--snapshot-root") {
+      if (i + 1 >= argument_count) return 40;
+      dll_path_config.snapshot_root_override = arguments[++i];
+    } else if (arg == L"--trust-state-file") {
+      if (i + 1 >= argument_count) return 40;
+      dll_path_config.trust_state_file_override = arguments[++i];
+    } else {
+      positional.push_back(arg);
     }
-    dll_path_config.manifest_trust.trusted = true;
+  }
+  if (positional.size() > 2) return 40;
+  if (positional.size() >= 1) {
+    if (positional[0].find(L'\0') != std::wstring_view::npos) return 40;
+    dll_path_config.data_root = std::wstring(positional[0]);
+  }
+  if (positional.size() == 2) {
+    if (dll_path_config.data_root.empty()) return 40;
+    std::array<std::uint8_t, ztools::native_trust::kP256PublicKeyBytes> pub{};
+    if (!ztools::dll_paths::ParseHex(positional[1], pub)) return 40;
+    dll_path_config.test_overrides.ephemeral_privileged_pub = pub;
   }
   ServiceRuntime runtime(std::move(options));
   if (!runtime.Start()) {
@@ -1006,8 +1035,8 @@ void ShowUsage() {
              << L"  --client-bridge <pipe> <timeout-ms>\n"
              << L"              Verify the SCM service and forward its pipe over stdio\n"
 #if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
-             << L"  --integration-test-server <pipe> [data-root [manifest-sha256]]\n"
-             << L"  --console --test-pipe <isolated-integration-pipe>\n"
+             << L"  --integration-test-server <pipe> [data-root [test-priv-pubkey-hex]] [--disable-legacy] [--snapshot-root <dir>] [--trust-state-file <file>]\n"
+             << L"  --console --test-pipe <isolated-integration-pipe> [--test-priv-pubkey <hex>] [--snapshot-root <dir>] [--trust-state-file <file>]\n"
 #endif
              << L"  --help       Show this help\n";
 }
@@ -1021,12 +1050,9 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
         argument_count == 4 ? std::wstring_view(arguments[3]) : std::wstring_view{});
   }
 #if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
-  if ((argument_count >= 3 && argument_count <= 5) &&
+  if (argument_count >= 3 &&
       std::wstring_view(arguments[1]) == L"--integration-test-server") {
-    return RunIntegrationTestServer(
-        arguments[2],
-        argument_count >= 4 ? std::wstring_view(arguments[3]) : std::wstring_view{},
-        argument_count == 5 ? std::wstring_view(arguments[4]) : std::wstring_view{});
+    return RunIntegrationTestServer(argument_count, arguments);
   }
 #endif
   if (argument_count == 2) {
@@ -1047,7 +1073,11 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
       continue;
     }
 #if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
-    if (argument == L"--test-pipe" && index + 1 < argument_count) {
+    if (argument == L"--test-pipe") {
+      if (index + 1 >= argument_count) {
+        std::wcerr << L"Missing value for --test-pipe\n";
+        return 2;
+      }
       const std::wstring_view test_pipe(arguments[++index]);
       if (!g_test_console_pipe.empty() || !IsIsolatedTestPipe(test_pipe)) {
         std::wcerr << L"Invalid or duplicate isolated --test-pipe\n";
@@ -1056,9 +1086,37 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
       g_test_console_pipe.assign(test_pipe);
       continue;
     }
+    if (argument == L"--test-priv-pubkey") {
+      if (index + 1 >= argument_count) {
+        std::wcerr << L"Missing value for --test-priv-pubkey\n";
+        return 2;
+      }
+      g_test_priv_pubkey_hex.assign(arguments[++index]);
+      continue;
+    }
+    if (argument == L"--snapshot-root") {
+      if (index + 1 >= argument_count) {
+        std::wcerr << L"Missing value for --snapshot-root\n";
+        return 2;
+      }
+      g_test_snapshot_root.assign(arguments[++index]);
+      continue;
+    }
+    if (argument == L"--trust-state-file") {
+      if (index + 1 >= argument_count) {
+        std::wcerr << L"Missing value for --trust-state-file\n";
+        return 2;
+      }
+      g_test_trust_state_file.assign(arguments[++index]);
+      continue;
+    }
 #endif
     std::wstring value;
-    if (argument == L"--data-root" && index + 1 < argument_count) {
+    if (argument == L"--data-root") {
+      if (index + 1 >= argument_count) {
+        std::wcerr << L"Missing value for --data-root\n";
+        return 2;
+      }
       value = arguments[++index];
     } else if (argument.starts_with(L"--data-root=")) {
       value = argument.substr(std::wstring_view(L"--data-root=").size());

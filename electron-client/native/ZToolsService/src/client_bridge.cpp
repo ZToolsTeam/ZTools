@@ -145,7 +145,8 @@ bool ConnectPipe(const std::wstring& name, const ULONGLONG deadline, const HANDL
   for (;;) {
     if (!Running(parent)) { *error = ERROR_CANCELLED; return false; }
     pipe->reset(CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-        OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr));
+        OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION | FILE_FLAG_OVERLAPPED,
+        nullptr));
     if (pipe->get() != INVALID_HANDLE_VALUE) return true;
     *error = GetLastError();
     // A missing or inaccessible optional service never becomes an identity failure.
@@ -287,20 +288,77 @@ struct RelayDirection {
   bool to_service;
 };
 
+bool ReadPipeOverlapped(
+    const HANDLE pipe,
+    const HANDLE event,
+    void* const buffer,
+    const DWORD size,
+    DWORD* const bytes_read) noexcept {
+  *bytes_read = 0;
+  ResetEvent(event);
+  OVERLAPPED overlapped{};
+  overlapped.hEvent = event;
+  if (ReadFile(pipe, buffer, size, bytes_read, &overlapped) != FALSE) {
+    return *bytes_read > 0;
+  }
+  if (GetLastError() != ERROR_IO_PENDING) {
+    return false;
+  }
+  return GetOverlappedResult(pipe, &overlapped, bytes_read, TRUE) != FALSE && *bytes_read > 0;
+}
+
+bool WritePipeOverlapped(
+    const HANDLE pipe,
+    const HANDLE event,
+    const void* const data,
+    const DWORD length) noexcept {
+  const auto* bytes = static_cast<const unsigned char*>(data);
+  DWORD offset = 0;
+  while (offset < length) {
+    ResetEvent(event);
+    OVERLAPPED overlapped{};
+    overlapped.hEvent = event;
+    DWORD written = 0;
+    if (WriteFile(pipe, bytes + offset, length - offset, &written, &overlapped) == FALSE) {
+      if (GetLastError() != ERROR_IO_PENDING) {
+        return false;
+      }
+      if (GetOverlappedResult(pipe, &overlapped, &written, TRUE) == FALSE) {
+        return false;
+      }
+    }
+    if (written == 0) {
+      return false;
+    }
+    offset += written;
+  }
+  return true;
+}
+
 DWORD WINAPI Relay(void* const parameter) noexcept {
   auto& direction = *static_cast<RelayDirection*>(parameter);
   auto& state = *direction.state;
-  if (WaitForSingleObject(state.gate, INFINITE) != WAIT_OBJECT_0) {
+  UniqueHandle io_event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  if (io_event.get() == nullptr || WaitForSingleObject(state.gate, INFINITE) != WAIT_OBJECT_0) {
     SetEvent(state.stop); return 1;
   }
-  const HANDLE source = direction.to_service ? state.input : state.pipe;
-  const HANDLE destination = direction.to_service ? state.pipe : state.output;
   std::array<unsigned char, 16'384> buffer{};
   while (WaitForSingleObject(state.stop, 0) == WAIT_TIMEOUT) {
     DWORD read = 0;
-    if (ReadFile(source, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) == FALSE ||
-        read == 0 || WaitForSingleObject(state.stop, 0) != WAIT_TIMEOUT ||
-        !WriteAll(destination, buffer.data(), read)) break;
+    const bool read_ok = direction.to_service
+        ? (ReadFile(state.input, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) != FALSE &&
+           read > 0)
+        : ReadPipeOverlapped(
+              state.pipe, io_event.get(), buffer.data(), static_cast<DWORD>(buffer.size()), &read);
+    if (!read_ok || WaitForSingleObject(state.stop, 0) != WAIT_TIMEOUT) {
+      break;
+    }
+    const bool write_ok = direction.to_service
+        ? WritePipeOverlapped(state.pipe, io_event.get(), buffer.data(), read)
+        : WriteAll(state.output, buffer.data(), read);
+    if (!write_ok) {
+      break;
+    }
   }
   SetEvent(state.stop);
   return 0;

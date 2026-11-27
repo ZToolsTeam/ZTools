@@ -4,9 +4,13 @@
 #include "ztools_service/privileged_dll_task_manager.hpp"
 #include "ztools_service/privileged_dll_resolver.hpp"
 #include "ztools_service/service_command_protocol.hpp"
+#include "ztools_service/trusted_snapshot.hpp"
+#include "../../shared/dll_paths.hpp"
 
 #include <Windows.h>
+#include <aclapi.h>
 #include <objbase.h>
+#include <sddl.h>
 
 #include <iostream>
 #include <optional>
@@ -44,6 +48,19 @@ bool WideToUtf8(const std::wstring_view value, std::string* const output) {
              length,
              nullptr,
              nullptr) == length;
+}
+
+std::string JsonEscape(std::string_view value) {
+  std::string out;
+  out.reserve(value.size() + 2);
+  out.push_back('"');
+  for (const unsigned char ch : value) {
+    if (ch == '"') out += "\\\"";
+    else if (ch == '\\') out += "\\\\";
+    else out.push_back(static_cast<char>(ch));
+  }
+  out.push_back('"');
+  return out;
 }
 
 void AppendUint16(
@@ -122,6 +139,8 @@ class FakeExplorerRestarter final
   DWORD last_client_session_id = 0;
 };
 
+// 支持位置参数：
+// <mode> <data-root> [test-priv-pubkey-hex] [--snapshot-root <dir>] [--trust-state-file <file>] [--disable-legacy] [--test-normal-pubkey <hex>] <pluginId> <dllId> <fn>
 bool ParseInputs(
     const int argument_count,
     wchar_t* arguments[],
@@ -129,25 +148,221 @@ bool ParseInputs(
     std::string* const plugin_id,
     std::string* const dll_id,
     std::string* const function_name) {
-  config->data_root = arguments[2];
-  config->manifest_trust.data_root = config->data_root;
-  if (argument_count == 7) {
-    if (!ztools::service::ParsePrivilegedManifestSha256(
-            arguments[3], &config->manifest_trust.manifest_sha256)) {
-      return false;
+  std::vector<std::wstring_view> positional;
+  for (int i = 2; i < argument_count; ++i) {
+    const std::wstring_view arg(arguments[i]);
+    if (arg == L"--snapshot-root") {
+      if (i + 1 >= argument_count) return false;
+      config->snapshot_root_override = arguments[++i];
+    } else if (arg == L"--trust-state-file") {
+      if (i + 1 >= argument_count) return false;
+      config->trust_state_file_override = arguments[++i];
+    } else if (arg == L"--disable-legacy") {
+      config->test_overrides.disable_legacy = true;
+    } else if (arg == L"--test-normal-pubkey") {
+      if (i + 1 >= argument_count) return false;
+      std::array<std::uint8_t, ztools::native_trust::kP256PublicKeyBytes> pub{};
+      if (!ztools::dll_paths::ParseHex(arguments[++i], pub)) return false;
+      config->test_overrides.ephemeral_normal_pub = pub;
+    } else {
+      positional.push_back(arg);
     }
-    config->manifest_trust.trusted = true;
   }
-  const int identity_index = argument_count == 7 ? 4 : 3;
-  return WideToUtf8(arguments[identity_index], plugin_id) &&
-         WideToUtf8(arguments[identity_index + 1], dll_id) &&
-         WideToUtf8(arguments[identity_index + 2], function_name);
+  if (positional.size() != 4 && positional.size() != 5) {
+    return false;
+  }
+  config->data_root = std::wstring(positional[0]);
+  std::size_t idx = 1;
+  if (positional.size() == 5) {
+    std::array<std::uint8_t, ztools::native_trust::kP256PublicKeyBytes> pub{};
+    if (!ztools::dll_paths::ParseHex(positional[1], pub)) return false;
+    config->test_overrides.ephemeral_privileged_pub = pub;
+    idx = 2;
+  }
+  return WideToUtf8(positional[idx], plugin_id) &&
+         WideToUtf8(positional[idx + 1], dll_id) &&
+         WideToUtf8(positional[idx + 2], function_name);
+}
+
+bool CheckSecurityDescriptorSddl(const wchar_t* sddl, const bool expected) {
+  PSECURITY_DESCRIPTOR sd = nullptr;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+          sddl, SDDL_REVISION_1, &sd, nullptr) ||
+      sd == nullptr) {
+    return false;
+  }
+  const bool actual =
+      ztools::service::TrustedSnapshotManager::IsServiceOnlyDirectorySecurityDescriptorSafe(sd);
+  LocalFree(sd);
+  return actual == expected;
+}
+
+bool CreateDirectoryWithSddl(const std::wstring& path, const wchar_t* sddl) {
+  PSECURITY_DESCRIPTOR sd = nullptr;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+          sddl, SDDL_REVISION_1, &sd, nullptr) ||
+      sd == nullptr) {
+    return false;
+  }
+  SECURITY_ATTRIBUTES sa{};
+  sa.nLength = sizeof(sa);
+  sa.lpSecurityDescriptor = sd;
+  sa.bInheritHandle = FALSE;
+  const BOOL created = CreateDirectoryW(path.c_str(), &sa);
+  LocalFree(sd);
+  return created != FALSE;
+}
+
+void RestoreInheritableDaclAndRemoveDir(const std::wstring& path) noexcept {
+  SetNamedSecurityInfoW(
+      const_cast<LPWSTR>(path.c_str()),
+      SE_FILE_OBJECT,
+      DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
+      nullptr,
+      nullptr,
+      nullptr,
+      nullptr);
+  RemoveDirectoryW(path.c_str());
+}
+
+int RunAclSelfTest() {
+  // 1. 纯内存 PSECURITY_DESCRIPTOR 正反全覆盖（零权限依赖，非提权环境下 100% 稳定）
+  struct SdCase {
+    const char* name;
+    const wchar_t* sddl;
+    bool expected;
+  };
+  constexpr SdCase kSdCases[] = {
+      {"valid_sy_owner", L"O:SYG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", true},
+      {"valid_ba_owner", L"O:BAG:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", true},
+      {"unprotected_dacl", L"O:SYG:SYD:AI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", false},
+      {"bu_readonly_ace", L"O:SYG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FR;;;BU)", false},
+      {"inherit_only_sy", L"O:SYG:SYD:PAI(A;OICIIO;FA;;;SY)(A;OICI;FA;;;BA)", false},
+      {"ba_fr_missing_sy", L"O:SYG:SYD:PAI(A;OICI;FR;;;BA)", false},
+      {"missing_sy_fa", L"O:SYG:SYD:PAI(A;OICI;FA;;;BA)", false},
+      {"missing_ba_fa", L"O:SYG:SYD:PAI(A;OICI;FA;;;SY)", false},
+      {"deny_ace_present", L"O:SYG:SYD:PAI(D;OICI;FA;;;BU)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", false},
+      {"trusted_installer_owner",
+       L"O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464G:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)",
+       false},
+  };
+  for (const auto& item : kSdCases) {
+    if (!CheckSecurityDescriptorSddl(item.sddl, item.expected)) {
+      std::cerr << "ACL SD self-test failed on case: " << item.name << '\n';
+      return 10;
+    }
+  }
+  if (ztools::service::TrustedSnapshotManager::IsServiceOnlyDirectorySecurityDescriptorSafe(nullptr)) {
+    std::cerr << "ACL SD self-test failed on nullptr case\n";
+    return 11;
+  }
+
+  // 2. 真实临时目录文件系统校验（验证弱 ACL 均被真断言拒绝）
+  wchar_t temp_root_buf[MAX_PATH]{};
+  const DWORD temp_len = GetTempPathW(MAX_PATH, temp_root_buf);
+  if (temp_len == 0 || temp_len >= MAX_PATH) {
+    std::cerr << "ACL self-test could not locate temp directory\n";
+    return 12;
+  }
+  std::wstring base_dir(temp_root_buf, temp_len);
+  while (!base_dir.empty() && base_dir.back() == L'\\') base_dir.pop_back();
+  base_dir += L"\\ztools-acl-selftest-" + std::to_wstring(GetCurrentProcessId()) +
+              L"-" + std::to_wstring(GetTickCount64());
+  if (!CreateDirectoryW(base_dir.c_str(), nullptr)) {
+    std::cerr << "ACL self-test could not create temp base directory\n";
+    return 13;
+  }
+
+  const std::wstring dir_inherited = base_dir + L"\\inherited";
+  const std::wstring dir_bu_ro = base_dir + L"\\bu_ro";
+  const std::wstring dir_io_ba_fr = base_dir + L"\\io_ba_fr";
+  const std::wstring dir_missing = base_dir + L"\\missing";
+  const std::wstring file_plain = base_dir + L"\\plain.txt";
+  const std::wstring dir_elevated_ok = base_dir + L"\\elevated_ok";
+
+  bool fs_ok = true;
+  bool elevated_live_checked = false;
+
+  // ① 继承未受保护的默认目录（无 SE_DACL_PROTECTED）必须返回 false
+  if (!CreateDirectoryW(dir_inherited.c_str(), nullptr) ||
+      ztools::service::TrustedSnapshotManager::IsServiceOnlyDirectoryAclSafe(dir_inherited)) {
+    std::cerr << "ACL FS self-test failed on inherited directory\n";
+    fs_ok = false;
+  }
+
+  // ② 含普通用户 BU 只读 ACE 必须返回 false
+  if (fs_ok) {
+    if (!CreateDirectoryWithSddl(
+            dir_bu_ro, L"D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FR;;;BU)") ||
+        ztools::service::TrustedSnapshotManager::IsServiceOnlyDirectoryAclSafe(dir_bu_ro)) {
+      std::cerr << "ACL FS self-test failed on BU read-only directory\n";
+      fs_ok = false;
+    }
+  }
+
+  // ③ 含 INHERIT_ONLY_ACE 与仅 BA:FR（缺 SY:FA）必须返回 false
+  if (fs_ok) {
+    if (!CreateDirectoryWithSddl(
+            dir_io_ba_fr, L"D:PAI(A;OICIIO;FA;;;SY)(A;OICI;FR;;;BA)") ||
+        ztools::service::TrustedSnapshotManager::IsServiceOnlyDirectoryAclSafe(dir_io_ba_fr)) {
+      std::cerr << "ACL FS self-test failed on INHERIT_ONLY / BA:FR directory\n";
+      fs_ok = false;
+    }
+  }
+
+  // ④ 缺失目录与非目录普通文件必须返回 false
+  if (fs_ok &&
+      ztools::service::TrustedSnapshotManager::IsServiceOnlyDirectoryAclSafe(dir_missing)) {
+    std::cerr << "ACL FS self-test failed on missing directory\n";
+    fs_ok = false;
+  }
+  if (fs_ok) {
+    HANDLE file_h = CreateFileW(
+        file_plain.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file_h == INVALID_HANDLE_VALUE) {
+      std::cerr << "ACL FS self-test could not create plain file\n";
+      fs_ok = false;
+    } else {
+      CloseHandle(file_h);
+      if (ztools::service::TrustedSnapshotManager::IsServiceOnlyDirectoryAclSafe(file_plain)) {
+        std::cerr << "ACL FS self-test failed on non-directory file\n";
+        fs_ok = false;
+      }
+    }
+  }
+
+  // ⑤ 若当前进程已提权并允许创建 O:SY/O:BA 保护目录，额外做真实目录正例断言
+  if (fs_ok &&
+      CreateDirectoryWithSddl(
+          dir_elevated_ok, L"O:BAG:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")) {
+    elevated_live_checked = true;
+    if (!ztools::service::TrustedSnapshotManager::IsServiceOnlyDirectoryAclSafe(dir_elevated_ok)) {
+      std::cerr << "ACL FS self-test failed on elevated compliant directory\n";
+      fs_ok = false;
+    }
+  }
+
+  RestoreInheritableDaclAndRemoveDir(dir_elevated_ok);
+  DeleteFileW(file_plain.c_str());
+  RestoreInheritableDaclAndRemoveDir(dir_io_ba_fr);
+  RestoreInheritableDaclAndRemoveDir(dir_bu_ro);
+  RemoveDirectoryW(dir_inherited.c_str());
+  RemoveDirectoryW(base_dir.c_str());
+
+  if (!fs_ok) return 14;
+  std::cout << "{\"ok\":true,\"mode\":\"acl-self-test\",\"sdCases\":11,\"fsCases\":5,\"elevatedLiveCase\":"
+            << (elevated_live_checked ? "true" : "false") << "}\n";
+  return 0;
 }
 
 }  // namespace
 
 int wmain(const int argument_count, wchar_t* arguments[]) {
-  if (argument_count != 6 && argument_count != 7) {
+  if (argument_count >= 2 && std::wstring_view(arguments[1]) == L"--acl-self-test") {
+    if (argument_count != 2) return 2;
+    return RunAclSelfTest();
+  }
+  if (argument_count < 6) {
     return 2;
   }
   const std::wstring_view mode(arguments[1]);
@@ -169,11 +384,18 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
     ztools::service::PrivilegedDllLoader loader(&resolver);
     ztools::service::PrivilegedDllLoadResult result =
         loader.Load(plugin_id, dll_id, function_name);
+    std::string snap_utf8;
+    if (!result.validation.path.empty()) {
+      WideToUtf8(result.validation.path, &snap_utf8);
+    }
     std::cout << "{\"success\":" << (result.success ? "true" : "false")
               << ",\"code\":\"" << result.code << "\",\"module\":"
               << (result.module != nullptr ? "true" : "false")
+              << ",\"snapshotPolicyReady\":"
+              << (loader.system_only_ready() ? "true" : "false")
               << ",\"systemOnly\":"
-              << (loader.system_only_ready() ? "true" : "false") << "}" << '\n';
+              << (loader.system_only_ready() ? "true" : "false")
+              << ",\"snapshotPath\":" << JsonEscape(snap_utf8) << "}" << '\n';
     return 0;
   }
   if (mode == L"--session-self-test") {
@@ -199,16 +421,12 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
     const std::string result(call.payload.begin(), call.payload.end());
     if (!call.success || result != "{\"initialized\":1,\"destroyed\":0}") return 9;
     if (!tasks.Clear(plugin_id, dll_id, "task_session_search").success) return 10;
-    // Keep a Windows reference only to inspect Destroy after all managed leases
-    // are released. It must not be treated as a reusable managed session.
     HMODULE retained = nullptr;
     const auto probe = GetProcAddress(first.module, "DllPlugin_Call");
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
         reinterpret_cast<LPCWSTR>(probe), &retained)) return 11;
     first = {};
     second = {};
-    // No task or temporary Load result owns the DLL now. Sync requests must
-    // still share the same initialized instance, including its background state.
     auto start = dispatcher->Dispatch(MakeCommand(
         ztools::service::ServiceCommandType::dll_call, plugin_id, {}, dll_id,
         "StartMonitoring", "{}"), 42);
@@ -400,9 +618,7 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
   }
   ztools::service::PrivilegedDllResolveResult result =
       resolver.Resolve(plugin_id, dll_id, function_name);
-  const bool has_handle =
-      result.validation_handle != INVALID_HANDLE_VALUE &&
-      result.validation_handle != nullptr;
+  const bool has_handle = !result.locked_handles.empty();
   bool locked = false;
   if (result.success && has_handle) {
     const HANDLE conflicting = CreateFileW(
@@ -419,9 +635,12 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
       locked = GetLastError() == ERROR_SHARING_VIOLATION;
     }
   }
+  std::string snap_utf8;
+  if (!result.path.empty()) WideToUtf8(result.path, &snap_utf8);
   std::cout << "{\"success\":" << (result.success ? "true" : "false")
             << ",\"code\":\"" << result.code << "\",\"handle\":"
             << (has_handle ? "true" : "false") << ",\"locked\":"
-            << (locked ? "true" : "false") << "}" << '\n';
+            << (locked ? "true" : "false")
+            << ",\"snapshotPath\":" << JsonEscape(snap_utf8) << "}" << '\n';
   return 0;
 }

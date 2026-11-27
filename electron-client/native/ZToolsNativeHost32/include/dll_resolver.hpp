@@ -1,18 +1,25 @@
 #pragma once
 
-#include "manifest.hpp"
+#include "../../shared/native_trust_verifier.hpp"
 
 #include <Windows.h>
 
 #include <optional>
+#include <set>
 #include <string>
+#include <vector>
 
 namespace ztools::native_host {
 
-struct DllPathConfig {
-  ManifestTrustConfig plugin_trust;
-  ManifestTrustConfig resources_trust;
+struct NativeTrustRuntimeConfig {
+  std::wstring plugin_root;
+  std::wstring resources_root;
+  bool has_plugin_root = false;
+  bool has_resources_root = false;
+  ztools::native_trust::TestTrustOverrides test_overrides;
 };
+
+using DllPathConfig = NativeTrustRuntimeConfig;
 
 struct DllCheckResult {
   bool success = false;
@@ -25,7 +32,10 @@ struct DllResolveResult {
   std::string code;
   std::string message;
   std::wstring path;
-  HANDLE validation_handle = INVALID_HANDLE_VALUE;
+  bool restrict_functions = true;
+  std::set<std::string> allowed_functions;
+  // 会话期内锁定的全部 PE 句柄（main / dependency / helper，不含 native-trust.json / .sig）
+  std::vector<HANDLE> locked_handles;
 
   DllResolveResult() = default;
   ~DllResolveResult();
@@ -52,6 +62,7 @@ class DllResolver {
 
  private:
   DllPathConfig config_;
+  ztools::native_trust::TrustBundle bundle_;
 };
 
 }  // namespace ztools::native_host

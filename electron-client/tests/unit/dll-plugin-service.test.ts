@@ -2414,3 +2414,253 @@ test('ordinary Host exit closes unknown start without claiming unexecuted work o
   assert.equal(native.calls.some(call => call.method === 'clearDllTask'), false)
   await dllPlugins.stop()
 })
+
+test('方案 A：普通签名 DLL 自动验签注入 __commonLibs、剥离前端伪造字段，且特权 DLL 硬拒绝', windowsOnly, async () => {
+  const native = new FakeNativeHost()
+  const serviceClient = new FakeServiceClient()
+  const events: Array<{ type: string; payload: unknown }> = []
+  const metadataByPlugin = new Map<string, PluginManifestRuntimeMetadata>([
+    [standardManifest.id, { sdkApiLane: 1, signedCommonLibs: ['pandoc-3.6.0', 'imagemagick-7.1.0'] }],
+    [adminManifest.id, { sdkApiLane: 1, signedCommonLibs: ['pandoc-3.6.0'] }]
+  ])
+  const manifests = {
+    async list() {
+      return { success: true as const, data: [standardManifest, adminManifest] as unknown as Record<string, unknown>[] }
+    },
+    async withPluginManifest<T>(
+      pluginId: string,
+      action: (manifest: PluginManifest, metadata?: PluginManifestRuntimeMetadata) => Promise<T>
+    ): Promise<T> {
+      const target = pluginId === adminManifest.id ? adminManifest : standardManifest
+      return await action(target, metadataByPlugin.get(pluginId))
+    }
+  }
+  const ensuredTools: string[] = []
+  const recordedLeases: Array<{ toolId: string; pluginId: string }> = []
+  const fakeCommonLibs = {
+    async ensureAndVerifyToolDir(toolId: string) {
+      ensuredTools.push(toolId)
+      return { toolId, toolDir: `C:\\ZToolsData\\CommonLibs\\${toolId}` }
+    },
+    recordLease(toolId: string, pluginId: string) {
+      recordedLeases.push({ toolId, pluginId })
+    }
+  }
+  const dllPlugins = new DllPluginService(
+    manifests,
+    native,
+    serviceClient,
+    { publishHostToOwner: (type, payload) => { events.push({ type, payload }); return { success: true, delivered: 1 } } },
+    undefined,
+    {},
+    undefined,
+    undefined,
+    'win32',
+    undefined,
+    fakeCommonLibs
+  )
+
+  try {
+    // 1. 同步调用：剥离前端伪造的 __commonLibs，覆写为宿主验签后的真实目录，并登记租约
+    const callerParams: Record<string, unknown> = {
+      input: 'demo.md',
+      __commonLibs: { 'pandoc-3.6.0': 'C:\\EvilDir', 'injected': 'C:\\Hack' }
+    }
+    await dllPlugins.call(
+      { plugin: 'ClipboardManagerPlugin', func: 'Convert', params: callerParams },
+      clipboardCaller
+    )
+    assert.deepEqual(ensuredTools, ['pandoc-3.6.0', 'imagemagick-7.1.0'])
+    assert.deepEqual(recordedLeases, [
+      { toolId: 'pandoc-3.6.0', pluginId: standardManifest.id },
+      { toolId: 'imagemagick-7.1.0', pluginId: standardManifest.id }
+    ])
+    const callEntry = native.calls.find((c) => c.method === 'callDll')
+    assert.ok(callEntry)
+    const passedParams = callEntry.args[3] as Record<string, unknown>
+    assert.deepEqual(passedParams.__commonLibs, {
+      'pandoc-3.6.0': 'C:\\ZToolsData\\CommonLibs\\pandoc-3.6.0',
+      'imagemagick-7.1.0': 'C:\\ZToolsData\\CommonLibs\\imagemagick-7.1.0'
+    })
+    assert.equal((callerParams.__commonLibs as Record<string, string>)['pandoc-3.6.0'], 'C:\\EvilDir', '不得原地污染调用方入参')
+
+    // 2. 异步调用同样自动注入 __commonLibs
+    const asyncStarted = await dllPlugins.callAsync(
+      { plugin: 'ClipboardManagerPlugin', func: 'ConvertAsync', params: { input: 'a.md', __commonLibs: { x: 'bad' } } },
+      clipboardCaller
+    )
+    const asyncEntry = native.calls.find((c) => c.method === 'beginDllAsyncTask')
+    assert.ok(asyncEntry)
+    assert.deepEqual((asyncEntry.args[3] as Record<string, unknown>).__commonLibs, {
+      'pandoc-3.6.0': 'C:\\ZToolsData\\CommonLibs\\pandoc-3.6.0',
+      'imagemagick-7.1.0': 'C:\\ZToolsData\\CommonLibs\\imagemagick-7.1.0'
+    })
+    native.emit({
+      type: 'async-return',
+      pluginId: standardManifest.id,
+      dllId: 'ClipboardManagerPlugin',
+      taskId: String(native.assignedTaskIds[0]),
+      call: { code: 0, result: '{"done":true}' }
+    })
+    await dllPlugins.clearCallbackTask({ taskId: String(asyncStarted.taskId) }, clipboardCaller)
+
+    // 3. 未声明 signedCommonLibs 时，前端传入的伪造 __commonLibs 必须被彻底剥离
+    metadataByPlugin.set(standardManifest.id, { sdkApiLane: 1 })
+    native.calls.length = 0
+    await dllPlugins.call(
+      { plugin: 'ClipboardManagerPlugin', func: 'Ping', params: { __commonLibs: { evil: 'C:\\Evil' } } },
+      clipboardCaller
+    )
+    const plainEntry = native.calls.find((c) => c.method === 'callDll')
+    assert.ok(plainEntry)
+    assert.equal(Object.prototype.hasOwnProperty.call(plainEntry.args[3], '__commonLibs'), false)
+
+    // 4. 护栏 2 二次防线：特权 DLL 若携带 signedCommonLibs 必须直接 permissionDenied 拒绝
+    const countBeforePriv = ensuredTools.length
+    await assert.rejects(
+      () => dllPlugins.call(
+        { plugin: 'ContextMenuPlugin', func: 'Run', params: {} },
+        contextMenuCaller
+      ),
+      (err: unknown) => err instanceof ZToolsError && err.code === errorCodes.permissionDenied
+    )
+    assert.equal(ensuredTools.length, countBeforePriv, '特权 DLL 被拦截时绝不得触发 CommonLibs 拉取')
+
+    // 5. 普通签名 DLL 声明了 signedCommonLibs 但宿主未注入 commonLibs 端口时必须 Fail-Fast
+    metadataByPlugin.set(standardManifest.id, { sdkApiLane: 1, signedCommonLibs: ['pandoc-3.6.0'] })
+    const dllPluginsWithoutCommonLibs = new DllPluginService(
+      manifests,
+      native,
+      serviceClient,
+      { publishHostToOwner: () => ({ success: true, delivered: 0 }) },
+      undefined,
+      {},
+      undefined,
+      undefined,
+      'win32'
+    )
+    await assert.rejects(
+      () => dllPluginsWithoutCommonLibs.call(
+        { plugin: 'ClipboardManagerPlugin', func: 'Convert', params: {} },
+        clipboardCaller
+      ),
+      (err: unknown) => err instanceof ZToolsError && err.code === errorCodes.notSupported
+    )
+    await dllPluginsWithoutCommonLibs.stop()
+  } finally {
+    await dllPlugins.stop()
+  }
+})
+
+test('DllPluginService fetches signedCommonLibs concurrently and emits tool_runtime_progress only when provisioning occurs', async () => {
+  const native = new FakeNativeHost()
+  const serviceClient = new FakeServiceClient()
+  const publishedEvents: Array<{ type: string; payload: Record<string, unknown>; owner: CallerIdentity }> = []
+  const manifests = {
+    async list() {
+      return { success: true as const, data: [standardManifest] }
+    },
+    async withPluginManifest<T>(
+      pluginId: string,
+      action: (manifest: PluginManifest, metadata?: PluginManifestRuntimeMetadata) => Promise<T>
+    ): Promise<T> {
+      assert.equal(pluginId, standardManifest.id)
+      return action(standardManifest, {
+        sdkApiLane: 1,
+        signedCommonLibs: ['stream-downloader-2026.1.0', 'media-toolkit-7.1.0']
+      })
+    }
+  }
+
+  let mode: 'provisioning' | 'offline-hit' | 'fail' = 'provisioning'
+  let activeCount = 0
+  let maxConcurrency = 0
+  let siblingAbortedOnFail = false
+  let lateSiblingProgress: ((p: { toolId: string; stage: 'downloading'; percent: number }) => void) | undefined
+  const gates: Array<() => void> = []
+
+  const dllPlugins = new DllPluginService(
+    manifests,
+    native,
+    serviceClient,
+    {
+      publishHostToOwner: (type, payload, owner) => {
+        publishedEvents.push({ type, payload: payload as Record<string, unknown>, owner })
+        return { success: true, delivered: 1 }
+      }
+    },
+    undefined,
+    {},
+    undefined,
+    undefined,
+    'win32',
+    undefined,
+    {
+      ensureAndVerifyToolDir: async (toolId, signal, onProgress) => {
+        if (mode === 'offline-hit') {
+          return { toolId, toolDir: `C:\\ZToolsData\\CommonLibs\\${toolId}` }
+        }
+        activeCount += 1
+        maxConcurrency = Math.max(maxConcurrency, activeCount)
+        onProgress?.({ toolId, stage: 'fetching-catalog', percent: 0 })
+        onProgress?.({ toolId, stage: 'downloading', percent: 60, transferredBytes: 600, totalBytes: 1000 })
+        if (mode === 'fail' && toolId === 'stream-downloader-2026.1.0') {
+          lateSiblingProgress = onProgress
+          signal?.addEventListener('abort', () => {
+            siblingAbortedOnFail = true
+          }, { once: true })
+        }
+        await new Promise<void>((resolve) => {
+          gates.push(resolve)
+          if (gates.length >= 2) {
+            for (const release of gates.splice(0)) release()
+          }
+        })
+        activeCount -= 1
+        if (mode === 'fail' && toolId === 'media-toolkit-7.1.0') {
+          throw new ZToolsError(errorCodes.networkError, 'Download interrupted', {
+            hostCode: 'TOOL_CAPABILITY_PROVISION_FAILED'
+          })
+        }
+        return { toolId, toolDir: `C:\\ZToolsData\\CommonLibs\\${toolId}` }
+      },
+      recordLease: () => undefined
+    }
+  )
+
+  try {
+    // 1. 首次冷启动需要下载：应并发拉取，并立即向调用 owner 推送 provisioning 与终态 completed
+    await dllPlugins.call({ plugin: 'ClipboardManagerPlugin', func: 'CheckTools', params: {} }, clipboardCaller)
+    assert.equal(maxConcurrency, 2, '运行期多个 signedCommonLibs 应并发拉取')
+    const runtimeEvents = publishedEvents.filter((e) => e.type === 'tool_runtime_progress')
+    assert.ok(runtimeEvents.length >= 3)
+    assert.equal(runtimeEvents[0]?.payload.phase, 'provisioning')
+    assert.equal(runtimeEvents[0]?.owner.webContentsId, clipboardCaller.webContentsId)
+    assert.equal(runtimeEvents.at(-1)?.payload.phase, 'completed')
+    assert.equal(runtimeEvents.at(-1)?.payload.percent, 100)
+
+    // 2. 本地离线命中（未触发 onProgress）：零 tool_runtime_progress 噪声事件
+    publishedEvents.length = 0
+    mode = 'offline-hit'
+    await dllPlugins.call({ plugin: 'ClipboardManagerPlugin', func: 'CheckTools', params: {} }, clipboardCaller)
+    assert.equal(publishedEvents.filter((e) => e.type === 'tool_runtime_progress').length, 0)
+
+    // 3. 拉取中途失败：应补发 failed 终态、取消同批其余下载，并彻底屏蔽终态后的迟到进度回调
+    publishedEvents.length = 0
+    mode = 'fail'
+    await assert.rejects(
+      () => dllPlugins.call({ plugin: 'ClipboardManagerPlugin', func: 'CheckTools', params: {} }, clipboardCaller),
+      (err: unknown) => err instanceof ZToolsError && err.code === errorCodes.networkError
+    )
+    const countAfterFail = publishedEvents.length
+    lateSiblingProgress?.({ toolId: 'stream-downloader-2026.1.0', stage: 'downloading', percent: 85 })
+    assert.equal(publishedEvents.length, countAfterFail, '终态后迟到的进度回调不得再触发幽灵 provisioning 事件')
+    assert.equal(siblingAbortedOnFail, true, '同批部分失败时应通过派生 AbortController 中止其余工具拉取')
+    const failEvents = publishedEvents.filter((e) => e.type === 'tool_runtime_progress')
+    assert.ok(failEvents.some((e) => e.payload.phase === 'provisioning'))
+    assert.equal(failEvents.at(-1)?.payload.phase, 'failed')
+    assert.equal(failEvents.at(-1)?.payload.errorCode, 'TOOL_CAPABILITY_PROVISION_FAILED')
+  } finally {
+    await dllPlugins.stop()
+  }
+})

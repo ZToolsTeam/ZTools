@@ -11,7 +11,21 @@ class ReferenceTransport extends Transport {
       throw this._referenceError('INVALID_REQUEST', resolveSdkErrorText('invalidCancelCleanupLimit'))
     }
   }
-  _referenceError(code, message) { const error = new Error(message); error.code = code; return error }
+  _referenceError(code, message, details) {
+    const error = new Error(message)
+    error.code = code
+    if (details && typeof details === 'object') {
+      error.details = { ...details }
+      if (typeof error.details.toolCode === 'string') error.toolCode = error.details.toolCode
+      if (typeof error.details.stage === 'string') error.stage = error.details.stage
+      if (typeof error.details.retryable === 'boolean') error.retryable = error.details.retryable
+      if (typeof error.details.userAction === 'string') error.userAction = error.details.userAction
+      if (typeof error.details.primitiveId === 'string') error.primitiveId = error.details.primitiveId
+      if (typeof error.details.timedOut === 'boolean') error.timedOut = error.details.timedOut
+      if (typeof error.details.detail === 'string') error.detail = error.details.detail
+    }
+    return error
+  }
   _writeRecord(object, fields) {
     try {
       if (!object || typeof object !== 'object') return null
@@ -144,7 +158,7 @@ class ReferenceTransport extends Transport {
         if (!response || response.messageId !== messageId || typeof response.success !== 'boolean') throw pendingFailure()
         if (!response.success) {
           if (!response.error || typeof response.error.code !== 'string' || typeof response.error.message !== 'string') throw pendingFailure()
-          throw this._referenceError(response.error.code, response.error.message)
+          throw this._referenceError(response.error.code, response.error.message, response.error.details)
         }
         if (method === 'filesystem_write_file') {
           const fact = this._committedWriteReceipt(response.data)

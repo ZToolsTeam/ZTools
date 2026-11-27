@@ -26,7 +26,7 @@ export interface ChatMessage {
 export interface ToolFunctionDefinition {
   name: string;
   description?: string;
-  parameters?: Record<string, any>;
+  parameters?: Record<string, unknown>;
 }
 
 export interface ToolDefinition {
@@ -109,6 +109,10 @@ export interface ModelProviderConfig {
   headers?: Record<string, string>;
   timeoutMs?: number;
   maxRetries?: number;
+  /**
+   * 是否允许自定义 baseUrl 访问非回环私有内网地址（默认 false）
+   */
+  allowPrivateNetwork?: boolean;
 }
 
 export interface SniffedLocalProvider {

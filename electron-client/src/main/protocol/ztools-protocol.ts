@@ -78,11 +78,28 @@ function sharedSdkPath(requestUrl: string): string {
   return stripFirstPathSegment(requireLocalUrl(requestUrl, 'web').pathname, 'sdk')
 }
 
+/** 主界面 ztools://web/ 统一 Content-Security-Policy（保留 unsafe-eval 以兼容声明式插件加载器，禁止 script-src unsafe-inline） */
+export const WEB_CONTENT_SECURITY_POLICY =
+  "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data: blob: https: http: ztools:; font-src 'self' data:; " +
+  "media-src 'self' data: blob: ztools:; connect-src 'self' https: http://127.0.0.1:* http://localhost:* ztools:; " +
+  "object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'"
+
+/** 为 ztools://web/ 响应注入 CSP、MIME 嗅探防护与 Referrer 安全头 */
+export function withWebSecurityHeaders(response: Response): Headers {
+  const headers = new Headers(response.headers)
+  headers.set('Content-Security-Policy', WEB_CONTENT_SECURITY_POLICY)
+  headers.set('X-Content-Type-Options', 'nosniff')
+  headers.set('Referrer-Policy', 'no-referrer')
+  return headers
+}
+
 function withResourceHeaders(response: Response, corsOrigin: string): Headers {
   const headers = new Headers(response.headers)
   headers.set('Access-Control-Allow-Origin', corsOrigin)
   headers.set('Cache-Control', 'no-store')
   headers.set('Referrer-Policy', 'no-referrer')
+  headers.set('X-Content-Type-Options', 'nosniff')
   return headers
 }
 
@@ -118,8 +135,16 @@ export function installZToolsProtocol(
       switch (url.host.toLowerCase()) {
         case 'web': {
           requireLocalUrl(request.url, 'web')
+          if (request.method !== 'GET' && request.method !== 'HEAD') {
+            return new Response('Method Not Allowed', { status: 405 })
+          }
           const target = await resolveSafeFile(resolveResourceRoot(roots.web), url.pathname)
-          return net.fetch(pathToFileURL(target).toString())
+          const response = await net.fetch(pathToFileURL(target).toString(), { method: request.method })
+          return new Response(request.method === 'HEAD' ? null : response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: withWebSecurityHeaders(response)
+          })
         }
         case 'plugins': {
           if (!roots.plugins) {

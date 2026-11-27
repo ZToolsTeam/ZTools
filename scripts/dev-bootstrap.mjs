@@ -151,8 +151,57 @@ export function ensureSubprojectDependencies({
   return { installed }
 }
 
-const IGNORED_SCAN_DIRS = new Set(['node_modules', 'dist', 'out', '.git', '__tests__', 'coverage'])
+const IGNORED_SCAN_DIRS = new Set(['node_modules', 'dist', 'out', '.git', '__tests__', 'coverage', '.ztools-dev'])
 const TEST_FILE_PATTERN = /\.(test|spec)\.[cm]?[jt]sx?$/i
+export const DEV_SANDBOX_DIR_NAME = '.ztools-dev'
+export const DEV_DATA_DIR_NAME = 'DataV2'
+export const DEV_TRUST_DIR_NAME = 'DevTrust'
+export const DEV_COMMONLIBS_PUBLIC_KEYS_FILE = 'commonlibs-dev-public-keys.json'
+
+/**
+ * 组装开发测试版启动传给 Electron 的隔离参数：
+ * - 默认将业务数据根定位至 <rootDir>/.ztools-dev/DataV2（与安装版 %APPDATA%\ZTools\DataV2 物理同构且彻底隔离）；
+ * - 默认开启 --dev-allow-drafts（加载全部非下架插件含草稿插件），可通过 includeDrafts=false 关闭；
+ * - 若 .ztools-dev/DevTrust/commonlibs-dev-public-keys.json 存在，附加开发公钥路径供非打包宿主合并验签。
+ */
+export function buildDevElectronArgs({
+  rootDir = ROOT_DIR,
+  includeDrafts = true,
+  extraArgs = []
+} = {}) {
+  const normalizedExtra = Array.isArray(extraArgs) ? extraArgs.filter((a) => typeof a === 'string' && a.trim().length > 0) : []
+  const hasExplicitDataRoot = normalizedExtra.some((a) => a.startsWith('--data-root='))
+  const hasExplicitDraftFlag = normalizedExtra.includes('--dev-allow-drafts') || normalizedExtra.includes('--dev-exclude-drafts')
+  const hasExplicitCommonLibsKeys = normalizedExtra.some((a) => a.startsWith('--dev-commonlibs-public-keys='))
+
+  const sandboxRoot = path.join(path.resolve(rootDir), DEV_SANDBOX_DIR_NAME)
+  const devDataRoot = path.join(sandboxRoot, DEV_DATA_DIR_NAME)
+  const devPublicKeysPath = path.join(sandboxRoot, DEV_TRUST_DIR_NAME, DEV_COMMONLIBS_PUBLIC_KEYS_FILE)
+
+  const args = []
+  if (!hasExplicitDataRoot) {
+    args.push(`--data-root=${devDataRoot}`)
+  }
+  if (!hasExplicitDraftFlag) {
+    args.push(includeDrafts ? '--dev-allow-drafts' : '--dev-exclude-drafts')
+  }
+  if (!hasExplicitCommonLibsKeys && fs.existsSync(devPublicKeysPath)) {
+    args.push(`--dev-commonlibs-public-keys=${devPublicKeysPath}`)
+  }
+  args.push(...normalizedExtra)
+  return args
+}
+
+/** 将参数数组安全格式化为 Windows CreateProcess / ShellExecute 命令行参数串 */
+export function formatWindowsArgList(args = []) {
+  return args
+    .map((arg) => {
+      const value = String(arg)
+      if (!/[\s"&|<>^()]/.test(value)) return value
+      return `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`
+    })
+    .join(' ')
+}
 
 /**
  * 递归获取指定文件或目录中源码文件的最新修改时间戳（毫秒）
@@ -317,13 +366,14 @@ export function shouldUseWindowsDesktopEscape({
  */
 export function launchDetachedOnWindowsDefaultDesktop(
   clientDir,
-  { runner = spawnSync, env = process.env, rebuild = false } = {}
+  { runner = spawnSync, env = process.env, rebuild = false, electronArgs = [] } = {}
 ) {
   const electronExe = path.join(clientDir, 'node_modules', 'electron', 'dist', 'electron.exe')
   if (!fs.existsSync(electronExe)) {
     throw new Error(`未找到 Electron 可执行文件: ${electronExe}`)
   }
 
+  const argString = formatWindowsArgList(['.', ...electronArgs])
   const psScript = [
     "$ErrorActionPreference = 'Stop'",
     "if ($env:ZTOOLS_REBUILD_RESTART -eq '1') {",
@@ -338,7 +388,7 @@ export function launchDetachedOnWindowsDefaultDesktop(
     "if ($null -eq $desktopWin) {",
     "  throw '无法定位 Windows 桌面宿主 (SWC_DESKTOP)'",
     "}",
-    "$desktopWin.Document.Application.ShellExecute($env:ZTOOLS_ELECTRON_EXE, '.', $env:ZTOOLS_CLIENT_DIR, 'open', 1)"
+    "$desktopWin.Document.Application.ShellExecute($env:ZTOOLS_ELECTRON_EXE, $env:ZTOOLS_ELECTRON_ARGS, $env:ZTOOLS_CLIENT_DIR, 'open', 1)"
   ].join('\n')
 
   const result = runner(
@@ -349,6 +399,7 @@ export function launchDetachedOnWindowsDefaultDesktop(
       env: {
         ...env,
         ZTOOLS_ELECTRON_EXE: electronExe,
+        ZTOOLS_ELECTRON_ARGS: argString,
         ZTOOLS_CLIENT_DIR: clientDir,
         ZTOOLS_REBUILD_RESTART: rebuild ? '1' : '0'
       },
@@ -372,19 +423,54 @@ export function startCrossPlatformDev({
   warn = console.warn,
   forceBuild = false,
   noBuild = false,
-  detached = false
+  detached = false,
+  skipSync = false,
+  includeDrafts = true,
+  syncPlugins = true,
+  syncNativePlugins = true,
+  syncCommonLibs = true,
+  pluginFilter = null,
+  extraElectronArgs = []
 } = {}) {
   ensureSubprojectDependencies({ rootDir, runner, env, platform, log })
 
+  // 启动前幂等增量同步插件（plugins/ + 可选本地原生 DLL）与公共工具（DLLPlugins/CommonLibs）至 .ztools-dev/DataV2/
+  const syncScript = path.join(rootDir, 'scripts', 'dev-sandbox-sync.mjs')
+  if (!skipSync && fs.existsSync(syncScript)) {
+    const syncCliArgs = [syncScript]
+    if (!includeDrafts) syncCliArgs.push('--dev-exclude-drafts')
+    if (!syncPlugins) syncCliArgs.push('--no-dev-plugins')
+    if (!syncNativePlugins) syncCliArgs.push('--no-dev-native-plugins')
+    if (!syncCommonLibs) syncCliArgs.push('--no-dev-commonlibs')
+    if (Array.isArray(pluginFilter) && pluginFilter.length > 0) {
+      syncCliArgs.push(`--dev-plugin-filter=${pluginFilter.join(',')}`)
+    }
+    const syncRes = runner(process.execPath, syncCliArgs, {
+      cwd: rootDir,
+      env,
+      stdio: 'inherit',
+      shell: false
+    })
+    if (syncRes?.error) throw syncRes.error
+    if ((syncRes?.status ?? 1) !== 0) {
+      throw new Error(`开发测试沙盒同步失败（退出码 ${syncRes?.status ?? 1}）`)
+    }
+  }
+
+  const electronArgs = buildDevElectronArgs({
+    rootDir,
+    includeDrafts,
+    extraArgs: extraElectronArgs
+  })
   const clientDir = path.join(rootDir, 'electron-client')
 
   if (platform === 'darwin') {
     log('🍎 [dev] 检测到 macOS 环境，正在构建并启动 ZTools Electron (Darwin)...')
-    const status = runNpm(['run', 'start:mac'], clientDir, { env, platform, runner })
+    const status = runNpm(['run', 'start:mac', '--', ...electronArgs], clientDir, { env, platform, runner })
     if (status !== 0) {
       throw new Error(`macOS 开发环境启动失败（退出码 ${status}）`)
     }
-    return { platform, status, rebuilt: true, detached: false }
+    return { platform, status, rebuilt: true, detached: false, electronArgs }
   }
 
   if (platform === 'win32') {
@@ -440,21 +526,22 @@ export function startCrossPlatformDev({
     const escapeStatus = launchDetachedOnWindowsDefaultDesktop(clientDir, {
       runner,
       env,
-      rebuild: buildDecision.rebuild
+      rebuild: buildDecision.rebuild,
+      electronArgs
     })
     if (escapeStatus === 0) {
       log('✅ [dev] ZTools 客户端已在主桌面拉起')
-      return { platform, status: 0, rebuilt: buildDecision.rebuild, detached: true }
+      return { platform, status: 0, rebuilt: buildDecision.rebuild, detached: true, electronArgs }
     }
     warn(`⚠️ [dev] 主桌面穿透拉起返回非零状态（${escapeStatus}），自动回退到直接子进程启动...`)
   }
 
   log('🚀 [dev] 正在启动 ZTools 客户端...')
-  const startStatus = runNpm(['exec', '--', 'electron', '.'], clientDir, { env, platform, runner })
+  const startStatus = runNpm(['exec', '--', 'electron', '.', ...electronArgs], clientDir, { env, platform, runner })
   if (startStatus !== 0) {
     throw new Error(`Electron 启动退出（退出码 ${startStatus}）`)
   }
-  return { platform, status: startStatus, rebuilt: buildDecision.rebuild, detached: false }
+  return { platform, status: startStatus, rebuilt: buildDecision.rebuild, detached: false, electronArgs }
 }
 
 const isMainModule =
@@ -468,11 +555,44 @@ if (isMainModule) {
   const forceBuild = args.includes('--force-build')
   const noBuild = args.includes('--no-build')
   const detached = args.includes('--detached')
+  const skipSync = args.includes('--no-sync')
+  const includeDrafts = !args.includes('--dev-exclude-drafts')
+  const syncPlugins = !args.includes('--no-dev-plugins')
+  const syncNativePlugins = !args.includes('--no-dev-native-plugins')
+  const syncCommonLibs = !args.includes('--no-dev-commonlibs')
+  const filterArg = args.find((item) => item.startsWith('--dev-plugin-filter='))
+  const pluginFilter = filterArg
+    ? filterArg.slice('--dev-plugin-filter='.length).split(',').map((s) => s.trim()).filter(Boolean)
+    : null
+  const bootstrapOnlyFlags = new Set([
+    '--install-only',
+    '--force-build',
+    '--no-build',
+    '--detached',
+    '--no-sync',
+    '--no-dev-plugins',
+    '--no-dev-native-plugins',
+    '--no-dev-commonlibs'
+  ])
+  const extraElectronArgs = args.filter(
+    (item) => !bootstrapOnlyFlags.has(item) && !item.startsWith('--dev-plugin-filter=')
+  )
   try {
     if (installOnly) {
       ensureSubprojectDependencies()
     } else {
-      startCrossPlatformDev({ forceBuild, noBuild, detached })
+      startCrossPlatformDev({
+        forceBuild,
+        noBuild,
+        detached,
+        skipSync,
+        includeDrafts,
+        syncPlugins,
+        syncNativePlugins,
+        syncCommonLibs,
+        pluginFilter,
+        extraElectronArgs
+      })
     }
   } catch (err) {
     console.error(`❌ [bootstrap] ${err.message}`)

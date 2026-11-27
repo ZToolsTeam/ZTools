@@ -1,6 +1,5 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
 import { errorCodes, ZToolsError } from '../../../contracts/errors.js'
 import { NativeHostClient } from '../../native-host/native-host-client.js'
 import { ServiceClient } from '../../service/service-client.js'
@@ -14,46 +13,16 @@ export interface WindowsNativeRuntimeOptions {
   dataRoot: string
 }
 
-function provisionNativeHostManifest(pluginRoot: string, resourcesPath: string): {
-  path: string
-  sha256: string
-} | undefined {
-  const bundledManifestPath = path.join(resourcesPath, 'native', '.ztools-native-host.xml')
-  const installedManifestPath = path.join(pluginRoot, '.ztools-native-host.xml')
+/** 一次性静默清理旧版客户端残留在用户 Plugins 目录下的 .ztools-native-host.xml（拒绝删除非普通文件或符号链接） */
+function cleanupLegacyNativeHostManifest(pluginRoot: string): void {
+  const legacyManifestPath = path.join(pluginRoot, '.ztools-native-host.xml')
   try {
-    const bundledStats = fs.lstatSync(bundledManifestPath)
-    if (!bundledStats.isFile() || bundledStats.isSymbolicLink() ||
-        bundledStats.size <= 0 || bundledStats.size > 1024 * 1024) {
-      console.warn(`NativeHost32 bundled manifest is invalid: ${bundledManifestPath}`)
-      return undefined
-    }
-    const bundledManifest = fs.readFileSync(bundledManifestPath)
-    fs.mkdirSync(pluginRoot, { recursive: true })
-    try {
-      fs.copyFileSync(
-        bundledManifestPath,
-        installedManifestPath,
-        fs.constants.COPYFILE_EXCL
-      )
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-    const installedStats = fs.lstatSync(installedManifestPath)
-    if (!installedStats.isFile() || installedStats.isSymbolicLink() ||
-        installedStats.size !== bundledManifest.length ||
-        !fs.readFileSync(installedManifestPath).equals(bundledManifest)) {
-      console.warn('NativeHost32 installed manifest differs from the bundled trust anchor')
-      return undefined
-    }
-    return {
-      path: installedManifestPath,
-      sha256: createHash('sha256').update(bundledManifest).digest('hex')
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn('NativeHost32 bundled manifest cannot be provisioned', error)
-    }
-    return undefined
+    const stats = fs.lstatSync(legacyManifestPath, { throwIfNoEntry: false })
+    if (!stats) return
+    if (!stats.isFile() || stats.isSymbolicLink()) return
+    fs.rmSync(legacyManifestPath, { force: true })
+  } catch {
+    // 静默清理，不阻塞原生运行时启动
   }
 }
 
@@ -67,21 +36,20 @@ export function createWindowsNativeRuntime(
   options: WindowsNativeRuntimeOptions
 ): PlatformNativeRuntime {
   const nativeHostPath = resolveNativeHostPath(options)
-  const trustResourcesPath = options.isPackaged ? options.resourcesPath : path.join(options.appPath, 'out')
-  const nativeHostManifest = provisionNativeHostManifest(options.pluginRoot, trustResourcesPath)
+  cleanupLegacyNativeHostManifest(options.pluginRoot)
   console.info('Electron Windows native runtime paths', {
     nativeHostPath,
-    nativeHostManifestPath: nativeHostManifest?.path,
-    nativeHostManifestTrusted: nativeHostManifest !== undefined,
     pluginRootExists: fs.existsSync(options.pluginRoot),
     nativeHostExists: fs.existsSync(nativeHostPath)
   })
 
+  const resourcesRoot = options.isPackaged
+    ? options.resourcesPath
+    : path.join(options.appPath, 'resources')
   const nativeHost = new NativeHostClient(nativeHostPath, {
     pluginRoot: options.pluginRoot,
-    ...(nativeHostManifest
-      ? { trustedManifestSha256: nativeHostManifest.sha256 }
-      : {})
+    dataRoot: options.dataRoot,
+    resourcesRoot
   })
   const bridgeExecutable = options.isPackaged
     ? path.join(path.dirname(options.resourcesPath), 'ZToolsService.exe')

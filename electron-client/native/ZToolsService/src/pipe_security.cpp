@@ -6,8 +6,10 @@
 #include <Aclapi.h>
 #include <Sddl.h>
 #include <WtsApi32.h>
+#include <bcrypt.h>
 
 #include <array>
+#include <cwctype>
 
 namespace ztools::service {
 namespace {
@@ -68,7 +70,77 @@ bool GetActiveConsoleUserSid(
   return copied;
 }
 
+// 按 Windows 标准规则派生虚拟服务 SID（S-1-5-80-<SHA1(UTF-16LE(UPPER(ServiceName)))>），
+// 仅用于非 SCM 控制台/自检模式且本机尚未安装服务（LookupAccountNameW 返回 ERROR_NONE_MAPPED）时。
+bool DeriveVirtualServiceSid(
+    std::vector<std::uint8_t>* const sid,
+    DWORD* const error) {
+  std::wstring upper(kServiceName);
+  for (wchar_t& ch : upper) {
+    ch = static_cast<wchar_t>(std::towupper(ch));
+  }
+  BCRYPT_ALG_HANDLE alg = nullptr;
+  BCRYPT_HASH_HANDLE hash = nullptr;
+  std::array<std::uint8_t, 20> digest{};
+  NTSTATUS status = BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA1_ALGORITHM, nullptr, 0);
+  if (status >= 0) {
+    status = BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0);
+  }
+  if (status >= 0) {
+    status = BCryptHashData(
+        hash,
+        reinterpret_cast<PUCHAR>(upper.data()),
+        static_cast<ULONG>(upper.size() * sizeof(wchar_t)),
+        0);
+  }
+  if (status >= 0) {
+    status = BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
+  }
+  if (hash != nullptr) BCryptDestroyHash(hash);
+  if (alg != nullptr) BCryptCloseAlgorithmProvider(alg, 0);
+  if (status < 0) {
+    *error = ERROR_INTERNAL_ERROR;
+    return false;
+  }
+
+  auto read_le32 = [&digest](const std::size_t offset) -> DWORD {
+    return static_cast<DWORD>(digest[offset]) |
+           (static_cast<DWORD>(digest[offset + 1]) << 8U) |
+           (static_cast<DWORD>(digest[offset + 2]) << 16U) |
+           (static_cast<DWORD>(digest[offset + 3]) << 24U);
+  };
+  SID_IDENTIFIER_AUTHORITY nt_authority = SECURITY_NT_AUTHORITY;
+  PSID raw_sid = nullptr;
+  if (AllocateAndInitializeSid(
+          &nt_authority,
+          6,
+          SECURITY_SERVICE_ID_BASE_RID,
+          read_le32(0),
+          read_le32(4),
+          read_le32(8),
+          read_le32(12),
+          read_le32(16),
+          0,
+          0,
+          &raw_sid) == FALSE) {
+    *error = GetLastError();
+    return false;
+  }
+  const DWORD sid_size = GetLengthSid(raw_sid);
+  sid->resize(sid_size);
+  const BOOL copied = CopySid(sid_size, sid->data(), raw_sid);
+  const DWORD copy_err = GetLastError();
+  FreeSid(raw_sid);
+  if (copied == FALSE) {
+    *error = copy_err;
+    return false;
+  }
+  *error = ERROR_SUCCESS;
+  return true;
+}
+
 bool LookupServiceSid(
+    const PipeIdentityMode mode,
     std::vector<std::uint8_t>* const sid,
     DWORD* const error) {
   const std::wstring account =
@@ -78,8 +150,12 @@ bool LookupServiceSid(
   SID_NAME_USE sid_type = SidTypeUnknown;
   LookupAccountNameW(
       nullptr, account.c_str(), nullptr, &sid_size, nullptr, &domain_size, &sid_type);
-  if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || sid_size == 0) {
-    *error = GetLastError();
+  const DWORD probe_err = GetLastError();
+  if (probe_err != ERROR_INSUFFICIENT_BUFFER || sid_size == 0) {
+    if (mode != PipeIdentityMode::service && probe_err == ERROR_NONE_MAPPED) {
+      return DeriveVirtualServiceSid(sid, error);
+    }
+    *error = probe_err;
     return false;
   }
   sid->resize(sid_size);
@@ -237,7 +313,7 @@ std::unique_ptr<PipeSecurity> PipeSecurity::Create(
   const bool have_user = mode == PipeIdentityMode::service
                              ? GetActiveConsoleUserSid(&security->user_sid_, error)
                              : GetCurrentProcessUserSid(&security->user_sid_, error);
-  if (!have_user || !LookupServiceSid(&security->service_sid_, error)) {
+  if (!have_user || !LookupServiceSid(mode, &security->service_sid_, error)) {
     return nullptr;
   }
   if (mode == PipeIdentityMode::service &&

@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "domainPrefixAscii": "ztools-native-trust-v1",
+  "publicKeys": [
+    {
+      "keyId": "vector-normal-key-1",
+      "publicKeyHex": "61508bd0f01005f0783773a5dff8f2e2e4df877d5e53b3915dd24d90da3e906f5e01d863c5421cef435c5d5a275f676f2e103199a7f6919e6951093071102276",
+      "usages": [
+        "native"
+      ]
+    },
+    {
+      "keyId": "vector-normal-key-2",
+      "publicKeyHex": "eb9e6374bbe66194d83995555f7e3f9a9a3b594f303f87a84757427ada28cc5b7daff8da0c3cb40120b9f25cd0b9089e377501fa52130de63ed541c36465f22c",
+      "usages": [
+        "native"
+      ]
+    },
+    {
+      "keyId": "vector-priv-key-1",
+      "publicKeyHex": "b5d55f560fc52d3be917018444878d8ab57677caf8d89a64a27cc2e09ccf0de61dd80a3b1e2c436f0b2b95375421f9adfedf68961c8334ca06c8566f55e04500",
+      "usages": [
+        "native-privileged"
+      ]
+    }
+  ],
+  "vectors": {
+    "validNormal": {
+      "manifestJson": "{\n  \"schemaVersion\": 1,\n  \"keyId\": \"vector-normal-key-1\",\n  \"pluginId\": \"vector-plugin\",\n  \"pluginVersion\": \"1.2.3\",\n  \"requireAdmin\": false,\n  \"issuedAt\": \"2026-11-25T00:00:00.000Z\",\n  \"files\": [\n    {\n      \"role\": \"main\",\n      \"dllId\": \"VectorPlugin\",\n      \"path\": \"lib/VectorPlugin.dll\",\n      \"arch\": \"x86\",\n      \"size\": 4096,\n      \"sha256\": \"deba929a7a18b05cd9884398c2f629c9406f7d30331a950b59bb4ac594787a0c\",\n      \"functions\": [\n        \"RunAction\",\n        \"__setLocale\"\n      ]\n    },\n    {\n      \"role\": \"dependency\",\n      \"path\": \"lib/DepLib.dll\",\n      \"arch\": \"x86\",\n      \"size\": 2048,\n      \"sha256\": \"4031d138a8388bf2301e53bf640438d64aea77935a18bd8e988f1e8c3b31d75d\"\n    },\n    {\n      \"role\": \"helper\",\n      \"path\": \"lib/helper.exe\",\n      \"arch\": \"x64\",\n      \"size\": 8192,\n      \"sha256\": \"2c279c0421a4568d0d25e973a3c86424e0938db5c3b3c499bfdb174e44b07e3f\"\n    }\n  ]\n}\n",
+      "signatureLine": "v1:vector-normal-key-1:946c3b23b108c34d4ae50dc702edb42d012e9b9f7166de70cb319debb744b921fcab0c35325d8f12f0078e6816f6ca4ceffd7981a04ebf883795999a5fd60c08\n",
+      "signatureHex": "946c3b23b108c34d4ae50dc702edb42d012e9b9f7166de70cb319debb744b921fcab0c35325d8f12f0078e6816f6ca4ceffd7981a04ebf883795999a5fd60c08",
+      "manifestSha256": "b3732e14e99bb7eb0f3dfa3dff29de5b49500a7c7241eae13b82520c07fad46d"
+    },
+    "validPrivileged": {
+      "manifestJson": "{\n  \"schemaVersion\": 1,\n  \"keyId\": \"vector-priv-key-1\",\n  \"pluginId\": \"vector-priv-plugin\",\n  \"pluginVersion\": \"2.0.0\",\n  \"requireAdmin\": true,\n  \"issuedAt\": \"2026-11-25T00:00:00.000Z\",\n  \"files\": [\n    {\n      \"role\": \"main\",\n      \"dllId\": \"VectorPrivPlugin\",\n      \"path\": \"lib/VectorPrivPlugin.dll\",\n      \"arch\": \"x86\",\n      \"size\": 4096,\n      \"sha256\": \"deba929a7a18b05cd9884398c2f629c9406f7d30331a950b59bb4ac594787a0c\",\n      \"functions\": [\n        \"ApplyChange\"\n      ]\n    }\n  ]\n}\n",
+      "signatureLine": "v1:vector-priv-key-1:9fb23e49bec5314123a3d9b0ae85892324d778459f3a98f2e767a155ffdb40475ad86330398e6a70c4fc2287844445a6b283c1de01a1733fa13f57b70276574b\n",
+      "signatureHex": "9fb23e49bec5314123a3d9b0ae85892324d778459f3a98f2e767a155ffdb40475ad86330398e6a70c4fc2287844445a6b283c1de01a1733fa13f57b70276574b",
+      "manifestSha256": "193e5090b48a5b4abe58d16d8b186f25862bba7795c43977e5a53a1c045ca0f5"
+    },
+    "tamperedPayload": {
+      "manifestJson": "{\n  \"schemaVersion\": 1,\n  \"keyId\": \"vector-normal-key-1\",\n  \"pluginId\": \"vector-plugin\",\n  \"pluginVersion\": \"1.2.4\",\n  \"requireAdmin\": false,\n  \"issuedAt\": \"2026-11-25T00:00:00.000Z\",\n  \"files\": [\n    {\n      \"role\": \"main\",\n      \"dllId\": \"VectorPlugin\",\n      \"path\": \"lib/VectorPlugin.dll\",\n      \"arch\": \"x86\",\n      \"size\": 4096,\n      \"sha256\": \"deba929a7a18b05cd9884398c2f629c9406f7d30331a950b59bb4ac594787a0c\",\n      \"functions\": [\n        \"RunAction\",\n        \"__setLocale\"\n      ]\n    },\n    {\n      \"role\": \"dependency\",\n      \"path\": \"lib/DepLib.dll\",\n      \"arch\": \"x86\",\n      \"size\": 2048,\n      \"sha256\": \"4031d138a8388bf2301e53bf640438d64aea77935a18bd8e988f1e8c3b31d75d\"\n    },\n    {\n      \"role\": \"helper\",\n      \"path\": \"lib/helper.exe\",\n      \"arch\": \"x64\",\n      \"size\": 8192,\n      \"sha256\": \"2c279c0421a4568d0d25e973a3c86424e0938db5c3b3c499bfdb174e44b07e3f\"\n    }\n  ]\n}\n",
+      "signatureLine": "v1:vector-normal-key-1:946c3b23b108c34d4ae50dc702edb42d012e9b9f7166de70cb319debb744b921fcab0c35325d8f12f0078e6816f6ca4ceffd7981a04ebf883795999a5fd60c08\n",
+      "signatureHex": "946c3b23b108c34d4ae50dc702edb42d012e9b9f7166de70cb319debb744b921fcab0c35325d8f12f0078e6816f6ca4ceffd7981a04ebf883795999a5fd60c08",
+      "expectedCode": "MANIFEST_UNTRUSTED"
+    },
+    "duplicateKey": {
+      "manifestJson": "{\n  \"schemaVersion\": 1,\n  \"keyId\": \"vector-normal-key-1\",\n  \"pluginId\": \"vector-plugin\",\n  \"pluginId\": \"vector-plugin\",\n  \"pluginVersion\": \"1.2.3\",\n  \"requireAdmin\": false,\n  \"issuedAt\": \"2026-11-25T00:00:00.000Z\",\n  \"files\": [{\"role\":\"main\",\"dllId\":\"VectorPlugin\",\"path\":\"lib/VectorPlugin.dll\",\"arch\":\"x86\",\"size\":4096,\"sha256\":\"deba929a7a18b05cd9884398c2f629c9406f7d30331a950b59bb4ac594787a0c\",\"functions\":[\"RunAction\"]}]\n}\n",
+      "signatureLine": "v1:vector-normal-key-1:dae9f7f123685a7aef79ef8d0592b011124ae647cb3aabc0e5ad1e64dae9522c47614bff71aabcb66393bbecc10f5566f504dd0d240dc18f86fea93342445bdd\n",
+      "signatureHex": "dae9f7f123685a7aef79ef8d0592b011124ae647cb3aabc0e5ad1e64dae9522c47614bff71aabcb66393bbecc10f5566f504dd0d240dc18f86fea93342445bdd",
+      "manifestSha256": "f83f4826737120f9c90be111486f62507e6f9bf65ae78e9c39c9da18191114d7",
+      "expectedCode": "MANIFEST_INVALID"
+    },
+    "deepNesting": {
+      "manifestJson": "{\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}",
+      "signatureLine": "v1:vector-normal-key-1:18a2a50f2b4e5b7662c61d7ee92a9543e189f987d7c2e5c4cbdb8d12db4228100f557584cf8f9ac7bfc1cdc5036087ec2a7ff539fb87c719583578d4461a9316\n",
+      "signatureHex": "18a2a50f2b4e5b7662c61d7ee92a9543e189f987d7c2e5c4cbdb8d12db4228100f557584cf8f9ac7bfc1cdc5036087ec2a7ff539fb87c719583578d4461a9316",
+      "manifestSha256": "5faac3e9129d1e799a814d4691a640f8f935ca0cecfe8c4bc0949fe780fe1a7f",
+      "expectedCode": "MANIFEST_INVALID"
+    },
+    "unknownField": {
+      "manifestJson": "{\n  \"schemaVersion\": 1,\n  \"keyId\": \"vector-normal-key-1\",\n  \"pluginId\": \"vector-plugin\",\n  \"pluginVersion\": \"1.2.3\",\n  \"requireAdmin\": false,\n  \"issuedAt\": \"2026-11-25T00:00:00.000Z\",\n  \"files\": [\n    {\n      \"role\": \"main\",\n      \"dllId\": \"VectorPlugin\",\n      \"path\": \"lib/VectorPlugin.dll\",\n      \"arch\": \"x86\",\n      \"size\": 4096,\n      \"sha256\": \"deba929a7a18b05cd9884398c2f629c9406f7d30331a950b59bb4ac594787a0c\",\n      \"functions\": [\n        \"RunAction\",\n        \"__setLocale\"\n      ]\n    },\n    {\n      \"role\": \"dependency\",\n      \"path\": \"lib/DepLib.dll\",\n      \"arch\": \"x86\",\n      \"size\": 2048,\n      \"sha256\": \"4031d138a8388bf2301e53bf640438d64aea77935a18bd8e988f1e8c3b31d75d\"\n    },\n    {\n      \"role\": \"helper\",\n      \"path\": \"lib/helper.exe\",\n      \"arch\": \"x64\",\n      \"size\": 8192,\n      \"sha256\": \"2c279c0421a4568d0d25e973a3c86424e0938db5c3b3c499bfdb174e44b07e3f\"\n    }\n  ],\n  \"extraField\": true\n}\n",
+      "signatureLine": "v1:vector-normal-key-1:27c010b9a1d8e1f21aa6b331502bb88b25e14f9c0218367be70be52f292bbeedf9ac965ad0eac174864690b3d0c1170c82ef8d16fc8f8c389f9c17db3d2f8b8e\n",
+      "signatureHex": "27c010b9a1d8e1f21aa6b331502bb88b25e14f9c0218367be70be52f292bbeedf9ac965ad0eac174864690b3d0c1170c82ef8d16fc8f8c389f9c17db3d2f8b8e",
+      "manifestSha256": "21728432d17d6b874a801e5ad80e823e5f45e31c67ea12ec17699991c4bd91ea",
+      "expectedCode": "MANIFEST_INVALID"
+    },
+    "malformedSig": {
+      "manifestJson": "{\n  \"schemaVersion\": 1,\n  \"keyId\": \"vector-normal-key-1\",\n  \"pluginId\": \"vector-plugin\",\n  \"pluginVersion\": \"1.2.3\",\n  \"requireAdmin\": false,\n  \"issuedAt\": \"2026-11-25T00:00:00.000Z\",\n  \"files\": [\n    {\n      \"role\": \"main\",\n      \"dllId\": \"VectorPlugin\",\n      \"path\": \"lib/VectorPlugin.dll\",\n      \"arch\": \"x86\",\n      \"size\": 4096,\n      \"sha256\": \"deba929a7a18b05cd9884398c2f629c9406f7d30331a950b59bb4ac594787a0c\",\n      \"functions\": [\n        \"RunAction\",\n        \"__setLocale\"\n      ]\n    },\n    {\n      \"role\": \"dependency\",\n      \"path\": \"lib/DepLib.dll\",\n      \"arch\": \"x86\",\n      \"size\": 2048,\n      \"sha256\": \"4031d138a8388bf2301e53bf640438d64aea77935a18bd8e988f1e8c3b31d75d\"\n    },\n    {\n      \"role\": \"helper\",\n      \"path\": \"lib/helper.exe\",\n      \"arch\": \"x64\",\n      \"size\": 8192,\n      \"sha256\": \"2c279c0421a4568d0d25e973a3c86424e0938db5c3b3c499bfdb174e44b07e3f\"\n    }\n  ]\n}\n",
+      "signatureLine": "v2:vector-normal-key-1:946c3b23b108c34d4ae50dc702edb42d012e9b9f7166de70cb319debb744b921fcab0c35325d8f12f0078e6816f6ca4ceffd7981a04ebf883795999a5fd60c08\n",
+      "expectedCode": "MANIFEST_INVALID"
+    },
+    "keyIdMismatch": {
+      "manifestJson": "{\n  \"schemaVersion\": 1,\n  \"keyId\": \"vector-normal-key-1\",\n  \"pluginId\": \"vector-plugin\",\n  \"pluginVersion\": \"1.2.3\",\n  \"requireAdmin\": false,\n  \"issuedAt\": \"2026-11-25T00:00:00.000Z\",\n  \"files\": [\n    {\n      \"role\": \"main\",\n      \"dllId\": \"VectorPlugin\",\n      \"path\": \"lib/VectorPlugin.dll\",\n      \"arch\": \"x86\",\n      \"size\": 4096,\n      \"sha256\": \"deba929a7a18b05cd9884398c2f629c9406f7d30331a950b59bb4ac594787a0c\",\n      \"functions\": [\n        \"RunAction\",\n        \"__setLocale\"\n      ]\n    },\n    {\n      \"role\": \"dependency\",\n      \"path\": \"lib/DepLib.dll\",\n      \"arch\": \"x86\",\n      \"size\": 2048,\n      \"sha256\": \"4031d138a8388bf2301e53bf640438d64aea77935a18bd8e988f1e8c3b31d75d\"\n    },\n    {\n      \"role\": \"helper\",\n      \"path\": \"lib/helper.exe\",\n      \"arch\": \"x64\",\n      \"size\": 8192,\n      \"sha256\": \"2c279c0421a4568d0d25e973a3c86424e0938db5c3b3c499bfdb174e44b07e3f\"\n    }\n  ]\n}\n",
+      "signatureLine": "v1:vector-normal-key-2:5f5538e48cb38810ede1602d9c5cc4a01a6f8d2aab2c1519d29f03a07224209f85285556e07e60df3c327f2d722dfa2917e35faa645231604070a8732a3fb3d4\n",
+      "signatureHex": "5f5538e48cb38810ede1602d9c5cc4a01a6f8d2aab2c1519d29f03a07224209f85285556e07e60df3c327f2d722dfa2917e35faa645231604070a8732a3fb3d4",
+      "manifestSha256": "b3732e14e99bb7eb0f3dfa3dff29de5b49500a7c7241eae13b82520c07fad46d",
+      "expectedCode": "MANIFEST_INVALID"
+    },
+    "wrongUsage": {
+      "manifestJson": "{\n  \"schemaVersion\": 1,\n  \"keyId\": \"vector-normal-key-1\",\n  \"pluginId\": \"vector-priv-plugin\",\n  \"pluginVersion\": \"2.0.0\",\n  \"requireAdmin\": true,\n  \"issuedAt\": \"2026-11-25T00:00:00.000Z\",\n  \"files\": [\n    {\n      \"role\": \"main\",\n      \"dllId\": \"VectorPrivPlugin\",\n      \"path\": \"lib/VectorPrivPlugin.dll\",\n      \"arch\": \"x86\",\n      \"size\": 4096,\n      \"sha256\": \"deba929a7a18b05cd9884398c2f629c9406f7d30331a950b59bb4ac594787a0c\",\n      \"functions\": [\n        \"ApplyChange\"\n      ]\n    }\n  ]\n}\n",
+      "signatureLine": "v1:vector-normal-key-1:02134feb7bbe584369ded3ca8a2313691029b951d368d4f2ed4b507a294715d5426afbbae3aef21c127744a4c6b39117a5cdd8d0bf1fae1d527615d6d544e282\n",
+      "signatureHex": "02134feb7bbe584369ded3ca8a2313691029b951d368d4f2ed4b507a294715d5426afbbae3aef21c127744a4c6b39117a5cdd8d0bf1fae1d527615d6d544e282",
+      "manifestSha256": "6dfdbc267f509608a860a200ce7d5631077e7c2def6c70fe903c2ab05ed686c7",
+      "expectedCode": "MANIFEST_UNTRUSTED"
+    }
+  }
+}

@@ -15,6 +15,7 @@ import {
   PLUGIN_CATEGORY_IDS,
   HIGH_RISK_PERMISSIONS,
   OFFICIAL_PLUGIN_IDS,
+  TOOL_CAPABILITY_IDS,
   isOfficialAuthorName
 } from '../src/validator.js'
 
@@ -301,6 +302,8 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
       }
       const schema = JSON.parse(fs.readFileSync(new URL('../plugin.schema.json', import.meta.url), 'utf8'))
       assert.deepEqual([...schema.properties.permissions.items.enum].sort(), [...PERMISSIONS].sort())
+      assert.deepEqual([...schema.properties.requiredCapabilities.items.enum].sort(), [...TOOL_CAPABILITY_IDS].sort())
+      assert.ok(schema.properties.minClientVersion)
       assert.ok(HIGH_RISK_PERMISSIONS.has('process'))
     })
 

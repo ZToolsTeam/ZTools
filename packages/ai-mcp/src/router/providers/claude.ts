@@ -8,6 +8,7 @@ import {
 } from '../../types/ai.js';
 import { BaseProvider } from './base.js';
 import { TokenTracker } from '../token-tracker.js';
+import { validateRemoteServiceUrl } from '../../security/url-guard.js';
 
 interface AnthropicContentBlock {
   type: 'text' | 'tool_use' | 'tool_result';
@@ -63,9 +64,13 @@ interface AnthropicStreamEvent {
 
 export class ClaudeProvider extends BaseProvider {
   constructor(config: ModelProviderConfig) {
+    const resolvedBaseUrl = config.baseUrl || 'https://api.anthropic.com/v1';
+    validateRemoteServiceUrl(resolvedBaseUrl, {
+      allowPrivateNetwork: config.allowPrivateNetwork
+    });
     super({
       ...config,
-      baseUrl: config.baseUrl || 'https://api.anthropic.com/v1',
+      baseUrl: resolvedBaseUrl,
       defaultModel: config.defaultModel || 'claude-3-5-sonnet-20241022'
     });
   }

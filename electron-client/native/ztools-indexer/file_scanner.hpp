@@ -39,6 +39,7 @@
 #include <algorithm>
 
 #include "pinyin.hpp"
+#include "query_engine.hpp"
 
 namespace ztools::indexer {
 
@@ -114,14 +115,42 @@ inline std::wstring Utf8ToWide(const std::string& str) {
 
 struct FileEntry {
   std::string path;
+  std::string path_lower;
   std::string name;
   std::string name_lower;
+  std::string ext_lower;
   std::string acronym;
   std::string pinyin_full;
   uint64_t size = 0;
   uint64_t mtime = 0;
+  uint64_t mtime_ms = 0;
+  uint32_t name_mask = 0;
+  uint32_t path_mask = 0;
+  uint32_t pinyin_mask = 0;
+  uint32_t combined_mask = 0;
+  uint32_t name_cjk_mask = 0;
+  uint32_t path_cjk_mask = 0;
+  uint16_t content_type = kContentTypeOther;
   bool is_dir = false;
+  bool is_hidden = false;
 };
+
+inline void FinalizeFileEntryMetadata(FileEntry& e) {
+  PinyinEngine::Convert(e.name, e.acronym, e.pinyin_full, e.name_lower);
+  PinyinEngine::NormalizePathLower(e.path, e.path_lower);
+  e.ext_lower = PinyinEngine::ExtractExtLower(e.name_lower, e.is_dir);
+  e.content_type = ClassifyContentType(e.ext_lower, e.is_dir);
+  e.mtime_ms = NormalizeMtimeToUnixMs(e.mtime);
+  e.name_mask = PinyinEngine::ComputeAsciiBitmask(e.name_lower);
+  e.path_mask = PinyinEngine::ComputeAsciiBitmask(e.path_lower);
+  e.pinyin_mask = PinyinEngine::ComputeAsciiBitmask(e.pinyin_full) | PinyinEngine::ComputeAsciiBitmask(e.acronym);
+  e.combined_mask = e.name_mask | e.path_mask | e.pinyin_mask;
+  e.name_cjk_mask = PinyinEngine::ComputeCjkBitmask(e.name_lower);
+  e.path_cjk_mask = PinyinEngine::ComputeCjkBitmask(e.path_lower);
+  if (!e.is_hidden && !e.name.empty() && e.name[0] == '.') {
+    e.is_hidden = true;
+  }
+}
 
 class IFileScanner {
 public:
@@ -273,7 +302,7 @@ public:
       entry.is_dir = item.is_dir;
       entry.mtime = item.mtime;
 
-      PinyinEngine::Convert(entry.name, entry.acronym, entry.pinyin_full, entry.name_lower);
+      FinalizeFileEntryMetadata(entry);
       out_entries.push_back(std::move(entry));
     }
 
@@ -1073,8 +1102,9 @@ private:
       entry.is_dir = is_directory;
       entry.size = (static_cast<uint64_t>(find_data.nFileSizeHigh) << 32) | find_data.nFileSizeLow;
       entry.mtime = (static_cast<uint64_t>(find_data.ftLastWriteTime.dwHighDateTime) << 32) | find_data.ftLastWriteTime.dwLowDateTime;
+      entry.is_hidden = (find_data.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
 
-      PinyinEngine::Convert(entry.name, entry.acronym, entry.pinyin_full, entry.name_lower);
+      FinalizeFileEntryMetadata(entry);
       files.push_back(std::move(entry));
       total_collected.fetch_add(1, std::memory_order_relaxed);
 
@@ -1158,7 +1188,7 @@ private:
       entry.size = is_directory ? 0 : static_cast<uint64_t>(st.st_size);
       entry.mtime = static_cast<uint64_t>(st.st_mtime) * 1000ULL;
 
-      PinyinEngine::Convert(entry.name, entry.acronym, entry.pinyin_full, entry.name_lower);
+      FinalizeFileEntryMetadata(entry);
       files.push_back(std::move(entry));
       total_collected.fetch_add(1, std::memory_order_relaxed);
 
@@ -1216,7 +1246,7 @@ public:
       entry.size = (i * 1024 + 512) % (100 * 1024 * 1024);
       entry.mtime = 1700000000 + i;
 
-      PinyinEngine::Convert(entry.name, entry.acronym, entry.pinyin_full, entry.name_lower);
+      FinalizeFileEntryMetadata(entry);
       out_entries.push_back(std::move(entry));
     }
   }

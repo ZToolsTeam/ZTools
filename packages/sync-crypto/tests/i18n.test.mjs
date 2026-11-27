@@ -90,8 +90,8 @@ test('tSync: formats placeholders including numeric 0 and keeps en-US/zh-CN dict
 test('Crypto & payload errors switch cleanly between en-US and zh-CN', async () => {
   const validKey = Buffer.alloc(32, 7)
   const shortKey = Buffer.alloc(16, 1)
-  const invalidConfigPayload = encryptAesGcm(JSON.stringify({ wrong: true }), validKey)
-  const invalidClipboardPayload = encryptAesGcm(JSON.stringify({ items: 'not-array' }), validKey)
+  const invalidConfigPayload = encryptAesGcm(JSON.stringify({ wrong: true }), validKey, 'ztools:config:v1:test')
+  const invalidClipboardPayload = encryptAesGcm(JSON.stringify({ items: 'not-array' }), validKey, 'ztools:clipboard:v1:test')
   const validPayload = encryptAesGcm('hello', validKey)
 
   await withGlobalLocale('en-US', () => {
@@ -381,8 +381,8 @@ test('explicit locale overrides runtime globalThis.__ztoolsLocale across crypto,
   const validKey = Buffer.alloc(32, 7)
   const shortKey = Buffer.alloc(16, 1)
   const validPayload = encryptAesGcm('hello', validKey)
-  const invalidConfigPayload = encryptAesGcm(JSON.stringify({ wrong: true }), validKey)
-  const invalidClipboardPayload = encryptAesGcm(JSON.stringify({ items: 'bad' }), validKey)
+  const invalidConfigPayload = encryptAesGcm(JSON.stringify({ wrong: true }), validKey, 'ztools:config:v1:test')
+  const invalidClipboardPayload = encryptAesGcm(JSON.stringify({ items: 'bad' }), validKey, 'ztools:clipboard:v1:test')
 
   await withGlobalLocale('en-US', async () => {
     // 1. 加密原语与封包解析：全局 en-US，显式传 zh-CN 应输出中文

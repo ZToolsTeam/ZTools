@@ -70,6 +70,7 @@ export class E2eeSyncEngine {
   #remoteEtag?: string
   #remoteUpdatedAt?: string
   #locale?: string
+  #destroyed = false
 
   constructor(options: SyncEngineOptions) {
     this.#locale = options.locale
@@ -96,8 +97,21 @@ export class E2eeSyncEngine {
     this.#locale = locale
   }
 
-  get key(): Buffer {
-    return this.#derivedKey
+  /**
+   * 当前同步引擎是否已销毁并清零派生密钥
+   */
+  get isDestroyed(): boolean {
+    return this.#destroyed
+  }
+
+  /**
+   * 销毁同步引擎：彻底清零内存中的派生密钥并清空本地记录（幂等操作）
+   */
+  destroy(): void {
+    if (this.#destroyed) return
+    this.#derivedKey.fill(0)
+    this.#records.clear()
+    this.#destroyed = true
   }
 
   get deviceId(): string {
@@ -283,6 +297,7 @@ export class E2eeSyncEngine {
     options?: { force?: boolean; filename?: string; gistId?: string; locale?: string }
   ): Promise<{ etag?: string; gistId?: string; updatedAt?: string }> {
     const locale = options?.locale ?? this.#locale
+    this.#assertNotDestroyed(locale)
     const adapter = targetAdapter ?? this.#adapter
     if (!adapter) {
       throw new Error(tSync('engine.missingAdapter', undefined, locale))
@@ -384,6 +399,7 @@ export class E2eeSyncEngine {
     options?: { filename?: string; gistId?: string; locale?: string }
   ): Promise<{ records: SyncRecord[]; etag?: string; updatedAt?: string }> {
     const locale = options?.locale ?? this.#locale
+    this.#assertNotDestroyed(locale)
     const adapter = targetAdapter ?? this.#adapter
     if (!adapter) {
       throw new Error(tSync('engine.missingAdapter', undefined, locale))
@@ -420,6 +436,7 @@ export class E2eeSyncEngine {
     options?: { filename?: string; gistId?: string; locale?: string }
   ): Promise<{ records: SyncRecord[]; etag?: string; gistId?: string; updatedAt?: string }> {
     const locale = options?.locale ?? this.#locale
+    this.#assertNotDestroyed(locale)
     const adapter = targetAdapter ?? this.#adapter
     if (!adapter) {
       throw new Error(tSync('engine.missingAdapter', undefined, locale))
@@ -457,6 +474,7 @@ export class E2eeSyncEngine {
     options?: { ifMatch?: string; locale?: string }
   ): Promise<{ etag?: string }> {
     const locale = options?.locale ?? this.#locale
+    this.#assertNotDestroyed(locale)
     const payload = encryptConfigPayload(config, this.#derivedKey, locale)
     const jsonStr = JSON.stringify(payload, null, 2)
     return adapter.put(remoteFilename, jsonStr, {
@@ -475,6 +493,7 @@ export class E2eeSyncEngine {
     options?: { locale?: string }
   ): Promise<{ config: ConfigSyncData; etag?: string; lastModified?: string }> {
     const locale = options?.locale ?? this.#locale
+    this.#assertNotDestroyed(locale)
     const { data, etag, lastModified } = await adapter.get(
       remoteFilename,
       locale !== undefined ? { locale } : undefined
@@ -494,6 +513,7 @@ export class E2eeSyncEngine {
     options?: { ifMatch?: string; locale?: string }
   ): Promise<{ etag?: string }> {
     const locale = options?.locale ?? this.#locale
+    this.#assertNotDestroyed(locale)
     const payload = encryptClipboardPayload(clipboard, this.#derivedKey, locale)
     const jsonStr = JSON.stringify(payload, null, 2)
     return adapter.put(remoteFilename, jsonStr, {
@@ -512,6 +532,7 @@ export class E2eeSyncEngine {
     options?: { locale?: string }
   ): Promise<{ clipboard: ClipboardSyncData; etag?: string; lastModified?: string }> {
     const locale = options?.locale ?? this.#locale
+    this.#assertNotDestroyed(locale)
     const { data, etag, lastModified } = await adapter.get(
       remoteFilename,
       locale !== undefined ? { locale } : undefined
@@ -535,6 +556,7 @@ export class E2eeSyncEngine {
     options?: { expectedUpdatedAt?: string; locale?: string }
   ): Promise<{ gistId: string; updatedAt: string }> {
     const locale = options?.locale ?? this.#locale
+    this.#assertNotDestroyed(locale)
     const payload = encryptConfigPayload(config, this.#derivedKey, locale)
     const fileContent = JSON.stringify(payload, null, 2)
     const filename = 'ztools_config.enc.json'
@@ -571,6 +593,7 @@ export class E2eeSyncEngine {
     options?: { locale?: string }
   ): Promise<{ config: ConfigSyncData; updatedAt: string; gistId: string }> {
     const locale = options?.locale ?? this.#locale
+    this.#assertNotDestroyed(locale)
     const gist = await adapter.getGist(gistId, locale !== undefined ? { locale } : undefined)
     const filename = 'ztools_config.enc.json'
     const file = gist.files[filename]
@@ -598,6 +621,7 @@ export class E2eeSyncEngine {
     options?: { expectedUpdatedAt?: string; locale?: string }
   ): Promise<{ gistId: string; updatedAt: string }> {
     const locale = options?.locale ?? this.#locale
+    this.#assertNotDestroyed(locale)
     const payload = encryptClipboardPayload(clipboard, this.#derivedKey, locale)
     const fileContent = JSON.stringify(payload, null, 2)
     const filename = 'ztools_clipboard.enc.json'
@@ -634,6 +658,7 @@ export class E2eeSyncEngine {
     options?: { locale?: string }
   ): Promise<{ clipboard: ClipboardSyncData; updatedAt: string; gistId: string }> {
     const locale = options?.locale ?? this.#locale
+    this.#assertNotDestroyed(locale)
     const gist = await adapter.getGist(gistId, locale !== undefined ? { locale } : undefined)
     const filename = 'ztools_clipboard.enc.json'
     const file = gist.files[filename]
@@ -743,8 +768,18 @@ export class E2eeSyncEngine {
     }
   }
 
+  #assertNotDestroyed(locale?: string): void {
+    if (this.#destroyed) {
+      throw new Error(tSync('engine.destroyed', undefined, locale ?? this.#locale))
+    }
+  }
+
   #decryptStateSnapshot(payload: EncryptedPayload, locale?: string): SyncStateSnapshot {
-    const jsonStr = decryptAesGcmString(payload, this.#derivedKey, locale)
+    this.#assertNotDestroyed(locale)
+    const jsonStr = decryptAesGcmString(payload, this.#derivedKey, {
+      locale,
+      expectedAadPrefix: 'ztools:sync-state:'
+    })
     const parsed = JSON.parse(jsonStr) as SyncStateSnapshot
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.records)) {
       throw new Error(tSync('engine.invalidSyncState', undefined, locale))

@@ -11,6 +11,7 @@ import * as oss from '../index.js'
 const EXPECTED_EXPORTS = {
   EDITION: 'string',
   isOnline: 'boolean',
+  nativeCatalogUrl: 'string',
   localeMessages: 'object',
   rootRoutes: 'array',
   layoutRoutes: 'array',
@@ -85,6 +86,7 @@ describe('@edition 接口契约', () => {
     assertContract(oss)
     expect(oss.EDITION).toBe('oss')
     expect(oss.isOnline).toBe(false)
+    expect(oss.nativeCatalogUrl).toBe('')
     expect(oss).not.toHaveProperty('marketBackend')
     expect(oss.cloudSync.enabled).toBe(false)
     expect(oss.rootRoutes).toHaveLength(0)
@@ -181,5 +183,12 @@ describe('@edition 接口契约', () => {
     assertContract(current)
     expect(['oss', 'commercial']).toContain(current.EDITION)
     expect(Object.keys(current).sort()).toEqual(Object.keys(oss).sort())
+    expect(current).not.toHaveProperty('marketBackend')
+    if (current.EDITION === 'oss') {
+      expect(current.nativeCatalogUrl).toBe('')
+    } else {
+      const parsed = new URL(current.nativeCatalogUrl)
+      expect(parsed.protocol).toBe('https:')
+    }
   })
 })

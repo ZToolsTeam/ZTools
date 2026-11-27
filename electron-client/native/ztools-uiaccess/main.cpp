@@ -16,13 +16,14 @@ int main(int argc, char* argv[]) {
   _setmode(_fileno(stdin), _O_BINARY);
   _setmode(_fileno(stdout), _O_BINARY);
 
-  std::string pipe_name;
   bool initial_mock = false;
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
-    if (arg.rfind("--pipe=", 0) == 0) {
-      pipe_name = arg.substr(7);
+    if (arg == "--pipe" || arg.rfind("--pipe=", 0) == 0) {
+      // 安全加固：彻底移除无 DACL 鉴权的 Named Pipe 调试入口，遇该参数直接 Fail-Closed 退出
+      std::cerr << "[ztools-uiaccess] Named pipe transport (--pipe) is disabled for security reasons. Use stdin/stdout JSON-RPC transport.\n";
+      return 2;
     } else if (arg == "--mock") {
       initial_mock = true;
     }
@@ -236,65 +237,7 @@ int main(int argc, char* argv[]) {
     return JsonRpcResponse::Error(req.id, -32601, "Method not found: " + req.method);
   };
 
-  if (!pipe_name.empty()) {
-    // Named pipe mode
-    HANDLE hPipe = CreateNamedPipeA(
-      pipe_name.c_str(),
-      PIPE_ACCESS_DUPLEX,
-      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-      1,
-      64 * 1024,
-      64 * 1024,
-      0,
-      NULL
-    );
-    if (hPipe != INVALID_HANDLE_VALUE) {
-      ConnectNamedPipe(hPipe, NULL);
-      // Run loop reading lines from pipe
-      std::string buffer;
-      char readBuf[1024];
-      DWORD bytesRead = 0;
-      bool running = true;
-      while (running && ReadFile(hPipe, readBuf, sizeof(readBuf), &bytesRead, NULL) && bytesRead > 0) {
-        buffer.append(readBuf, bytesRead);
-        size_t newlinePos = std::string::npos;
-        while ((newlinePos = buffer.find('\n')) != std::string::npos) {
-          std::string line = buffer.substr(0, newlinePos);
-          buffer.erase(0, newlinePos + 1);
-          if (line.empty() || line == "\r") continue;
-          if (!line.empty() && line.back() == '\r') line.pop_back();
-
-          JsonRpcRequest req;
-          std::string err;
-          if (!ParseJsonRpcRequest(line, req, err)) {
-            JsonRpcResponse err_resp = JsonRpcResponse::Error(JsonValue(), -32700, "Parse error: " + err);
-            std::string out = err_resp.serialize() + "\n";
-            DWORD written = 0;
-            WriteFile(hPipe, out.data(), static_cast<DWORD>(out.size()), &written, NULL);
-            continue;
-          }
-
-          JsonRpcResponse resp;
-          bool should_shutdown = false;
-          DispatchRpcRequest(req, rpc_handler, resp, should_shutdown);
-          if (!req.is_notification) {
-            std::string out = resp.serialize() + "\n";
-            DWORD written = 0;
-            WriteFile(hPipe, out.data(), static_cast<DWORD>(out.size()), &written, NULL);
-          }
-          if (should_shutdown) {
-            running = false;
-            break;
-          }
-        }
-      }
-      DisconnectNamedPipe(hPipe);
-      CloseHandle(hPipe);
-      return 0;
-    }
-  }
-
-  // Standard Stdin/Stdout mode
+  // 仅保留标准 Stdin/Stdout 传输模式（由父进程通过匿名管道独占通信）
   RunLineRpcLoop(std::cin, std::cout, rpc_handler);
   return 0;
 }

@@ -7,6 +7,13 @@ import test from 'node:test'
 
 import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { runtimePathsForBusinessDataRoot } from '../../src/main/runtime/runtime-paths.js'
+import {
+  AUTHENTICODE_ENCODED_COMMAND,
+  parseAuthenticodeOutput,
+  queryAuthenticodeSignature,
+  verifyWindowsInstallerSignature,
+  type AuthenticodeSignatureInfo
+} from '../../src/main/platform/windows/authenticode.js'
 import { UpdateService, type UpdateSource } from '../../src/main/services/update-service.js'
 import { getLocaleSetting, getResolvedLocale, setLocale } from '../../src/main/i18n/index.js'
 
@@ -157,6 +164,7 @@ test('App package formats leave install-scope resolution to the native updater',
     appVersion: '1.0.0',
     webVersion: '1.0.0',
     fetchImpl: async () => new Response(payload, { status: 200 }),
+    verifyWindowsInstallerImpl: async () => undefined,
     runUpdaterImpl: async (executable, argumentsList, cwd) => {
       launches.push({ executable, argumentsList, cwd, updaterContents: await fs.readFile(executable, 'utf8') })
       return 0
@@ -210,6 +218,7 @@ test('UAC cancellation and updater launch failures remain visible and retryable'
       downloadCalls += 1
       return new Response(payload, { status: 200 })
     },
+    verifyWindowsInstallerImpl: async () => undefined,
     runUpdaterImpl: async () => {
       if (launchError) throw launchError
       return exitCode
@@ -263,6 +272,7 @@ test('Windows app update falls back to direct .exe installer when ZToolsUpdater.
     appVersion: '1.0.0',
     webVersion: '1.0.0',
     fetchImpl: async () => new Response(payload, { status: 200 }),
+    verifyWindowsInstallerImpl: async () => undefined,
     runUpdaterImpl: async (executable, argumentsList, cwd) => {
       launches.push({ executable, argumentsList, cwd })
       return 0
@@ -287,6 +297,7 @@ test('Windows app update falls back to direct .exe installer when ZToolsUpdater.
     appVersion: '1.0.0',
     webVersion: '1.0.0',
     fetchImpl: async () => new Response(payload, { status: 200 }),
+    verifyWindowsInstallerImpl: async () => undefined,
     runUpdaterImpl: async (executable, argumentsList, cwd) => {
       launches.push({ executable, argumentsList, cwd })
       return 0
@@ -321,6 +332,7 @@ test('Windows app update falls back to direct .exe installer when ZToolsUpdater.
     appVersion: '1.0.0',
     webVersion: '1.0.0',
     fetchImpl: async () => new Response(payload, { status: 200 }),
+    verifyWindowsInstallerImpl: async () => undefined,
     runUpdaterImpl: async (executable, argumentsList, cwd) => {
       launches.push({ executable, argumentsList, cwd })
       if (path.basename(executable) === 'ZToolsUpdater.exe') {
@@ -608,4 +620,168 @@ test('UpdateService 未显式传 arch 时自动归一化原生架构，显式传
     }),
     { platform: 'macos', arch: 'x64' }
   )
+})
+
+test('Windows Authenticode 验签在启动更新器之前拦截未签名/篡改/换签安装包，合法签名放行', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-authenticode-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
+  const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
+  await fs.mkdir(runtimePaths.installRoot, { recursive: true })
+  await fs.writeFile(path.join(runtimePaths.installRoot, 'ZToolsUpdater.exe'), 'updater')
+  const payload = Buffer.from('signed installer payload')
+  const checksum = createHash('sha256').update(payload).digest('hex')
+  const hostPath = path.join(root, 'ZTools.exe')
+  const hostSubject = 'CN=ZTools Team, O=ZTools Inc.'
+  const hostThumbprint = 'AABBCCDD11223344556677889900AABBCCDD1122'
+
+  // 1) 底层 verifyWindowsInstallerSignature 单元测试：合法签名、无效签名、换签、开发态受控跳过
+  const validSig: AuthenticodeSignatureInfo = {
+    status: 'Valid',
+    subject: hostSubject,
+    thumbprint: hostThumbprint
+  }
+  const verified = await verifyWindowsInstallerSignature('C:\\tmp\\ZToolsSetup.exe', {
+    isPackaged: true,
+    hostExecutablePath: hostPath,
+    querySignature: async () => validSig
+  })
+  assert.equal(verified?.status, 'Valid')
+
+  // 签名无效（NotSigned / HashMismatch）必须 Fail-Closed 抛 DATA_CORRUPT
+  for (const badStatus of ['NotSigned', 'HashMismatch', 'UnknownError']) {
+    await assert.rejects(
+      verifyWindowsInstallerSignature('C:\\tmp\\ZToolsSetup.exe', {
+        isPackaged: true,
+        hostExecutablePath: hostPath,
+        querySignature: async () => ({ status: badStatus, statusMessage: 'bad sig' })
+      }),
+      (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.dataCorrupt
+    )
+  }
+
+  // 换签攻击：安装包签名本身 Valid，但发布者与当前宿主不一致，必须拦截抛 PERMISSION_DENIED
+  await assert.rejects(
+    verifyWindowsInstallerSignature('C:\\tmp\\EvilSigned.exe', {
+      isPackaged: true,
+      hostExecutablePath: hostPath,
+      querySignature: async (filePath) => filePath === hostPath
+        ? validSig
+        : { status: 'Valid', subject: 'CN=Evil Corp', thumbprint: '0000111122223333444455556666777788889999' }
+    }),
+    (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied
+  )
+
+  // 开发态（isPackaged: false）未强制时受控跳过；开启 enforceInDev 时仍严格拦截
+  assert.equal(
+    await verifyWindowsInstallerSignature('C:\\tmp\\DevSetup.exe', {
+      isPackaged: false,
+      querySignature: async () => ({ status: 'NotSigned' })
+    }),
+    null
+  )
+  await assert.rejects(
+    verifyWindowsInstallerSignature('C:\\tmp\\DevSetup.exe', {
+      isPackaged: false,
+      enforceInDev: true,
+      querySignature: async () => ({ status: 'NotSigned' })
+    }),
+    (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.dataCorrupt
+  )
+
+  // queryAuthenticodeSignature 使用 -EncodedCommand 与环境变量传参，拒绝空字节与畸形 JSON
+  const capturedCommands: Array<{ args: readonly string[]; envTarget: string | undefined }> = []
+  const queried = await queryAuthenticodeSignature(
+    'C:\\tmp\\setup$(calc).exe',
+    undefined,
+    async (_file, args, options) => {
+      capturedCommands.push({ args, envTarget: options.env.ZTOOLS_AUTH_TARGET_PATH })
+      return {
+        stdout: JSON.stringify({ Status: 'Valid', Subject: hostSubject, Thumbprint: hostThumbprint }),
+        stderr: ''
+      }
+    }
+  )
+  assert.equal(queried.status, 'Valid')
+  assert.equal(capturedCommands.length, 1)
+  assert.ok(capturedCommands[0]?.args.includes('-EncodedCommand'))
+  assert.ok(capturedCommands[0]?.args.includes(AUTHENTICODE_ENCODED_COMMAND))
+  assert.equal(capturedCommands[0]?.args.join(' ').includes('$(calc)'), false)
+  assert.ok(capturedCommands[0]?.envTarget?.includes('setup$(calc).exe'))
+  await assert.rejects(
+    queryAuthenticodeSignature('C:\\tmp\\bad\0.exe'),
+    (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest
+  )
+  assert.throws(
+    () => parseAuthenticodeOutput('not-json'),
+    (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.dataCorrupt
+  )
+
+  // 2) UpdateService.#installApp 集成：验签失败绝不启动 ZToolsUpdater.exe，验签通过后按序执行
+  const events: string[] = []
+  const rejectedService = new UpdateService({
+    platform: 'win32',
+    runtimePaths,
+    appVersion: '1.0.0',
+    webVersion: '1.0.0',
+    fetchImpl: async () => new Response(payload, { status: 200 }),
+    verifyWindowsInstallerImpl: async (installerPath, signal) => {
+      events.push(`verify:${path.basename(installerPath)}`)
+      await verifyWindowsInstallerSignature(installerPath, {
+        isPackaged: true,
+        hostExecutablePath: hostPath,
+        signal,
+        querySignature: async (target) => target === hostPath
+          ? validSig
+          : { status: 'Valid', subject: 'CN=Attacker', thumbprint: 'FFFFFFFF' }
+      })
+    },
+    runUpdaterImpl: async () => {
+      events.push('runUpdater')
+      return 0
+    }
+  })
+  await assert.rejects(
+    rejectedService.install({
+      type: 'app',
+      version: '2.0.0',
+      downloadUrl: 'https://cdn.example/ZToolsSetup.exe',
+      checksum,
+      fileSize: payload.length
+    }),
+    (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied
+  )
+  assert.equal(events.some((e) => e === 'runUpdater'), false, '验签失败绝不能启动更新器')
+  await rejectedService.stop()
+
+  events.length = 0
+  const verifiedService = new UpdateService({
+    platform: 'win32',
+    runtimePaths,
+    appVersion: '1.0.0',
+    webVersion: '1.0.0',
+    fetchImpl: async () => new Response(payload, { status: 200 }),
+    verifyWindowsInstallerImpl: async (installerPath, signal) => {
+      events.push('verify')
+      await verifyWindowsInstallerSignature(installerPath, {
+        isPackaged: true,
+        hostExecutablePath: hostPath,
+        signal,
+        querySignature: async () => validSig
+      })
+    },
+    runUpdaterImpl: async () => {
+      events.push('runUpdater')
+      return 0
+    }
+  })
+  const okRes = await verifiedService.install({
+    type: 'app',
+    version: '2.0.1',
+    downloadUrl: 'https://cdn.example/ZToolsSetup-2.0.1.exe',
+    checksum,
+    fileSize: payload.length
+  })
+  assert.equal(okRes.success, true)
+  assert.deepEqual(events, ['verify', 'runUpdater'])
+  await verifiedService.stop()
 })

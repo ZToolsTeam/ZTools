@@ -34,20 +34,21 @@ add_executable(ZToolsService
   src/privileged_dll_loader.cpp
   src/privileged_dll_task_manager.cpp
   src/privileged_dll_resolver.cpp
-  src/privileged_manifest.cpp
   src/service_command_protocol.cpp
   src/service_auth.cpp
   src/service_runtime.cpp
   src/service_process_security.cpp
   src/service_secret.cpp
+  src/trust_state_store.cpp
+  src/trusted_snapshot.cpp
 )
 
-target_include_directories(ZToolsService PRIVATE include)
+target_include_directories(ZToolsService PRIVATE include "${ZTOOLS_NATIVE_TRUST_GENERATED_DIR}" ../shared)
 target_compile_definitions(ZToolsService PRIVATE ZTOOLS_PRODUCT_VERSION=L"${ZTOOLS_PRODUCT_VERSION}")
 target_compile_definitions(ZToolsService PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(ZToolsService PRIVATE /W4 /WX /utf-8 /sdl /guard:cf)
 target_link_options(ZToolsService PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf)
-target_link_libraries(ZToolsService PRIVATE advapi32 bcrypt shell32 shlwapi userenv wtsapi32 xmllite)
+target_link_libraries(ZToolsService PRIVATE advapi32 bcrypt ole32 shell32 userenv wtsapi32)
 
 if(NOT DEFINED ZTOOLS_SERVICE_OUTPUT_DIR)
   set(ZTOOLS_SERVICE_OUTPUT_DIR "${CMAKE_BINARY_DIR}/service-win32-ia32")
@@ -61,7 +62,9 @@ set_target_properties(ZToolsService PROPERTIES
 )
 
 if(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
-  target_compile_definitions(ZToolsService PRIVATE ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS=1)
+  target_compile_definitions(ZToolsService PRIVATE
+    ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS=1
+    ZTOOLS_ENABLE_TEST_TRUST_KEY=1)
   add_library(ZToolsServiceSessionFixture SHARED tests/session_fixture.cpp tests/session_fixture.def)
   target_compile_options(ZToolsServiceSessionFixture PRIVATE /W4 /WX /utf-8)
   target_link_libraries(ZToolsServiceSessionFixture PRIVATE ole32)
@@ -86,15 +89,19 @@ if(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
     src/privileged_dll_loader.cpp
     src/privileged_dll_task_manager.cpp
     src/privileged_dll_resolver.cpp
-    src/privileged_manifest.cpp
     src/service_command_protocol.cpp
     src/service_auth.cpp
+    src/trust_state_store.cpp
+    src/trusted_snapshot.cpp
   )
-  target_include_directories(ZToolsServiceManifestTest PRIVATE include)
-  target_compile_definitions(ZToolsServiceManifestTest PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_include_directories(ZToolsServiceManifestTest PRIVATE include "${ZTOOLS_NATIVE_TRUST_GENERATED_DIR}" ../shared)
+  target_compile_definitions(ZToolsServiceManifestTest PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
+    ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS=1
+    ZTOOLS_ENABLE_TEST_TRUST_KEY=1)
   target_compile_options(ZToolsServiceManifestTest PRIVATE /W4 /WX /utf-8 /sdl /guard:cf)
   target_link_options(ZToolsServiceManifestTest PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf)
-  target_link_libraries(ZToolsServiceManifestTest PRIVATE advapi32 bcrypt shell32 shlwapi wtsapi32 xmllite)
+  target_link_libraries(ZToolsServiceManifestTest PRIVATE advapi32 bcrypt ole32 shell32 wtsapi32)
   add_executable(ZToolsServiceBridgeTest
     tests/client_bridge_policy_test.cpp
     src/client_bridge.cpp

@@ -89,7 +89,8 @@ const DEFINITIVE_TASK_START_ERRORS = new Set([
   'HOST_STOPPING', 'DLL_NOT_ALLOWED', 'FUNCTION_NOT_ALLOWED', 'DLL_PATH_INVALID',
   'DLL_UNAVAILABLE', 'DLL_ARCH_INVALID', 'DLL_INTEGRITY', 'DLL_IDENTITY_CHANGED',
   'DLL_BUSY', 'DLL_LOAD_FAILED', 'DLL_EXPORTS_INVALID', 'DLL_INIT_FAILED', 'DLL_INFO_INVALID',
-  'MANIFEST_UNAVAILABLE', 'MANIFEST_INTEGRITY', 'MANIFEST_INVALID', 'MANIFEST_UNTRUSTED'
+  'MANIFEST_UNAVAILABLE', 'MANIFEST_INTEGRITY', 'MANIFEST_INVALID', 'MANIFEST_UNTRUSTED',
+  'MANIFEST_REVOKED', 'MANIFEST_ROLLBACK'
 ])
 
 export interface NativeHostRequestOptions {
@@ -99,11 +100,19 @@ export interface NativeHostRequestOptions {
   signal?: AbortSignal
 }
 
+export const ZTOOLS_DATA_ROOT_ENV_KEY = 'ZTOOLS_DATA_ROOT'
+
 export interface NativeHostClientOptions {
   pluginRoot?: string
-  trustedManifestSha256?: string
+  /** 宿主业务数据根目录，经受控环境变量 ZTOOLS_DATA_ROOT 透传给 NativeHost32 */
+  dataRoot?: string
   resourcesRoot?: string
-  trustedResourcesManifestSha256?: string
+  /** 仅测试构建使用：向 NativeHost32 测试夹具注入临时 native 公钥（128 位 hex） */
+  testTrustPublicKeyHex?: string
+  /** 仅测试构建使用：向 NativeHost32 测试夹具注入临时 native-privileged 公钥（128 位 hex） */
+  testPrivilegedTrustPublicKeyHex?: string
+  /** 仅测试构建使用：禁用冻结表兜底 */
+  testDisableLegacyTrust?: boolean
   spawnProcess?: (
     executable: string,
     args: string[],
@@ -398,7 +407,11 @@ function clearNativeHostBootstrapEnvironment(environment: NodeJS.ProcessEnv): vo
     'ZTOOLS_NATIVE_RESOURCES_ROOT',
     'ZTOOLS_NATIVE_RESOURCES_MANIFEST_SHA256',
     'ZTOOLS_NATIVE_MANIFEST_ROOT',
-    'ZTOOLS_NATIVE_MANIFEST_SHA256'
+    'ZTOOLS_NATIVE_MANIFEST_SHA256',
+    'ZTOOLS_NATIVE_TEST_PUBKEY_HEX',
+    'ZTOOLS_NATIVE_TEST_PRIV_PUBKEY_HEX',
+    'ZTOOLS_NATIVE_TEST_DISABLE_LEGACY',
+    ZTOOLS_DATA_ROOT_ENV_KEY
   ])
   for (const name of Object.keys(environment)) {
     if (names.has(name.toLocaleUpperCase('en-US'))) delete environment[name]
@@ -416,7 +429,13 @@ function decodeHostError(frame: NativeHostFrame): ZToolsError {
       const hostCode = value.code
       const code = hostCode === 'INVALID_REQUEST'
         ? errorCodes.invalidRequest
-        : ['MANIFEST_UNTRUSTED', 'DLL_NOT_ALLOWED', 'FUNCTION_NOT_ALLOWED'].includes(hostCode)
+        : [
+            'MANIFEST_UNTRUSTED',
+            'MANIFEST_REVOKED',
+            'MANIFEST_ROLLBACK',
+            'DLL_NOT_ALLOWED',
+            'FUNCTION_NOT_ALLOWED'
+          ].includes(hostCode)
           ? errorCodes.permissionDenied
         : hostCode === 'HOST_STOPPING'
           ? errorCodes.appStopping
@@ -594,22 +613,23 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     }
 
     const configuredRoot = this.options.pluginRoot
-    const configuredDigest = this.options.trustedManifestSha256
+    const configuredDataRoot = this.options.dataRoot
     const configuredResourcesRoot = this.options.resourcesRoot
-    const configuredResourcesDigest = this.options.trustedResourcesManifestSha256
+    const configuredTestPubKey = this.options.testTrustPublicKeyHex
+    const configuredTestPrivPubKey = this.options.testPrivilegedTrustPublicKeyHex
+    const configuredTestDisableLegacy = this.options.testDisableLegacyTrust
     if (
       (configuredRoot !== undefined && (
         configuredRoot.includes('\0') || !path.isAbsolute(configuredRoot)
       )) ||
-      (configuredDigest !== undefined && !/^[a-f0-9]{64}$/i.test(configuredDigest)) ||
-      (configuredDigest !== undefined && configuredRoot === undefined) ||
+      (configuredDataRoot !== undefined && (
+        configuredDataRoot.includes('\0') || !path.isAbsolute(configuredDataRoot)
+      )) ||
       (configuredResourcesRoot !== undefined && (
         configuredResourcesRoot.includes('\0') || !path.isAbsolute(configuredResourcesRoot)
       )) ||
-      (configuredResourcesDigest !== undefined &&
-        !/^[a-f0-9]{64}$/i.test(configuredResourcesDigest)) ||
-      (configuredResourcesDigest !== undefined && configuredResourcesRoot === undefined) ||
-      (configuredResourcesRoot !== undefined && configuredResourcesDigest === undefined)
+      (configuredTestPubKey !== undefined && !/^[a-f0-9]{128}$/i.test(configuredTestPubKey)) ||
+      (configuredTestPrivPubKey !== undefined && !/^[a-f0-9]{128}$/i.test(configuredTestPrivPubKey))
     ) {
       throw new ZToolsError(errorCodes.invalidRequest, 'Invalid NativeHost32 trusted directory configuration')
     }
@@ -626,18 +646,23 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     const clientProof = hmac(secret, [CLIENT_DOMAIN, Buffer.from(this.#sessionId, 'utf8'), Buffer.from([0]), clientNonce])
     const childEnvironment: NodeJS.ProcessEnv = { ...process.env }
     clearNativeHostBootstrapEnvironment(childEnvironment)
-    if (this.options.resourcesRoot !== undefined) {
-      childEnvironment.ZTOOLS_NATIVE_RESOURCES_ROOT = path.resolve(this.options.resourcesRoot)
-    }
-    if (configuredResourcesDigest !== undefined) {
-      childEnvironment.ZTOOLS_NATIVE_RESOURCES_MANIFEST_SHA256 =
-        configuredResourcesDigest.toLowerCase()
+    if (configuredResourcesRoot !== undefined) {
+      childEnvironment.ZTOOLS_NATIVE_RESOURCES_ROOT = path.resolve(configuredResourcesRoot)
     }
     if (configuredRoot !== undefined) {
       childEnvironment.ZTOOLS_NATIVE_PLUGIN_ROOT = path.resolve(configuredRoot)
     }
-    if (configuredDigest !== undefined) {
-      childEnvironment.ZTOOLS_NATIVE_MANIFEST_SHA256 = configuredDigest.toLowerCase()
+    if (configuredDataRoot !== undefined) {
+      childEnvironment[ZTOOLS_DATA_ROOT_ENV_KEY] = path.resolve(configuredDataRoot)
+    }
+    if (configuredTestPubKey !== undefined) {
+      childEnvironment.ZTOOLS_NATIVE_TEST_PUBKEY_HEX = configuredTestPubKey.toLowerCase()
+    }
+    if (configuredTestPrivPubKey !== undefined) {
+      childEnvironment.ZTOOLS_NATIVE_TEST_PRIV_PUBKEY_HEX = configuredTestPrivPubKey.toLowerCase()
+    }
+    if (configuredTestDisableLegacy === true) {
+      childEnvironment.ZTOOLS_NATIVE_TEST_DISABLE_LEGACY = '1'
     }
     childEnvironment.ZTOOLS_NATIVE_HOST_TOKEN = secret.toString('hex')
     childEnvironment[ZTOOLS_LOCALE_ENV_KEY] = getResolvedLocale()
@@ -921,7 +946,7 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
   ): Promise<void> {
     const buttonValues = { left: 1, right: 2, middle: 3 } as const
     const hasPosition = x !== undefined || y !== undefined
-    if (hasPosition !== (y !== undefined)) {
+    if ((x !== undefined) !== (y !== undefined)) {
       throw new ZToolsError(errorCodes.invalidRequest, 'Mouse click coordinates x and y must both be provided')
     }
     const payload = Buffer.alloc(hasPosition ? 10 : 2)

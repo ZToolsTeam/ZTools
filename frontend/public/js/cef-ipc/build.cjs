@@ -68,6 +68,9 @@ const files = [
   'api/zip.js',
   'api/sqlite-reference.js',
 
+  // 第三方引擎工具池与薄原语 API
+  'api/tool-runtime.js',
+
   // 客户端组装(依赖所有模块)
   'client.js',
 

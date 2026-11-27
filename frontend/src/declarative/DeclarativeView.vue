@@ -23,6 +23,35 @@
       </div>
     </div>
 
+    <!-- 运行期公共组件兜底按需拉取进度提示条（仅工具未就绪触发实时下载时出现，本地命中时零渲染） -->
+    <div
+      v-if="activeProvisioning"
+      data-decl-provisioning-banner
+      role="status"
+      aria-live="polite"
+      class="px-4 py-1.5 border-b border-[var(--rc-border)] bg-[var(--rc-surface-subtle)] flex items-center justify-between gap-3 text-xs text-[var(--rc-text-secondary)]"
+    >
+      <div class="flex items-center gap-2 min-w-0">
+        <span
+          class="inline-block w-3 h-3 rounded-full border-2 border-[var(--rc-border)] border-t-[var(--rc-accent)] animate-spin flex-shrink-0"
+          aria-hidden="true"
+        />
+        <span class="truncate">{{ activeProvisioning.label }}</span>
+      </div>
+      <div
+        v-if="activeProvisioning.percent !== null"
+        class="flex items-center gap-2 flex-shrink-0"
+      >
+        <div class="w-24 h-1.5 rounded-full bg-[var(--rc-border)] overflow-hidden">
+          <div
+            class="h-full bg-[var(--rc-accent)] transition-all duration-150"
+            :style="{ width: `${activeProvisioning.percent}%` }"
+          />
+        </div>
+        <span class="tabular-nums text-[var(--rc-text-muted)]">{{ activeProvisioning.percent }}%</span>
+      </div>
+    </div>
+
     <!-- 中间视图内容区域 -->
     <div class="flex-1 overflow-hidden relative">
       <!-- 1. List 视图 -->
@@ -494,18 +523,142 @@ function handleHostFilesDropped(envelopeOrPayload) {
   }
 }
 
+// 监听宿主工具池按需拉取进度（运行期兜底下载 CommonLibs 时实时向用户反馈，避免盲等）
+const PROVISIONING_STALE_MS = 5 * 60_000;
+const provisioningTasks = ref({});
+let provisioningPruneTimer = null;
+
+function clearProvisioningPruneTimer() {
+  if (provisioningPruneTimer !== null) {
+    clearTimeout(provisioningPruneTimer);
+    provisioningPruneTimer = null;
+  }
+}
+
+function scheduleProvisioningPrune() {
+  clearProvisioningPruneTimer();
+  const entries = Object.entries(provisioningTasks.value);
+  if (entries.length === 0) return;
+  provisioningPruneTimer = setTimeout(() => {
+    provisioningPruneTimer = null;
+    const now = Date.now();
+    const next = {};
+    for (const [id, item] of Object.entries(provisioningTasks.value)) {
+      if (now - item.updatedAt < PROVISIONING_STALE_MS) {
+        next[id] = item;
+      }
+    }
+    provisioningTasks.value = next;
+    scheduleProvisioningPrune();
+  }, PROVISIONING_STALE_MS);
+}
+
+function handleToolRuntimeProgress(envelope) {
+  const payload = envelope && typeof envelope === "object" && "payload" in envelope ? envelope.payload : envelope;
+  if (!payload || typeof payload !== "object") return;
+  const taskId = typeof payload.taskId === "string" && payload.taskId.trim() ? payload.taskId.trim() : "__default__";
+  const phase = typeof payload.phase === "string" ? payload.phase : "";
+  if (phase === "provisioning") {
+    const rawPercent = typeof payload.percent === "number" && Number.isFinite(payload.percent)
+      ? Math.min(99, Math.max(0, Math.floor(payload.percent)))
+      : null;
+    const prev = provisioningTasks.value[taskId];
+    const nextPercent = rawPercent !== null
+      ? Math.max(prev?.percent ?? 0, rawPercent)
+      : (prev?.percent ?? null);
+    provisioningTasks.value = {
+      ...provisioningTasks.value,
+      [taskId]: {
+        stage: typeof payload.stage === "string" ? payload.stage : "downloading",
+        percent: nextPercent,
+        updatedAt: Date.now()
+      }
+    };
+    scheduleProvisioningPrune();
+    return;
+  }
+  if (
+    phase === "running" ||
+    phase === "finalizing" ||
+    phase === "completed" ||
+    phase === "cancelled" ||
+    phase === "failed"
+  ) {
+    if (Object.prototype.hasOwnProperty.call(provisioningTasks.value, taskId)) {
+      const next = { ...provisioningTasks.value };
+      delete next[taskId];
+      provisioningTasks.value = next;
+      scheduleProvisioningPrune();
+    }
+  }
+}
+
+const activeProvisioning = computed(() => {
+  void locale.value;
+  const entries = Object.values(provisioningTasks.value);
+  if (entries.length === 0) return null;
+  // 取最近更新的准备任务，同时聚合可见百分比
+  let latest = entries[0];
+  let sumPercent = 0;
+  let percentCount = 0;
+  for (const item of entries) {
+    if (item.updatedAt >= latest.updatedAt) latest = item;
+    if (typeof item.percent === "number") {
+      sumPercent += item.percent;
+      percentCount += 1;
+    }
+  }
+  const percent = percentCount > 0 ? Math.min(99, Math.max(0, Math.floor(sumPercent / percentCount))) : null;
+  let label = "";
+  switch (latest.stage) {
+    case "fetching-catalog":
+      label = t("declarative.provisioning.fetchingCatalog");
+      break;
+    case "extracting":
+      label = t("declarative.provisioning.extracting");
+      break;
+    case "verifying":
+      label = t("declarative.provisioning.verifying");
+      break;
+    case "retrying":
+      label = t("declarative.provisioning.retrying");
+      break;
+    default:
+      label = percent !== null
+        ? t("declarative.provisioning.downloadingPercent", { percent })
+        : t("declarative.provisioning.downloading");
+      break;
+  }
+  return { label, percent, stage: latest.stage };
+});
+
 let unlistenFileDrop = null;
+let unlistenToolProgress = null;
 if (typeof window !== "undefined" && window.ztools?.events?.on) {
   const maybeOff = window.ztools.events.on("plugin_files_dropped", handleHostFilesDropped);
   unlistenFileDrop = typeof maybeOff === "function"
     ? maybeOff
     : () => window.ztools?.events?.off?.("plugin_files_dropped", handleHostFilesDropped);
+
+  if (typeof window.ztools.events.subscribe === "function") {
+    Promise.resolve(window.ztools.events.subscribe("tool_runtime_progress")).catch(() => {});
+  }
+  const maybeOffProgress = window.ztools.events.on("tool_runtime_progress", handleToolRuntimeProgress);
+  unlistenToolProgress = typeof maybeOffProgress === "function"
+    ? maybeOffProgress
+    : () => window.ztools?.events?.off?.("tool_runtime_progress", handleToolRuntimeProgress);
 }
 
 onUnmounted(() => {
+  clearProvisioningPruneTimer();
+  provisioningTasks.value = {};
   if (typeof unlistenFileDrop === "function") {
     unlistenFileDrop();
     unlistenFileDrop = null;
+  }
+  if (typeof unlistenToolProgress === "function") {
+    unlistenToolProgress();
+    unlistenToolProgress = null;
   }
   if (activeFileInputOwnerId === fileInputOwnerId) {
     activeFileInputOwnerId = 0;

@@ -377,6 +377,11 @@ export class LauncherController {
 
     this.options.registry.registerMain(window.webContents)
     suppressWindowsSystemMenu(window)
+    window.webContents.on('will-navigate', (event, url) => {
+      if (!url.startsWith('ztools://web/')) event.preventDefault()
+    })
+    window.webContents.setWindowOpenHandler?.(() => ({ action: 'deny' }))
+    window.webContents.on('will-attach-webview', (event) => event.preventDefault())
     window.webContents.on('before-input-event', (event, input) => {
       handleLauncherBeforeInputEvent(event, input, this)
     })

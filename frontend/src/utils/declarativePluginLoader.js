@@ -14,6 +14,7 @@ import * as DeclarativeUI from '@ztools/declarative-ui'
 import { createCacheScope } from '@ztools/declarative-ui/host'
 import { track } from '@edition'
 import { isBundledPlugin, readBundledPluginFile, getBundledPluginIconUrl } from './bundledPlugins.js'
+import { isDevLocalPlugin } from './pluginVisibility.js'
 import { createScopedLocalStorage } from './pluginStorage.js'
 import { createScopedHostBridge, createScopedWindow, getPluginSessionHolder } from '../declarative/pluginSession.js'
 import { createPluginHostApis } from '../declarative/pluginSecureStorage.js'
@@ -597,7 +598,7 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
   }
 
   // 内置官方插件随客户端分发，从 bundled-plugins/ 读取；其余插件从已安装目录 ztools://plugins/ 读取
-  const bundled = !options.readFile && isBundledPlugin(pid)
+  const bundled = !options.readFile && isBundledPlugin(pid) && !isDevLocalPlugin(pid)
   const readFile = options.readFile || (bundled ? readBundledPluginFile : defaultReadPluginFile)
 
   // 1. 读取 plugin.json

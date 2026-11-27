@@ -4,6 +4,7 @@
  */
 
 export * from './i18n.js';
+export * from './security/url-guard.js';
 export * from './types/index.js';
 export * from './router/index.js';
 export * from './mcp/index.js';

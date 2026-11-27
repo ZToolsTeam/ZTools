@@ -23,6 +23,7 @@
 
 #include "file_scanner.hpp"
 #include "flat_trie.hpp"
+#include "index_cache.hpp"
 #include "../shared/json_rpc.hpp"
 
 using namespace ztools::sidecar;
@@ -93,13 +94,14 @@ int main(int argc, char* argv[]) {
   _setmode(_fileno(stdout), _O_BINARY);
 #endif
 
-  std::string pipe_name;
   size_t auto_mock_count = 0;
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
-    if (arg.rfind("--pipe=", 0) == 0) {
-      pipe_name = arg.substr(7);
+    if (arg == "--pipe" || arg.rfind("--pipe=", 0) == 0) {
+      // 安全加固：彻底移除无 DACL 鉴权的 Named Pipe 调试入口，遇该参数直接 Fail-Closed 退出
+      std::cerr << "[ztools-indexer] Named pipe transport (--pipe) is disabled for security reasons. Use stdin/stdout JSON-RPC transport.\n";
+      return 2;
     } else if (arg.rfind("--mock-count=", 0) == 0) {
       auto_mock_count = std::stoull(arg.substr(13));
     }
@@ -112,6 +114,7 @@ int main(int argc, char* argv[]) {
   std::atomic<bool> is_indexing(false);
   std::atomic<bool> all_drives_mode(false);
   std::vector<ConcurrentDirectoryScanner::DriveVolumeInfo> tracked_volumes;
+  std::string active_cache_path;
 
   if (auto_mock_count > 0) {
     std::vector<FileEntry> entries;
@@ -501,7 +504,12 @@ int main(int argc, char* argv[]) {
     ScopedAtomicFlag indexing_guard(is_indexing);
     std::string path_str = req.params.get_string("path", ".");
     std::string scanner_pref = req.params.get_string("scanner", "auto");
+    std::string cache_path = req.params.get_string("cache_path", "");
     const bool force_staged = req.params.get_bool("staged", false);
+    if (!cache_path.empty()) {
+      std::lock_guard<std::mutex> lk(index_mutex);
+      active_cache_path = cache_path;
+    }
 
     auto t0 = std::chrono::high_resolution_clock::now();
     std::vector<FileEntry> entries;
@@ -563,10 +571,25 @@ int main(int argc, char* argv[]) {
     FlatTrieIndex staging(false);
     staging.Build(std::move(entries));
     size_t total_indexed = staging.Size();
+    std::string snapshot_target;
+    std::vector<std::string> drive_roots_snapshot;
+    drive_roots_snapshot.reserve(scanned_volumes.size());
+    for (const auto& vol : scanned_volumes) {
+      drive_roots_snapshot.push_back(vol.root_utf8);
+    }
     {
       std::lock_guard<std::mutex> lk(index_mutex);
       index.SwapData(staging);
       tracked_volumes = std::move(scanned_volumes);
+      snapshot_target = active_cache_path;
+    }
+    if (!snapshot_target.empty() && total_indexed > 0 && !cancel_scan.load(std::memory_order_relaxed)) {
+      std::vector<FileEntry> snapshot_copy;
+      {
+        std::lock_guard<std::mutex> lk(index_mutex);
+        snapshot_copy = index.GetEntries();
+      }
+      IndexSnapshotCache::Save(snapshot_target, snapshot_copy, drive_roots_snapshot);
     }
     auto t1 = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
@@ -584,17 +607,72 @@ int main(int argc, char* argv[]) {
       return JsonRpcResponse::Success(req.id, JsonValue("pong"));
     }
 
+    if (req.method == "load_cache") {
+      auto t0 = std::chrono::high_resolution_clock::now();
+      std::string cache_path = req.params.get_string("cache_path", "");
+      bool loaded = false;
+      size_t total_indexed = 0;
+      if (!cache_path.empty()) {
+        std::vector<FileEntry> cached_entries;
+        std::vector<std::string> cached_roots;
+        if (IndexSnapshotCache::Load(cache_path, cached_entries, cached_roots) && !cached_entries.empty()) {
+          FlatTrieIndex staging(false);
+          staging.Build(std::move(cached_entries));
+          std::vector<ConcurrentDirectoryScanner::DriveVolumeInfo> vols;
+          vols.reserve(cached_roots.size());
+          for (const auto& r : cached_roots) {
+            ConcurrentDirectoryScanner::DriveVolumeInfo info;
+            info.root = Utf8ToWide(r);
+            info.root_utf8 = r;
+            info.drive_type = "cached";
+            vols.push_back(std::move(info));
+          }
+          std::lock_guard<std::mutex> lk(index_mutex);
+          active_cache_path = cache_path;
+          if (index.Size() == 0) {
+            index.SwapData(staging);
+            tracked_volumes = std::move(vols);
+            loaded = true;
+          }
+          total_indexed = index.Size();
+        }
+      }
+      auto t1 = std::chrono::high_resolution_clock::now();
+      double ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() / 1000.0;
+      JsonValue res = JsonValue::Object();
+      res.set("loaded", JsonValue(loaded));
+      res.set("total_indexed", JsonValue(static_cast<int64_t>(total_indexed)));
+      res.set("elapsed_ms", JsonValue(ms));
+      res.set("indexed_drives", build_indexed_drives_json());
+      return JsonRpcResponse::Success(req.id, res);
+    }
+
     if (req.method == "search_files") {
       std::string query = req.params.get_string("query", "");
-      size_t limit = static_cast<size_t>(req.params.get_int("limit", 50));
-      if (limit == 0) limit = 50;
+      SearchOptions opts;
+      int64_t raw_limit = req.params.get_int("limit", 50);
+      opts.limit = (raw_limit > 0) ? static_cast<size_t>(raw_limit) : 50;
+      int64_t raw_offset = req.params.get_int("offset", 0);
+      opts.offset = (raw_offset > 0) ? static_cast<size_t>(raw_offset) : 0;
+
+      if (const JsonValue* ct_val = req.params.find("content_type")) {
+        if (ct_val->is_number() && ct_val->int_val >= 0) {
+          opts.content_type_mask = static_cast<uint16_t>(ct_val->int_val & 0xFFFF);
+        } else if (ct_val->is_string()) {
+          opts.content_type_mask = ParseContentTypeMaskString(ct_val->str_val);
+        }
+      }
+      opts.kind = ParseSearchKind(req.params.get_string("kind", "all"));
+      opts.sort_by = ParseSearchSortBy(req.params.get_string("sort_by", "relevance"));
+      opts.include_hidden = req.params.get_bool("include_hidden", true);
+      opts.path_prefix = req.params.get_string("path_prefix", "");
 
       SearchResponse sresp;
       size_t total_indexed = 0;
       JsonValue drivesArr = JsonValue::Array();
       {
         std::lock_guard<std::mutex> lk(index_mutex);
-        sresp = index.Search(query, limit);
+        sresp = index.Search(query, opts);
         total_indexed = index.Size();
         for (const auto& vol : tracked_volumes) {
           drivesArr.push_back(JsonValue(vol.root_utf8));
@@ -617,6 +695,8 @@ int main(int argc, char* argv[]) {
       res.set("files", filesArr);
       res.set("count", JsonValue(static_cast<int64_t>(sresp.files.size())));
       res.set("total_matches", JsonValue(static_cast<int64_t>(sresp.total_matches)));
+      res.set("offset", JsonValue(static_cast<int64_t>(sresp.offset)));
+      res.set("has_more", JsonValue(sresp.has_more));
       res.set("elapsed_us", JsonValue(static_cast<int64_t>(sresp.elapsed_us)));
       res.set("elapsed_ms", JsonValue(sresp.elapsed_ms));
       res.set("total_indexed", JsonValue(static_cast<int64_t>(total_indexed)));
@@ -638,7 +718,7 @@ int main(int argc, char* argv[]) {
       }
       JsonValue res = JsonValue::Object();
       res.set("total_indexed", JsonValue(static_cast<int64_t>(total_indexed)));
-      res.set("index_type", JsonValue("flat_trie_pinyin_acronym"));
+      res.set("index_type", JsonValue("fzf_v2_bloom_parallel"));
       res.set("indexing", JsonValue(is_indexing.load(std::memory_order_relaxed)));
       res.set("indexed_drives", drivesArr);
       return JsonRpcResponse::Success(req.id, res);
@@ -677,56 +757,7 @@ int main(int argc, char* argv[]) {
     }
   };
 
-#ifdef _WIN32
-  if (!pipe_name.empty()) {
-    // Named Pipe mode
-    HANDLE hPipe = CreateNamedPipeA(
-      pipe_name.c_str(),
-      PIPE_ACCESS_DUPLEX,
-      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-      1,
-      128 * 1024,
-      128 * 1024,
-      0,
-      NULL
-    );
-    if (hPipe != INVALID_HANDLE_VALUE) {
-      ConnectNamedPipe(hPipe, NULL);
-      auto pipe_write = [&](const std::string& out) {
-        std::lock_guard<std::mutex> lk(write_mutex);
-        DWORD written = 0;
-        WriteFile(hPipe, out.data(), static_cast<DWORD>(out.size()), &written, NULL);
-      };
-      std::string buffer;
-      char readBuf[2048];
-      DWORD bytesRead = 0;
-      bool running = true;
-      while (running && ReadFile(hPipe, readBuf, sizeof(readBuf), &bytesRead, NULL) && bytesRead > 0) {
-        buffer.append(readBuf, bytesRead);
-        size_t newlinePos = std::string::npos;
-        while ((newlinePos = buffer.find('\n')) != std::string::npos) {
-          std::string line = buffer.substr(0, newlinePos);
-          buffer.erase(0, newlinePos + 1);
-          if (line.empty() || line == "\r") continue;
-          if (!line.empty() && line.back() == '\r') line.pop_back();
-
-          bool should_shutdown = false;
-          handle_incoming_line(line, pipe_write, should_shutdown);
-          if (should_shutdown) {
-            running = false;
-            break;
-          }
-        }
-      }
-      stop_bg_worker();
-      DisconnectNamedPipe(hPipe);
-      CloseHandle(hPipe);
-      return 0;
-    }
-  }
-#endif
-
-  // Stdin/Stdout mode
+  // 仅保留标准 Stdin/Stdout 传输模式（由父进程通过匿名管道独占通信）
   auto stdout_write = [&](const std::string& out) {
     std::lock_guard<std::mutex> lk(write_mutex);
     std::cout << out;

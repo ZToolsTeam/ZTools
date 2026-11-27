@@ -185,6 +185,8 @@ export interface MainWindowOptions {
   icon: Electron.NativeImage
   webRoot: string
   registry: WindowRegistry
+  /** 可选窗口标题（开发隔离态可传 ZTools [DEV] 便于与安装版区分） */
+  title?: string
   showOnReady?: boolean
   darkMode?: boolean
   accent?: AccentTheme
@@ -462,6 +464,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
 
   const window = new BrowserWindow({
     icon: options.icon,
+    ...(options.title ? { title: options.title } : {}),
     width,
     height,
     minWidth,

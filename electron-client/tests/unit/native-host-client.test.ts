@@ -16,6 +16,7 @@ import { getLocaleSetting, setLocale, ZTOOLS_LOCALE_ENV_KEY } from '../../src/ma
 import type { NativeDllInvocationContext } from '../../src/main/native-host/dll-client-port.js'
 import {
   NativeHostClient,
+  ZTOOLS_DATA_ROOT_ENV_KEY,
   type NativeInputEvent
 } from '../../src/main/native-host/native-host-client.js'
 import {
@@ -313,16 +314,23 @@ test('lifecycle abort clears a scheduled automatic restart', async () => {
   }
 })
 
-test('trusted resource roots are passed only with an explicit manifest digest', async () => {
+test('resourcesRoot 可单独透传且测试信任公钥选项按规范注入并清理旧环境变量', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-f03-host-resources-'))
   const executable = path.join(root, 'ZToolsNativeHost32.exe')
   await fs.writeFile(executable, 'test executable placeholder')
+  const prevOldSha = process.env.ZTOOLS_NATIVE_MANIFEST_SHA256
+  const prevOldRoot = process.env.ZTOOLS_NATIVE_MANIFEST_ROOT
+  const prevOldResSha = process.env.ZTOOLS_NATIVE_RESOURCES_MANIFEST_SHA256
+  process.env.ZTOOLS_NATIVE_MANIFEST_SHA256 = 'deadbeef'
+  process.env.ZTOOLS_NATIVE_MANIFEST_ROOT = 'C:\\legacy'
+  process.env.ZTOOLS_NATIVE_RESOURCES_MANIFEST_SHA256 = 'cafebabe'
   let launchEnvironment: NodeJS.ProcessEnv | undefined
   const client = new NativeHostClient(executable, {
     pluginRoot: root,
-    trustedManifestSha256: 'A'.repeat(64),
     resourcesRoot: root,
-    trustedResourcesManifestSha256: 'B'.repeat(64),
+    testTrustPublicKeyHex: 'A'.repeat(128),
+    testPrivilegedTrustPublicKeyHex: 'B'.repeat(128),
+    testDisableLegacyTrust: true,
     spawnProcess: (_path, _args, options) => {
       launchEnvironment = options.env
       return createFakeHostProcess(options, true).child
@@ -331,11 +339,27 @@ test('trusted resource roots are passed only with an explicit manifest digest', 
   try {
     await client.start(1000)
     assert.equal(launchEnvironment?.ZTOOLS_NATIVE_PLUGIN_ROOT, path.resolve(root))
-    assert.equal(launchEnvironment?.ZTOOLS_NATIVE_MANIFEST_SHA256, 'a'.repeat(64))
     assert.equal(launchEnvironment?.ZTOOLS_NATIVE_RESOURCES_ROOT, path.resolve(root))
-    assert.equal(launchEnvironment?.ZTOOLS_NATIVE_RESOURCES_MANIFEST_SHA256, 'b'.repeat(64))
+    assert.equal(launchEnvironment?.ZTOOLS_NATIVE_MANIFEST_SHA256, undefined)
+    assert.equal(launchEnvironment?.ZTOOLS_NATIVE_MANIFEST_ROOT, undefined)
+    assert.equal(launchEnvironment?.ZTOOLS_NATIVE_RESOURCES_MANIFEST_SHA256, undefined)
+    assert.equal(launchEnvironment?.ZTOOLS_NATIVE_TEST_PUBKEY_HEX, 'a'.repeat(128))
+    assert.equal(launchEnvironment?.ZTOOLS_NATIVE_TEST_PRIV_PUBKEY_HEX, 'b'.repeat(128))
+    assert.equal(launchEnvironment?.ZTOOLS_NATIVE_TEST_DISABLE_LEGACY, '1')
     await client.stop(1000)
+
+    const invalidClient = new NativeHostClient(executable, {
+      pluginRoot: root,
+      testTrustPublicKeyHex: 'not-valid-hex'
+    })
+    await assert.rejects(invalidClient.start(1000), { code: errorCodes.invalidRequest })
   } finally {
+    if (prevOldSha === undefined) delete process.env.ZTOOLS_NATIVE_MANIFEST_SHA256
+    else process.env.ZTOOLS_NATIVE_MANIFEST_SHA256 = prevOldSha
+    if (prevOldRoot === undefined) delete process.env.ZTOOLS_NATIVE_MANIFEST_ROOT
+    else process.env.ZTOOLS_NATIVE_MANIFEST_ROOT = prevOldRoot
+    if (prevOldResSha === undefined) delete process.env.ZTOOLS_NATIVE_RESOURCES_MANIFEST_SHA256
+    else process.env.ZTOOLS_NATIVE_RESOURCES_MANIFEST_SHA256 = prevOldResSha
     if (client.state !== 'closed') await client.stop(1000)
     await fs.rm(root, { recursive: true, force: true })
   }
@@ -486,12 +510,17 @@ for (const mode of ['async', 'callback'] as const) {
       const begin = () => mode === 'async'
         ? f.client.beginDllAsyncTask('plugin.test', 'TestPlugin', 'progressTask', {})
         : f.client.beginDllCallbackTask('plugin.test', 'TestPlugin', 'callbackTask', {})
-      const refused = begin(), refusalFrame = f.host.taskRequests[0]!
-      f.host.send({ ...refusalFrame, type: NativeHostFrameType.Error, method: 'error', pluginId: '', dllId: '',
-        payload: Buffer.from(JSON.stringify({ code: 'FUNCTION_NOT_ALLOWED', message: 'not declared' })) })
-      const rejected = await refused.outcome
-      assert.equal(rejected.kind, 'not-started')
-      if (rejected.kind === 'not-started') assert.equal((rejected.error as ZToolsError).code, errorCodes.permissionDenied)
+      for (const refusalCode of ['FUNCTION_NOT_ALLOWED', 'MANIFEST_REVOKED', 'MANIFEST_ROLLBACK']) {
+        const refused = begin(), refusalFrame = f.host.taskRequests.at(-1)!
+        f.host.send({ ...refusalFrame, type: NativeHostFrameType.Error, method: 'error', pluginId: '', dllId: '',
+          payload: Buffer.from(JSON.stringify({ code: refusalCode, message: `rejected:${refusalCode}` })) })
+        const rejected = await refused.outcome
+        assert.equal(rejected.kind, 'not-started')
+        if (rejected.kind === 'not-started') {
+          assert.equal((rejected.error as ZToolsError).code, errorCodes.permissionDenied)
+          assert.equal((rejected.error as ZToolsError).details?.hostCode, refusalCode)
+        }
+      }
       for (const code of ['DLL_HOST_INTERNAL', 'DLL_TASK_DUPLICATE', 'UNRECOGNIZED_ERROR']) {
         const attempt = begin(), frame = f.host.taskRequests.at(-1)!
         let settled = false
@@ -714,6 +743,67 @@ test('NativeHostClient forwards current resolved ZTOOLS_LOCALE in spawned child 
     assert.deepEqual(capturedLocales, ['en-US', 'zh-CN'])
   } finally {
     setLocale(previousLocale, 'zh-CN')
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('NativeHostClient forwards validated ZTOOLS_DATA_ROOT and scrubs inherited parent ZTOOLS_DATA_ROOT', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-native-host-dataroot-'))
+  const executable = path.join(root, 'ZToolsNativeHost32.exe')
+  const configuredDataRoot = path.join(root, 'data-dir')
+  await fs.writeFile(executable, 'placeholder')
+  const previousDataRoot = process.env[ZTOOLS_DATA_ROOT_ENV_KEY]
+  process.env[ZTOOLS_DATA_ROOT_ENV_KEY] = path.join(root, 'poisoned-parent-data')
+
+  try {
+    // 1. 未配置 dataRoot 时必须从子进程环境中清洗父进程残留的 ZTOOLS_DATA_ROOT
+    let scrubbedEnv: NodeJS.ProcessEnv | undefined
+    const scrubbedClient = new NativeHostClient(executable, {
+      spawnProcess: (_cmd, _args, options) => {
+        scrubbedEnv = options.env
+        return createFakeHostProcess(options, true).child
+      }
+    })
+    try {
+      await scrubbedClient.start(1000)
+      assert.equal(scrubbedEnv?.[ZTOOLS_DATA_ROOT_ENV_KEY], undefined)
+    } finally {
+      if (scrubbedClient.state !== 'closed') await scrubbedClient.stop(1000)
+    }
+
+    // 2. 配置合法绝对 dataRoot 时透传规范化后的 ZTOOLS_DATA_ROOT
+    let forwardedEnv: NodeJS.ProcessEnv | undefined
+    const configuredClient = new NativeHostClient(executable, {
+      dataRoot: configuredDataRoot,
+      spawnProcess: (_cmd, _args, options) => {
+        forwardedEnv = options.env
+        return createFakeHostProcess(options, true).child
+      }
+    })
+    try {
+      await configuredClient.start(1000)
+      assert.equal(forwardedEnv?.[ZTOOLS_DATA_ROOT_ENV_KEY], path.resolve(configuredDataRoot))
+    } finally {
+      if (configuredClient.state !== 'closed') await configuredClient.stop(1000)
+    }
+
+    // 3. 非法相对路径或含 NUL 的 dataRoot 必须 Fail-Fast 拒绝
+    for (const badDataRoot of ['relative/data-root', `${configuredDataRoot}\0bad`]) {
+      const invalidClient = new NativeHostClient(executable, {
+        dataRoot: badDataRoot,
+        spawnProcess: (_cmd, _args, options) => createFakeHostProcess(options, true).child
+      })
+      await assert.rejects(
+        invalidClient.start(1000),
+        (error) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest
+      )
+    }
+  } finally {
+    if (previousDataRoot === undefined) {
+      delete process.env[ZTOOLS_DATA_ROOT_ENV_KEY]
+    } else {
+      process.env[ZTOOLS_DATA_ROOT_ENV_KEY] = previousDataRoot
+    }
     await fs.rm(root, { recursive: true, force: true })
   }
 })

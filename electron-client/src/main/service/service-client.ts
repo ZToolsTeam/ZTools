@@ -52,6 +52,8 @@ const RECOVERABLE_SERVICE_REJECTIONS = new Map<string, {
   i18nKey: string
 }>([
   ['MANIFEST_UNTRUSTED', { code: errorCodes.notSupported, i18nKey: 'serviceClient.rejection.MANIFEST_UNTRUSTED' }],
+  ['MANIFEST_REVOKED', { code: errorCodes.notSupported, i18nKey: 'serviceClient.rejection.MANIFEST_REVOKED' }],
+  ['MANIFEST_ROLLBACK', { code: errorCodes.notSupported, i18nKey: 'serviceClient.rejection.MANIFEST_ROLLBACK' }],
   ['MANIFEST_INTEGRITY', { code: errorCodes.notSupported, i18nKey: 'serviceClient.rejection.MANIFEST_INTEGRITY' }],
   ['MANIFEST_INVALID', { code: errorCodes.notSupported, i18nKey: 'serviceClient.rejection.MANIFEST_INVALID' }],
   ['MANIFEST_UNAVAILABLE', { code: errorCodes.notSupported, i18nKey: 'serviceClient.rejection.MANIFEST_UNAVAILABLE' }],

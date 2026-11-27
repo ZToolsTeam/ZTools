@@ -3,10 +3,11 @@
     class="inline-flex items-center justify-center flex-shrink-0"
     :style="customStyle"
   >
-    <!-- DataURL 或外链图片 -->
+    <!-- DataURL 或外链图片（禁用 Referer 以兼容视频平台封面图防盗链） -->
     <img
       v-if="isImageSource"
       :src="imageUrl"
+      referrerpolicy="no-referrer"
       class="w-full h-full object-contain"
       alt=""
     />

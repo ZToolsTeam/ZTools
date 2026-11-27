@@ -5,6 +5,11 @@ import type { CallerIdentity } from '../../contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import { defaultProtectedTrashRoots } from './file-system-service.js'
 import { NativeMediaParameterPolicy } from './native-media-parameter-policy.js'
+import {
+  authorizeVideoDownloaderCall,
+  defaultFsLstat,
+  VIDEO_DOWNLOADER_DLL_POLICY
+} from './native-video-downloader-policy.js'
 
 const MAX_INPUT_BYTES = 512 * 1024 * 1024
 const MAX_INPUT_ITEMS = 100
@@ -36,6 +41,10 @@ export interface NativeMediaStat {
   isDirectory(): boolean
 }
 
+export interface NativeMediaLstat {
+  isSymbolicLink(): boolean
+}
+
 export interface NativeMediaMethodPolicy {
   inputFiles?: boolean
   requiredInputFields?: readonly string[]
@@ -53,6 +62,7 @@ export interface NativeMediaDllPolicy {
 
 export interface NativeMediaPolicyAdapters {
   stat?: (target: string) => Promise<NativeMediaStat>
+  lstat?: (target: string) => Promise<NativeMediaLstat>
 }
 
 const AUDIO_OUTPUT_METHODS = [
@@ -155,7 +165,8 @@ export const DEFAULT_NATIVE_MEDIA_DLL_POLICIES: readonly NativeMediaDllPolicy[] 
         }
       })
     }
-  }
+  },
+  VIDEO_DOWNLOADER_DLL_POLICY
 ]
 
 function invalidMediaCall(message: string): never {
@@ -206,6 +217,7 @@ export function isBuiltInNativeMediaDll(dllId: string): boolean {
 export class NativeMediaPathPolicy {
   readonly #methods = new Map<string, Readonly<Record<string, NativeMediaMethodPolicy>>>()
   readonly #stat: (target: string) => Promise<NativeMediaStat>
+  readonly #lstat: ((target: string) => Promise<NativeMediaLstat>) | undefined
   readonly #parameterPolicy = new NativeMediaParameterPolicy()
 
   constructor(
@@ -214,6 +226,8 @@ export class NativeMediaPathPolicy {
     adapters: NativeMediaPolicyAdapters = {}
   ) {
     this.#stat = adapters.stat ?? (async (target) => await fs.stat(target))
+    // 生产默认强制执行真实 lstat 符号链接检查；测试仅注入 mock stat 时仅在显式提供 adapters.lstat 时检查
+    this.#lstat = adapters.lstat ?? (adapters.stat ? undefined : defaultFsLstat)
     for (const policy of [...DEFAULT_NATIVE_MEDIA_DLL_POLICIES, ...additionalPolicies]) {
       const key = pathKeyForDll(policy.dllId)
       if (!key || this.#methods.has(key)) {
@@ -235,6 +249,13 @@ export class NativeMediaPathPolicy {
   ): Promise<Record<string, unknown>> {
     if (pathKeyForDll(dllId) === 'shredderplugin' && functionName === 'secureWipeFile') {
       return await this.#authorizeShredderWipe(params, caller)
+    }
+    if (pathKeyForDll(dllId) === 'videodownloaderplugin') {
+      return await authorizeVideoDownloaderCall(functionName, params, caller, {
+        paths: this.paths,
+        stat: this.#stat,
+        ...(this.#lstat ? { lstat: this.#lstat } : {})
+      })
     }
     const methods = this.#methods.get(pathKeyForDll(dllId))
     if (!methods) return params

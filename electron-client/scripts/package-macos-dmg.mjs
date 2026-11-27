@@ -19,6 +19,20 @@ const TOOL_OPTIONS = Object.freeze({ encoding: 'utf8', shell: false, timeout: 60
 // 苹果公证排队偶尔要二三十分钟
 const NOTARY_OPTIONS = Object.freeze({ ...TOOL_OPTIONS, timeout: 3_600_000 })
 const NOTARY_PROFILE = /^[A-Za-z0-9_.-]{1,128}$/
+const STAPLER_MAX_ATTEMPTS = 6
+const STAPLER_RETRY_DELAY_MS = 10_000
+const RETRYABLE_STAPLER_PATTERN = /cloudkit|error 65|record not found|could not find base64 encoded ticket|network|timed?\s*out/i
+
+function defaultSleep(ms) {
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+export function isRetryableStaplerError(error) {
+  if (!error || typeof error !== 'object') return false
+  if (error.status === 65) return true
+  const combined = `${error.stderr ?? ''}\n${error.stdout ?? ''}\n${error.message ?? ''}`
+  return RETRYABLE_STAPLER_PATTERN.test(combined)
+}
 
 export const DMG_USAGE = 'npm run package:dmg:darwin -- --app <绝对路径/ZTools.app> --output <绝对路径/ZTools-<版本>-darwin-universal.dmg> [--sign-identity "Developer ID Application: <名称> (<Team ID>)" [--notary-profile <notarytool 凭据名>]] [--allow-unsigned]'
 
@@ -86,7 +100,7 @@ function assertAppBundle(fsApi, appPath) {
  * 提交 DMG 公证并把票据 staple 进 DMG，最后用 Gatekeeper 规则验一遍。
  * 未通过时取回公证日志（只含问题文件与原因，不含凭据）方便排查。
  */
-function notarizeDmg(exec, output, notaryProfile, log) {
+function notarizeDmg(exec, output, notaryProfile, log, { maxAttempts = STAPLER_MAX_ATTEMPTS, retryDelayMs = STAPLER_RETRY_DELAY_MS, sleep = defaultSleep } = {}) {
   log(`正在提交 DMG 公证（通常几分钟）：${path.basename(output)}`)
   let raw
   try {
@@ -114,7 +128,16 @@ function notarizeDmg(exec, output, notaryProfile, log) {
     }
     throw new Error(`NOTARY_NOT_ACCEPTED：DMG 公证未通过（状态 ${submission?.status ?? '未知'}${id ? `，提交 ID ${id}` : ''}）${detail ? `\n${detail}` : ''}`)
   }
-  exec('/usr/bin/xcrun', ['stapler', 'staple', output], TOOL_OPTIONS)
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      exec('/usr/bin/xcrun', ['stapler', 'staple', output], TOOL_OPTIONS)
+      break
+    } catch (error) {
+      if (attempt >= maxAttempts || !isRetryableStaplerError(error)) throw error
+      log(`⏳ stapler 暂未拉到公证票据（第 ${attempt}/${maxAttempts} 次），${Math.round(retryDelayMs / 1000)} 秒后重试...`)
+      sleep(retryDelayMs)
+    }
+  }
   exec('/usr/bin/xcrun', ['stapler', 'validate', output], TOOL_OPTIONS)
   exec('/usr/sbin/spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', '--verbose', output], TOOL_OPTIONS)
   log(`✔ DMG 公证通过并已 staple（提交 ID ${id}）`)
@@ -125,7 +148,10 @@ export function createMacDmg(options, {
   fsApi = fs,
   exec = execFileSync,
   tmpdir = os.tmpdir,
-  log = console.log
+  log = console.log,
+  sleep = defaultSleep,
+  stapleMaxAttempts = STAPLER_MAX_ATTEMPTS,
+  stapleRetryDelayMs = STAPLER_RETRY_DELAY_MS
 } = {}) {
   if (platform !== 'darwin') throw new Error(`DMG 只能在 macOS 上生成，当前平台: ${platform}`)
   const { app, output, signIdentity, notaryProfile, allowUnsigned } = options
@@ -156,7 +182,7 @@ export function createMacDmg(options, {
       exec('/usr/bin/codesign', ['--sign', signIdentity, '--timestamp', output], TOOL_OPTIONS)
       exec('/usr/bin/codesign', ['--verify', '--strict', output], TOOL_OPTIONS)
     }
-    if (notaryProfile) notarizeDmg(exec, output, notaryProfile, log)
+    if (notaryProfile) notarizeDmg(exec, output, notaryProfile, log, { maxAttempts: stapleMaxAttempts, retryDelayMs: stapleRetryDelayMs, sleep })
   } catch (error) {
     // 失败时不留下半成品，避免被误当作可发布产物
     fsApi.rmSync(output, { force: true })

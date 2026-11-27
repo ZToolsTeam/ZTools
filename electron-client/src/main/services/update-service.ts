@@ -6,6 +6,7 @@ import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import type { UpdateCheckParams, UpdatePackageParams } from '../../contracts/method-params.js'
 import type { RuntimePaths } from '../runtime/runtime-paths.js'
 import { resolveNormalizedRuntimePlatformAndArch } from '../platform/runtime-architecture.js'
+import { verifyWindowsInstallerSignature } from '../platform/windows/authenticode.js'
 import type { WebResourceService } from './web-resource-service.js'
 import { getResolvedLocale, t } from '../i18n/index.js'
 
@@ -427,6 +428,31 @@ export interface MacUpdateInstaller {
   requestRestart(): void
 }
 
+export type WindowsInstallerVerifier = (installerPath: string, signal: AbortSignal) => Promise<unknown>
+
+export interface UpdateServiceOptions {
+  platform?: NodeJS.Platform
+  arch?: string
+  /** 仅在未显式传 arch 时用于解析原生硬件架构（测试可控） */
+  processArch?: string
+  runningUnderARM64Translation?: boolean | null
+  processorArchitecture?: string | undefined
+  processorArchitew6432?: string | undefined
+  runtimePaths: RuntimePaths
+  appVersion: string
+  webVersion: string
+  /** 更新来源；不传或为 null 表示没有更新来源 */
+  updateSource?: UpdateSource | null
+  fetchImpl?: typeof fetch
+  webResources?: WebResourceService
+  runUpdaterImpl?: typeof runUpdaterAndWait
+  macUpdater?: MacUpdateInstaller
+  /** 是否为打包态生产环境（默认 true，确保 Windows 更新包严格执行 Authenticode 验签 Fail-Closed） */
+  isPackaged?: boolean
+  /** 可选注入 Windows 更新包 Authenticode 验签实现，便于单测 */
+  verifyWindowsInstallerImpl?: WindowsInstallerVerifier
+}
+
 export class UpdateService {
   readonly #platform: NodeJS.Platform
   readonly #arch: string
@@ -438,6 +464,8 @@ export class UpdateService {
   readonly #webResources: WebResourceService | undefined
   readonly #macUpdater: MacUpdateInstaller | undefined
   readonly #runUpdater: typeof runUpdaterAndWait
+  readonly #isPackaged: boolean
+  readonly #verifyWindowsInstaller: WindowsInstallerVerifier
   readonly #operations = new Map<string, DownloadOperation>()
   readonly #downloadPromises = new Map<string, Promise<{
     success: true
@@ -454,24 +482,7 @@ export class UpdateService {
   #appHandoffStarted = false
   readonly #stopping = new AbortController()
 
-  constructor(options: {
-    platform?: NodeJS.Platform
-    arch?: string
-    /** 仅在未显式传 arch 时用于解析原生硬件架构（测试可控） */
-    processArch?: string
-    runningUnderARM64Translation?: boolean | null
-    processorArchitecture?: string | undefined
-    processorArchitew6432?: string | undefined
-    runtimePaths: RuntimePaths
-    appVersion: string
-    webVersion: string
-    /** 更新来源；不传或为 null 表示没有更新来源 */
-    updateSource?: UpdateSource | null
-    fetchImpl?: typeof fetch
-    webResources?: WebResourceService
-    runUpdaterImpl?: typeof runUpdaterAndWait
-    macUpdater?: MacUpdateInstaller
-  }) {
+  constructor(options: UpdateServiceOptions) {
     this.#platform = options.platform ?? process.platform
     this.#arch = options.arch ?? resolveNormalizedRuntimePlatformAndArch({
       platform: this.#platform,
@@ -493,6 +504,13 @@ export class UpdateService {
     this.#webResources = options.webResources
     this.#runUpdater = options.runUpdaterImpl ?? runUpdaterAndWait
     this.#macUpdater = options.macUpdater
+    this.#isPackaged = options.isPackaged ?? true
+    this.#verifyWindowsInstaller = options.verifyWindowsInstallerImpl ?? ((installerPath, signal) =>
+      verifyWindowsInstallerSignature(installerPath, {
+        isPackaged: this.#isPackaged,
+        signal
+      })
+    )
   }
 
   #assertUpdateSupported(params: UpdatePackageParams): void {
@@ -880,6 +898,11 @@ export class UpdateService {
         await persistDownloadMetadata(download, 'started').catch(error => console.warn('记录 macOS 更新交接状态失败', error))
         this.#macUpdater.requestRestart()
         return { success: true, operationId: download.operationId, state: 'started', restartRequired: true }
+      }
+      // Windows 路径在拷贝/启动 ZToolsUpdater.exe 或直装安装包之前强制执行 Authenticode 验签（Fail-Closed）
+      if (this.#platform === 'win32') {
+        await this.#verifyWindowsInstaller(download.path, signal)
+        signal.throwIfAborted()
       }
       const canFallbackToDirectInstaller = path.extname(download.path).toLowerCase() === '.exe'
       const updaterPath = path.join(maintenanceRoot, 'ZToolsUpdater.exe')

@@ -28,6 +28,7 @@ import {
   type RuntimeLogLevel
 } from './services/runtime-logger.js'
 import { createCoreServices, readWebVersion, type CoreServices } from './services/core-services.js'
+import { electronCredentialProtection } from './platform/electron-credential-protection.js'
 import { MacAppUpdater } from './platform/macos/app-update.js'
 import { WebResourceService } from './services/web-resource-service.js'
 import {
@@ -69,8 +70,7 @@ import { createPlatformWindowLifecyclePolicy } from './platform/window-lifecycle
 import { ApplicationLifecycle, runCleanupActions } from './application-lifecycle.js'
 import { createAndAttachElectronReferenceRuntime } from './platform/electron-reference-runtime.js'
 import { closeDesktopNotifications, showDesktopNotification } from './platform/desktop-notification.js'
-
-if (process.platform === 'darwin') configureMacosUserDataPath(app)
+import { parseDevRuntimeOptions } from './runtime/dev-options.js'
 import { RuntimeLock } from './runtime/runtime-lock.js'
 import { resolveRuntimePaths } from './runtime/runtime-paths.js'
 import { PluginStateService } from './services/plugin-state-service.js'
@@ -83,18 +83,20 @@ import {
 import { setLocale, t } from './i18n/index.js'
 import { parseCommandLineLocale, resolveStartupLocale } from './i18n/install-locale.js'
 
-function commandLineValue(prefix: string): string | undefined {
-  const argument = process.argv.find((item) => item.startsWith(prefix))
-  if (!argument) return undefined
-  const value = argument.slice(prefix.length).trim()
-  return value.length > 0 ? value : undefined
+const devRuntimeOptions = parseDevRuntimeOptions(process.argv, { isPackaged: app.isPackaged })
+if (devRuntimeOptions.isolatedUserDataRoot) {
+  // 在 requestSingleInstanceLock() 与 macOS 默认路径配置之前切分 userData，
+  // 确保独立 --data-root 测试/开发实例与本机安装版完全隔离单例锁与浏览器会话。
+  fs.mkdirSync(devRuntimeOptions.isolatedUserDataRoot, { recursive: true, mode: 0o700 })
+  app.setPath('userData', devRuntimeOptions.isolatedUserDataRoot)
+} else if (process.platform === 'darwin') {
+  configureMacosUserDataPath(app)
 }
 
 const processStartedAt = Date.now()
 const initialLaunchIntent = parseLaunchIntent(process.argv)
 const healthCheckRequested = process.argv.some((argument) => argument === '--health-check')
-const requestedDataRoot = commandLineValue('--data-root=')
-const normalizedRequestedDataRoot = requestedDataRoot ? path.resolve(requestedDataRoot) : undefined
+const normalizedRequestedDataRoot = devRuntimeOptions.requestedDataRoot
 const runtimePaths = resolveRuntimePaths({
   mode: app.isPackaged ? 'production' : 'development',
   appDataRoot: app.getPath('appData'),
@@ -620,6 +622,7 @@ function createTrayController(state: {
   if (!mainApplicationIcon) throw new Error('Application icon is not ready')
   return new TrayController({
     icon: loadTrayIcon(mainApplicationIcon),
+    ...(devRuntimeOptions.isDevIsolated ? { toolTip: 'ZTools [DEV]' } : {}),
     ...state,
     showMainWindow,
     togglePrimaryWindow: toggleMainWindow,
@@ -682,6 +685,7 @@ function createMainWindowInstance(): BrowserWindow {
   if (!mainApplicationIcon) throw new Error('Application icon is not ready')
   const window = createMainWindow({
     icon: mainApplicationIcon, webRoot: activeWebRoot(), registry,
+    ...(devRuntimeOptions.isDevIsolated ? { title: 'ZTools [DEV]' } : {}),
     // 冷启动由就绪后的唤醒目标决定显示；重开窗口才使用自动显示。
     showOnReady: launchIntentReady, darkMode: nativeTheme.shouldUseDarkColors, accent: currentAccent,
     ...(initialMainWindowSize ? { initialSize: initialMainWindowSize } : {}),
@@ -1142,7 +1146,9 @@ if (!app.requestSingleInstanceLock()) {
       {
         runningUnderARM64Translation: typeof app.runningUnderARM64Translation === 'boolean'
           ? app.runningUnderARM64Translation
-          : null
+          : null,
+        credentialProtection: electronCredentialProtection,
+        isPackaged: app.isPackaged
       }
     ))
     services = createdServices
@@ -1175,7 +1181,19 @@ if (!app.requestSingleInstanceLock()) {
       }
       if (process.platform === 'win32' || process.platform === 'darwin') {
         const targetScope = process.platform === 'win32' ? '*' : os.homedir()
-        const indexRes = await createdServices.sidecars.indexPath(targetScope, 'auto').catch((err) => {
+        const cacheDir = path.join(createdServices.dataRoot, 'cache')
+        const cachePath = path.join(cacheDir, 'file-index.zidx')
+        try {
+          fs.mkdirSync(cacheDir, { recursive: true })
+          const cached = await createdServices.sidecars.loadIndexCache(cachePath)
+          if (cached.loaded && cached.total_indexed > 0) {
+            console.info(`[SidecarManager] Warmed ${cached.total_indexed} cached file entries in ${cached.elapsed_ms.toFixed(2)}ms from disk snapshot`)
+          }
+        } catch (err) {
+          console.warn('[SidecarManager] Disk cache preload skipped:', err)
+        }
+        if (signal.aborted || !applicationLifecycle.canContinueStartup()) return
+        const indexRes = await createdServices.sidecars.indexPath(targetScope, 'auto', cachePath).catch((err) => {
           console.warn('[SidecarManager] Initial index warmup failed:', err)
           return null
         })
@@ -1246,6 +1264,10 @@ if (!app.requestSingleInstanceLock()) {
       : String(initialWakeRaw ?? '').trim()
     router = await runLifecyclePhase('ipc-router.create', () => IpcRouter.create(registry, createdServices, {
       pluginResources: { webRoot: () => activeWebRoot(), pluginRoot },
+      ...(devRuntimeOptions.devAllowDrafts ? { devAllowDrafts: true } : {}),
+      ...(devRuntimeOptions.devCommonLibsPublicKeysPath
+        ? { devCommonLibsPublicKeysPath: devRuntimeOptions.devCommonLibsPublicKeysPath }
+        : {}),
       pluginState, onDarkModeChanged: applyDarkMode, onAccentChanged: applyAccentTheme,
       onLocaleChanged: () => {
         syncTrayState()

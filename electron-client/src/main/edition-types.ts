@@ -1,6 +1,7 @@
 import type { CallerIdentity } from '../contracts/capabilities.js'
 import type { AnalyticsReportParams, UserSetTokenParams } from '../contracts/method-params.js'
 import type { LaunchIntent } from './runtime/launch-intent.js'
+import type { CredentialProtection } from './services/credential-protection.js'
 import type { JsonFileStore } from './services/json-file-store.js'
 import type { LibraryMetadataSource } from './services/library-integrity-pins.js'
 import type { UpdateSource } from './services/update-service.js'
@@ -53,6 +54,8 @@ export interface MainEditionContext {
   readonly dataRoot: string
   /** 已按 `MainEdition.storeFiles` 放行对应文件的 JSON 存储 */
   readonly store: JsonFileStore
+  /** 操作系统级安全凭据加密接口（主进程 safeStorage 封装） */
+  readonly credentialProtection?: CredentialProtection
   /** 当前进程是否运行在 ARM64 转译环境（来自 Electron app.runningUnderARM64Translation） */
   readonly runningUnderARM64Translation?: boolean | null
 }

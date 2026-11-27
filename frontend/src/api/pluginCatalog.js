@@ -1,3 +1,4 @@
+import { nativeCatalogUrl } from '@edition'
 import { getPluginCategories } from '../utils/pluginCategories'
 import { getLocalizedPluginField, mergePluginI18n } from '../utils/pluginI18n'
 import { resolveErrorMessage } from '../utils/errorMessage'
@@ -5,12 +6,13 @@ import { t } from '@/i18n'
 /**
  * 插件目录（CDN 静态索引）公共能力
  *
- * 插件市场以 CDN 上的 plugins-v2/catalog.json 为准：列表、详情、下载信息与更新检查都从这里算出。
+ * 插件市场以 CDN 上的 plugins-v2/catalog.json 为准：列表、详情、下载信息与更新检查都从这里算出；
+ * 当 @edition 提供 nativeCatalogUrl 时，会并发拉取并合并官方原生插件附加目录。
  * 官方版与开源版共用这些校验，旧版插件目录不能作为下载或更新来源。
  */
 
 import { V2_CATALOG_CDN_URL } from '../utils/declarativePluginLoader'
-import { getPluginPlatforms } from '../utils/platform'
+import { getPluginPlatforms, isMacOS } from '../utils/platform'
 import { compareNumericVersions } from '../utils/version'
 import {
   getBundledPluginEntry,
@@ -61,32 +63,120 @@ export async function loadV2StaticCatalogList({ forceRefresh = false } = {}) {
   try { return await _v2CatalogPending } finally { _v2CatalogPending = null }
 }
 
+/**
+ * 从单个静态目录 URL 拉取并解析插件条目数组
+ * @param {string} url - 静态目录 JSON 地址
+ * @param {{ allowNotFound?: boolean, signal?: AbortSignal }} [options]
+ * @returns {Promise<Array<object>>}
+ */
+async function fetchSingleCatalog(url, { allowNotFound = false, signal: externalSignal } = {}) {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+  const onExternalAbort = () => controller?.abort()
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller?.abort()
+    } else {
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true })
+    }
+  }
+  const timer = controller ? setTimeout(() => controller.abort(), V2_CATALOG_FETCH_TIMEOUT_MS) : null
+  try {
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: controller ? controller.signal : undefined
+    })
+    if (allowNotFound && res.status === 404) {
+      return []
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const raw = await res.json()
+    const list = Array.isArray(raw)
+      ? raw
+      : Array.isArray(raw?.plugins)
+        ? raw.plugins
+        : Array.isArray(raw?.list)
+          ? raw.list
+          : null
+    if (!list) throw new Error(t('pluginCatalog.invalidFormat'))
+    return list
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort)
+    controller?.abort()
+  }
+}
+
+/**
+ * 拉取附加原生插件目录：404 视为暂无原生插件返回空数组；其余网络或解析异常降级为空数组并告警，不阻断主市场
+ * @param {string} url - 原生插件附加目录地址
+ * @param {AbortSignal} [signal] - 主目录失败时的联级取消信号
+ * @returns {Promise<Array<object>>}
+ */
+async function fetchNativeCatalogList(url, signal) {
+  try {
+    return await fetchSingleCatalog(url, { allowNotFound: true, signal })
+  } catch (err) {
+    if (!signal?.aborted) {
+      console.warn('[pluginCatalog] 拉取原生插件附加目录失败，已忽略:', err)
+    }
+    return []
+  }
+}
+
+/**
+ * 合并主目录与附加原生插件目录：
+ * 按规范化插件 ID 去重，同 ID 时以原生目录条目优先覆盖并保留原顺序，新增条目追加在后
+ * @param {Array<object>} primaryList - 主目录列表
+ * @param {Array<object>} nativeList - 附加原生目录列表
+ * @returns {Array<object>}
+ */
+function mergeCatalogLists(primaryList, nativeList) {
+  const merged = []
+  const indexById = new Map()
+
+  const upsert = (item) => {
+    if (!item || typeof item !== 'object') return
+    const id = normalizeCatalogId(item?.id) || normalizeCatalogId(item?.pluginId)
+    if (!id) return
+    if (indexById.has(id)) {
+      merged[indexById.get(id)] = item
+    } else {
+      indexById.set(id, merged.length)
+      merged.push(item)
+    }
+  }
+
+  for (const item of primaryList) upsert(item)
+  for (const item of nativeList) upsert(item)
+  return merged
+}
+
 async function fetchCatalogList() {
   try {
-    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
-    const timer = controller ? setTimeout(() => controller.abort(), V2_CATALOG_FETCH_TIMEOUT_MS) : null
-    try {
-      const res = await fetch(V2_CATALOG_CDN_URL, {
-        headers: { Accept: 'application/json' },
-        signal: controller ? controller.signal : undefined
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const raw = await res.json()
-      const list = Array.isArray(raw)
-        ? raw
-        : Array.isArray(raw?.plugins)
-          ? raw.plugins
-          : Array.isArray(raw?.list)
-            ? raw.list
-            : null
-      if (!list) throw new Error(t('pluginCatalog.invalidFormat'))
-      _v2CatalogCache = list
-      _v2CatalogCacheTime = Date.now()
-      return list
-    } finally {
-      if (timer) clearTimeout(timer)
-      controller?.abort()
+    const extraUrl = typeof nativeCatalogUrl === 'string' ? nativeCatalogUrl.trim() : ''
+    // native-catalog.json 仅承载 Windows 原生 DLL 发行包；macOS 宿主跳过拉取，防止覆盖双端插件的 macOS target
+    const shouldFetchNative = Boolean(extraUrl && extraUrl !== V2_CATALOG_CDN_URL && !isMacOS())
+    const nativeCancelController =
+      shouldFetchNative && typeof AbortController !== 'undefined' ? new AbortController() : null
+
+    const primaryPromise = fetchSingleCatalog(V2_CATALOG_CDN_URL).catch((err) => {
+      nativeCancelController?.abort()
+      throw err
+    })
+    const nativePromise = shouldFetchNative
+      ? fetchNativeCatalogList(extraUrl, nativeCancelController?.signal)
+      : Promise.resolve([])
+
+    const [primaryResult, nativeResult] = await Promise.allSettled([primaryPromise, nativePromise])
+    if (primaryResult.status === 'rejected') {
+      throw primaryResult.reason
     }
+
+    const nativeList = nativeResult.status === 'fulfilled' ? nativeResult.value : []
+    const list = mergeCatalogLists(primaryResult.value, nativeList)
+    _v2CatalogCache = list
+    _v2CatalogCacheTime = Date.now()
+    return list
   } catch (cause) {
     const error = new Error(t('pluginCatalog.unavailable'), { cause })
     error.code = 'PLUGIN_CATALOG_UNAVAILABLE'

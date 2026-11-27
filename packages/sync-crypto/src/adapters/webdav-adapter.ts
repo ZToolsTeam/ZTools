@@ -11,6 +11,10 @@ export interface WebDavConfig {
   customHeaders?: Record<string, string>
   fetchFn?: typeof fetch
   locale?: string
+  /**
+   * 是否显式允许非加密明文 HTTP 连接（默认 false，强制 HTTPS）
+   */
+  allowInsecureHttp?: boolean
 }
 
 export interface WebDavResource {
@@ -35,12 +39,19 @@ export class WebDavError extends Error {
   }
 }
 
+// 控制字符（含空字节 \0）与 URL 编码穿越特征正则
+const CONTROL_CHAR_REGEX = /[\u0000-\u001f\u007f]/
+const ENCODED_TRAVERSAL_REGEX = /%(?:2e|2f|5c|00)/i
+const ABSOLUTE_SCHEME_REGEX = /^[a-zA-Z][a-zA-Z0-9+.-]*:/
+
 /**
  * WebDAV 去中心化同步协议适配器
  * 全面支持坚果云、Nextcloud、群晖/私有 NAS 等主流 WebDAV 服务
  */
 export class WebDavSyncAdapter {
   readonly #endpoint: string
+  readonly #endpointOrigin: string
+  readonly #basePathname: string
   readonly #username?: string
   readonly #password?: string
   readonly #basePath: string
@@ -50,22 +61,85 @@ export class WebDavSyncAdapter {
   #locale?: string
 
   constructor(config: WebDavConfig) {
-    let ep = config.endpoint.trim()
+    this.#locale = config.locale
+
+    const rawEndpoint = typeof config.endpoint === 'string' ? config.endpoint.trim() : ''
+    let parsedEndpoint: URL
+    try {
+      parsedEndpoint = new URL(rawEndpoint)
+    } catch {
+      throw new WebDavError(
+        tSync('webdav.invalidEndpoint', { endpoint: String(config.endpoint ?? '') }, config.locale)
+      )
+    }
+
+    if (parsedEndpoint.protocol === 'http:') {
+      if (config.allowInsecureHttp !== true) {
+        throw new WebDavError(
+          tSync('webdav.insecureHttpNotAllowed', undefined, config.locale)
+        )
+      }
+    } else if (parsedEndpoint.protocol !== 'https:') {
+      throw new WebDavError(
+        tSync('webdav.invalidEndpoint', { endpoint: rawEndpoint }, config.locale)
+      )
+    }
+
+    let ep = parsedEndpoint.toString()
     if (!ep.endsWith('/')) ep += '/'
-    this.#endpoint = ep
+    const normalizedEndpointUrl = new URL(ep)
+    this.#endpoint = normalizedEndpointUrl.toString()
+    this.#endpointOrigin = normalizedEndpointUrl.origin
 
     this.#username = config.username
     this.#password = config.password
 
-    let base = (config.basePath ?? '').trim()
+    const rawBase = (config.basePath ?? '').trim()
+    if (rawBase) {
+      if (
+        CONTROL_CHAR_REGEX.test(rawBase) ||
+        rawBase.includes('\\') ||
+        rawBase.includes('://') ||
+        rawBase.startsWith('//') ||
+        ABSOLUTE_SCHEME_REGEX.test(rawBase) ||
+        ENCODED_TRAVERSAL_REGEX.test(rawBase) ||
+        rawBase.includes('?') ||
+        rawBase.includes('#')
+      ) {
+        throw new WebDavError(
+          tSync('webdav.invalidBasePath', { basePath: rawBase }, config.locale)
+        )
+      }
+      const baseSegments = rawBase.split('/').filter((s) => s.length > 0)
+      if (baseSegments.some((seg) => seg === '.' || seg === '..')) {
+        throw new WebDavError(
+          tSync('webdav.invalidBasePath', { basePath: rawBase }, config.locale)
+        )
+      }
+    }
+
+    let base = rawBase
     if (base && !base.startsWith('/')) base = '/' + base
     if (base && !base.endsWith('/')) base = base + '/'
     this.#basePath = base
 
+    // 计算并验证基准路径 URL 的合法 pathname 前缀
+    const baseFullUrl = new URL(this.#basePath ? this.#basePath.slice(1) : '', this.#endpoint)
+    if (
+      baseFullUrl.origin !== this.#endpointOrigin ||
+      !baseFullUrl.pathname.startsWith(normalizedEndpointUrl.pathname)
+    ) {
+      throw new WebDavError(
+        tSync('webdav.invalidBasePath', { basePath: rawBase }, config.locale)
+      )
+    }
+    this.#basePathname = baseFullUrl.pathname.endsWith('/')
+      ? baseFullUrl.pathname
+      : `${baseFullUrl.pathname}/`
+
     this.#preset = config.preset ?? 'generic'
     this.#customHeaders = config.customHeaders ?? {}
     this.#fetch = config.fetchFn ?? globalThis.fetch
-    this.#locale = config.locale
   }
 
   get locale(): string | undefined {
@@ -95,7 +169,7 @@ export class WebDavSyncAdapter {
    */
   async propfind(remotePath = '', depth: 0 | 1 = 1, options?: { locale?: string }): Promise<WebDavResource[]> {
     const locale = options?.locale ?? this.#locale
-    const url = this.#resolveUrl(remotePath)
+    const url = this.#resolveUrl(remotePath, locale)
     const headers = this.#buildHeaders({
       Depth: String(depth),
       'Content-Type': 'application/xml; charset=utf-8'
@@ -145,7 +219,7 @@ export class WebDavSyncAdapter {
    */
   async mkcol(remotePath: string, options?: { locale?: string }): Promise<void> {
     const locale = options?.locale ?? this.#locale
-    const url = this.#resolveUrl(remotePath)
+    const url = this.#resolveUrl(remotePath, locale)
     const headers = this.#buildHeaders()
 
     const response = await this.#fetch(url, {
@@ -179,6 +253,9 @@ export class WebDavSyncAdapter {
    * 确保多层目录层级存在（递归 MKCOL）
    */
   async ensureDirectory(dirPath: string, options?: { locale?: string }): Promise<void> {
+    const locale = options?.locale ?? this.#locale
+    // 先对完整目录路径执行严格穿越校验，避免非法路径触发任何远端请求
+    this.#resolveUrl(dirPath, locale)
     const segments = dirPath.split('/').filter(Boolean)
     let current = ''
     for (const segment of segments) {
@@ -192,7 +269,7 @@ export class WebDavSyncAdapter {
    */
   async get(remotePath: string, options?: { locale?: string }): Promise<{ data: Buffer; etag?: string; lastModified?: string }> {
     const locale = options?.locale ?? this.#locale
-    const url = this.#resolveUrl(remotePath)
+    const url = this.#resolveUrl(remotePath, locale)
     const headers = this.#buildHeaders()
 
     const response = await this.#fetch(url, {
@@ -236,7 +313,7 @@ export class WebDavSyncAdapter {
     options: { ifMatch?: string; contentType?: string; locale?: string } = {}
   ): Promise<{ etag?: string }> {
     const locale = options.locale ?? this.#locale
-    const url = this.#resolveUrl(remotePath)
+    const url = this.#resolveUrl(remotePath, locale)
     const headers = this.#buildHeaders({
       'Content-Type': options.contentType ?? 'application/octet-stream'
     })
@@ -288,7 +365,7 @@ export class WebDavSyncAdapter {
    */
   async delete(remotePath: string, options?: { locale?: string }): Promise<void> {
     const locale = options?.locale ?? this.#locale
-    const url = this.#resolveUrl(remotePath)
+    const url = this.#resolveUrl(remotePath, locale)
     const headers = this.#buildHeaders()
 
     const response = await this.#fetch(url, {
@@ -331,10 +408,63 @@ export class WebDavSyncAdapter {
     }
   }
 
-  #resolveUrl(subPath: string): string {
+  #resolveUrl(subPath: string, locale?: string): string {
+    const effectiveLocale = locale ?? this.#locale
+    if (typeof subPath !== 'string') {
+      throw new WebDavError(
+        tSync('webdav.invalidSubPath', { subPath: String(subPath) }, effectiveLocale)
+      )
+    }
+
+    if (subPath.length > 0) {
+      if (
+        CONTROL_CHAR_REGEX.test(subPath) ||
+        subPath.includes('\\') ||
+        subPath.startsWith('//') ||
+        subPath.includes('://') ||
+        ABSOLUTE_SCHEME_REGEX.test(subPath) ||
+        ENCODED_TRAVERSAL_REGEX.test(subPath) ||
+        subPath.includes('?') ||
+        subPath.includes('#')
+      ) {
+        throw new WebDavError(
+          tSync('webdav.invalidSubPath', { subPath }, effectiveLocale)
+        )
+      }
+
+      const rawSegments = subPath.split('/')
+      for (const seg of rawSegments) {
+        if (seg === '.' || seg === '..') {
+          throw new WebDavError(
+            tSync('webdav.invalidSubPath', { subPath }, effectiveLocale)
+          )
+        }
+      }
+    }
+
     const cleanSub = subPath.startsWith('/') ? subPath.slice(1) : subPath
     const fullRelative = this.#basePath ? (this.#basePath.slice(1) + cleanSub) : cleanSub
-    return new URL(fullRelative, this.#endpoint).toString()
+
+    let resolved: URL
+    try {
+      resolved = new URL(fullRelative, this.#endpoint)
+    } catch {
+      throw new WebDavError(
+        tSync('webdav.invalidSubPath', { subPath }, effectiveLocale)
+      )
+    }
+
+    // 二次断言：解析结果必须与端点同源且 pathname 严格位于基准路径前缀之内
+    if (
+      resolved.origin !== this.#endpointOrigin ||
+      !resolved.pathname.startsWith(this.#basePathname)
+    ) {
+      throw new WebDavError(
+        tSync('webdav.invalidSubPath', { subPath }, effectiveLocale)
+      )
+    }
+
+    return resolved.toString()
   }
 
   #buildHeaders(extra: Record<string, string> = {}): Record<string, string> {

@@ -15,6 +15,7 @@ artifacts/
 .vite/
 /.codegraph
 scratch/
+.ztools-dev/
 
 # 原生编译中间文件与大体积媒体文件
 *.pch

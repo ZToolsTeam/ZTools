@@ -13,6 +13,7 @@ import {
   ModelProviderError
 } from './base.js';
 import { TokenTracker } from '../token-tracker.js';
+import { validateRemoteServiceUrl } from '../../security/url-guard.js';
 
 interface OpenAiResponsePayload {
   id?: string;
@@ -44,10 +45,13 @@ interface OpenAiResponsePayload {
 
 export class OpenAiCompatibleProvider extends BaseProvider {
   constructor(config: ModelProviderConfig) {
-    const defaultBaseUrl = OpenAiCompatibleProvider.getDefaultBaseUrl(config);
+    const resolvedBaseUrl = config.baseUrl || OpenAiCompatibleProvider.getDefaultBaseUrl(config);
+    validateRemoteServiceUrl(resolvedBaseUrl, {
+      allowPrivateNetwork: config.allowPrivateNetwork
+    });
     super({
       ...config,
-      baseUrl: config.baseUrl || defaultBaseUrl,
+      baseUrl: resolvedBaseUrl,
       defaultModel: config.defaultModel || OpenAiCompatibleProvider.getDefaultModel(config)
     });
   }

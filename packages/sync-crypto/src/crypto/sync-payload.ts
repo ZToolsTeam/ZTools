@@ -39,14 +39,17 @@ export function encryptConfigPayload(
 }
 
 /**
- * 解密并还原应用全量配置
+ * 解密并还原应用全量配置（强制校验 AAD 业务前缀 ztools:config:）
  */
 export function decryptConfigPayload(
   payload: EncryptedPayload,
   key: Buffer,
   locale?: string
 ): ConfigSyncData {
-  const jsonStr = decryptAesGcmString(payload, key, locale)
+  const jsonStr = decryptAesGcmString(payload, key, {
+    locale,
+    expectedAadPrefix: 'ztools:config:'
+  })
   const data = JSON.parse(jsonStr) as ConfigSyncData
   if (typeof data !== 'object' || data === null || typeof data.schemaVersion !== 'number') {
     throw new Error(tSync('payload.invalidConfig', undefined, locale))
@@ -68,14 +71,17 @@ export function encryptClipboardPayload(
 }
 
 /**
- * 解密并还原剪贴板历史数据
+ * 解密并还原剪贴板历史数据（强制校验 AAD 业务前缀 ztools:clipboard:）
  */
 export function decryptClipboardPayload(
   payload: EncryptedPayload,
   key: Buffer,
   locale?: string
 ): ClipboardSyncData {
-  const jsonStr = decryptAesGcmString(payload, key, locale)
+  const jsonStr = decryptAesGcmString(payload, key, {
+    locale,
+    expectedAadPrefix: 'ztools:clipboard:'
+  })
   const data = JSON.parse(jsonStr) as ClipboardSyncData
   if (typeof data !== 'object' || data === null || !Array.isArray(data.items)) {
     throw new Error(tSync('payload.invalidClipboard', undefined, locale))

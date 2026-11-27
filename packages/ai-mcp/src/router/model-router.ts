@@ -15,6 +15,39 @@ import { TokenTracker } from './token-tracker.js';
 import { PromptTemplateManager } from './prompt-manager.js';
 import { sniffLocalProviders, createLocalProviderConfig } from './local-sniffer.js';
 import { AiMcpError, type AiMcpErrorCode, type AiMcpMessageParams, tAiMcp } from '../i18n.js';
+import { validateRemoteServiceUrl } from '../security/url-guard.js';
+
+// listProviders() 返回脱敏配置时必须剥离的敏感请求头（统一小写比对）
+const SENSITIVE_HEADER_KEYS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'x-api-key',
+  'api-key'
+]);
+
+/**
+ * 脱敏复制 Provider 配置：剥离明文 apiKey 并深拷贝过滤敏感认证请求头
+ */
+function sanitizeProviderConfig(config: ModelProviderConfig): ModelProviderConfig {
+  const { apiKey: _omittedApiKey, headers, models, ...rest } = config;
+  const sanitized: ModelProviderConfig = { ...rest };
+
+  if (models) {
+    sanitized.models = [...models];
+  }
+
+  if (headers) {
+    const safeHeaders: Record<string, string> = {};
+    for (const [headerName, headerValue] of Object.entries(headers)) {
+      if (!SENSITIVE_HEADER_KEYS.has(headerName.toLowerCase())) {
+        safeHeaders[headerName] = headerValue;
+      }
+    }
+    sanitized.headers = safeHeaders;
+  }
+
+  return sanitized;
+}
 
 export class ModelRouterError extends Error {
   public failedAttempts: Array<{ providerId: string; error: string }>;
@@ -57,6 +90,12 @@ export class ModelRouter {
       throw new AiMcpError('router.providerIdRequired');
     }
 
+    if (config.baseUrl) {
+      validateRemoteServiceUrl(config.baseUrl, {
+        allowPrivateNetwork: config.allowPrivateNetwork
+      });
+    }
+
     let provider: BaseProvider;
     if (config.type === 'claude') {
       provider = new ClaudeProvider(config);
@@ -95,10 +134,10 @@ export class ModelRouter {
   }
 
   /**
-   * 列出所有已注册的 Provider 配置
+   * 列出所有已注册的 Provider 配置（脱敏副本：剥离明文 apiKey 与敏感认证请求头）
    */
   public listProviders(): ModelProviderConfig[] {
-    return Array.from(this.providers.values()).map(p => ({ ...p.config }));
+    return Array.from(this.providers.values()).map(p => sanitizeProviderConfig(p.config));
   }
 
   /**

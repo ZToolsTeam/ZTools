@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { ConfigService } from './config-service.js'
+import type { CredentialProtection } from './credential-protection.js'
 import { JsonFileStore } from './json-file-store.js'
 import { UpdateService, type MacUpdateInstaller } from './update-service.js'
 import { SidecarManager } from './sidecar-manager.js'
@@ -111,6 +112,8 @@ export interface CoreServicesRuntimeOptions {
   readonly processArch?: string
   readonly processorArchitecture?: string | undefined
   readonly processorArchitew6432?: string | undefined
+  readonly credentialProtection?: CredentialProtection
+  readonly isPackaged?: boolean
 }
 
 export function createCoreServices(
@@ -136,6 +139,9 @@ export function createCoreServices(
     webVersion,
     dataRoot,
     store,
+    ...(runtimeOptions?.credentialProtection
+      ? { credentialProtection: runtimeOptions.credentialProtection }
+      : {}),
     ...(runtimeOptions?.runningUnderARM64Translation !== undefined
       ? { runningUnderARM64Translation: runtimeOptions.runningUnderARM64Translation }
       : {})
@@ -159,6 +165,7 @@ export function createCoreServices(
     appVersion,
     webVersion,
     updateSource,
+    ...(runtimeOptions?.isPackaged !== undefined ? { isPackaged: runtimeOptions.isPackaged } : {}),
     ...(macUpdater ? { macUpdater } : {}),
     ...(webResources ? { webResources } : {})
   })
@@ -191,7 +198,10 @@ export function createCoreServices(
     dataRoot
   })
   const mcp = new McpService({
-    dataRoot
+    dataRoot,
+    ...(runtimeOptions?.credentialProtection
+      ? { credentialProtection: runtimeOptions.credentialProtection }
+      : {})
   })
   const focus = new FocusService({
     dbPath: path.join(dataRoot, 'focus.sqlite'),

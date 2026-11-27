@@ -20,6 +20,9 @@ export const localeMessages = Object.freeze({})
 /** 是否连接官方在线服务 */
 export const isOnline = false
 
+/** 原生插件附加目录地址（开源版不拉取商业原生插件目录） */
+export const nativeCatalogUrl = ''
+
 /** 顶层附加路由（与主布局平级） */
 export const rootRoutes = Object.freeze([])
 

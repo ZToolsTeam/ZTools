@@ -578,7 +578,8 @@
       "general": "General & Appearance",
       "shortcuts": "Shortcuts",
       "bundled": "Bundled Plugins",
-      "privacy": "Privacy & Permissions"
+      "privacy": "Privacy & Permissions",
+      "storage": "Tools & Storage"
     },
     "language": {
       "label": "Language",
@@ -748,6 +749,39 @@
       "hiddenToast": "{name} is now hidden",
       "showFailed": "Couldn’t show this tool: {reason}",
       "hideFailed": "Couldn’t hide this tool: {reason}"
+    },
+    "commonLibs": {
+      "title": "Engine Tool Pool & Storage",
+      "desc": "Manage signed third-party runtime engines downloaded on demand. Unused versions are reclaimed automatically after the grace period or can be cleaned immediately.",
+      "totalUsage": "Total usage {size}",
+      "versionCount": "{count} cached",
+      "cleanExpired": "Clean Expired Engines",
+      "cleanNow": "Clean Now",
+      "inUse": "In Use",
+      "emptyTitle": "No cached runtime engines",
+      "emptyDesc": "Runtime engines are downloaded and verified on demand when first needed by a plugin. No extra disk space is currently used.",
+      "versionLabel": "Version {version}",
+      "capabilitiesLabel": "Capabilities: {list}",
+      "pluginsLabel": "Plugins: {list}",
+      "unreferencedHint": "Not used by any installed plugin",
+      "revokedReasonLabel": "Revoked reason: {reason}",
+      "ipcUnavailable": "Engine tool pool management IPC is unavailable in this environment",
+      "invalidResponse": "Invalid tool pool inventory response",
+      "loadFailed": "Failed to load cached engines",
+      "loadFailedWithReason": "Failed to load cached engines: {reason}",
+      "cleanFailed": "Failed to clean engine",
+      "cleanFailedWithReason": "Failed to clean engine: {reason}",
+      "cleanSingleSuccess": "Removed \"{toolId}\", freed {size}",
+      "cleanSkipped": "\"{toolId}\" is in use or could not be removed",
+      "cleanExpiredSuccess": "Removed {count} expired engine(s), freed {size}",
+      "cleanExpiredNone": "No expired engines available to reclaim",
+      "status": {
+        "ready": "Ready",
+        "unreferenced": "Pending GC",
+        "revoked": "Revoked",
+        "corrupted": "Corrupted",
+        "unknown": "Unknown"
+      }
     }
   },
   "declarative": {
@@ -787,6 +821,14 @@
       "loading": "Loading…",
       "noMatch": "No matching items",
       "noItems": "No items"
+    },
+    "provisioning": {
+      "fetchingCatalog": "Fetching runtime component metadata…",
+      "downloading": "Downloading runtime components…",
+      "downloadingPercent": "Downloading runtime components… {percent}%",
+      "extracting": "Extracting runtime components…",
+      "verifying": "Verifying runtime components…",
+      "retrying": "Network interrupted, retrying download…"
     },
     "drop": {
       "filesOrDirs": "Drop to add files or folders",

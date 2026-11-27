@@ -17,11 +17,43 @@ import { OFFICIAL_PLUGINS_MAP, OFFICIAL_PLUGIN_ALIASES } from './officialPlugins
 
 const UNRELEASED_OFFICIAL_IDS = new Set((bundledConfig.unreleasedOfficialIds || []).map((id) => String(id).toLowerCase()))
 const OFFICIAL_AUTHORS = new Set(['ztools', 'ztools team', 'ztools-team', 'ztools official', 'ztools official team', 'official'])
+/** 仅非打包开发态由宿主下发：允许在开发沙盒中展示与调试的本地 draft 插件 ID 集合 */
+const DEV_ALLOWED_DRAFT_IDS = new Set()
+/** 仅非打包开发态由宿主下发：本地数据目录已预置的插件 ID 集合（优先直读 ztools://plugins/<id>/） */
+const DEV_LOCAL_PLUGIN_IDS = new Set()
 
 function idOf(value) {
   if (!value) return ''
   if (typeof value === 'object') return String(value.pluginId || value.id || '').trim().toLowerCase()
   return String(value).trim().toLowerCase()
+}
+
+export function setDevAllowedDraftPluginIds(ids = []) {
+  DEV_ALLOWED_DRAFT_IDS.clear()
+  for (const raw of Array.isArray(ids) ? ids : []) {
+    const id = idOf(raw)
+    if (id) DEV_ALLOWED_DRAFT_IDS.add(id)
+  }
+}
+
+export function isDevAllowedDraftPlugin(value) {
+  if (value && typeof value === 'object' && value.revoked === true) return false
+  const id = idOf(value)
+  return Boolean(id && DEV_ALLOWED_DRAFT_IDS.has(id))
+}
+
+export function setDevLocalPluginIds(ids = []) {
+  DEV_LOCAL_PLUGIN_IDS.clear()
+  for (const raw of Array.isArray(ids) ? ids : []) {
+    const id = idOf(raw)
+    if (id) DEV_LOCAL_PLUGIN_IDS.add(id)
+  }
+}
+
+export function isDevLocalPlugin(value) {
+  if (value && typeof value === 'object' && value.revoked === true) return false
+  const id = idOf(value)
+  return Boolean(id && DEV_LOCAL_PLUGIN_IDS.has(id))
 }
 
 function isLegacyBuiltin(id) {
@@ -41,6 +73,7 @@ export function isPluginVisible(value) {
   if (!id) return false
   if (isBundledPlugin(id)) return true
   if (Object.hasOwn(BUNDLED_PLUGIN_REPLACEMENTS, id)) return false
+  if (isDevAllowedDraftPlugin(value)) return true
   if (UNRELEASED_OFFICIAL_IDS.has(id)) return false
   if (isStoreOfficialPlugin(id)) return true
   // 旧内置声明式实现自带 isDeclarative 与 version，必须先于“已安装”判断排除，否则示例数据插件会重新出现

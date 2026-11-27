@@ -65,10 +65,12 @@ import {
 } from 'electron'
 import { FILE_DROP_CHANNEL, FILE_PASTE_CHANNEL, FileDropService } from '../services/file-drop-service.js'
 import os from 'node:os'
+import fs from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   canCall,
+  DECLARATIVE_SESSION_READONLY_SYSTEM_METHODS,
   isAllowedMethod,
   isInternalPlugin,
   isPlatformSupportedMethod,
@@ -236,6 +238,7 @@ import { NetworkService } from '../services/network-service.js'
 import { NetworkRequestCancellationService } from '../services/network-request-cancellation-service.js'
 import { NetworkRequestCancellationEndpoint } from './network-request-cancellation-endpoint.js'
 import { PluginInstallService } from '../services/plugin-install-service.js'
+import { createWindowsNativeTrustInstallVerifier } from '../services/native-trust-verifier.js'
 import { resolvePluginRuntimeTarget } from '../services/plugin-runtime-target-resolver.js'
 import { BuiltinPluginHostService } from '../services/builtin-plugin-host-service.js'
 import { isFullyQualifiedPath, isProtectedSystemPath } from '../services/host-plugins/shared-utils.js'
@@ -283,6 +286,7 @@ import type { WindowRegistry } from '../windows/window-registry.js'
 import { PluginWindowManager } from '../windows/plugin-window-manager.js'
 import { constructWithRouterRollback, type RouterConstructionScope } from './router-construction.js'
 import type { ReferenceFileResources } from '../protocol/reference-file-resources.js'
+import type { PathGrantService } from '../services/path-grant-service.js'
 import type { ReferenceIpcEndpoint } from './reference-endpoint.js'
 import {
   createSdkLaneHandshakeReply,
@@ -293,6 +297,13 @@ import {
   type TrustedSdkLaneContext
 } from './sdk-lane-dispatch.js'
 import { PluginSessionManager } from '../windows/plugin-session-manager.js'
+import { ToolRuntimeRegistry } from '../tool-runtime/registry.js'
+import {
+  loadCommonLibsTrustBundle,
+  parseStrictCommonLibsJson,
+  validateCommonLibsPublicKeysSchema,
+  type CommonLibsTrustBundle
+} from '../tool-runtime/core/commonlibs-trust.js'
 import type { UpdateProgress } from '../services/update-service.js'
 import type { ResourceRoot } from '../protocol/ztools-protocol.js'
 import {
@@ -407,6 +418,7 @@ interface PendingLegacyCall {
 }
 export interface ReferenceRuntimeAttachment {
   readonly resources?: ReferenceFileResources
+  readonly grants?: Pick<PathGrantService, 'reference'>
   readonly endpoint: Pick<ReferenceIpcEndpoint, 'call' | 'cancel' | 'acceptDrop'>
   closeIngress(): void
   drain(): Promise<void>
@@ -442,6 +454,10 @@ export interface IpcRouterOptions {
   onTrayStatePossiblyChanged?: () => void
   /** 宿主关键子进程 pid（Electron 子进程、侧车、Native Host），结束进程时受保护；缺省按 app.getAppMetrics 等组装 */
   protectedProcessPids?: () => Promise<Iterable<number>> | Iterable<number>
+  /** 仅非打包开发态生效：允许展示并运行数据目录中预置的 draft 草稿插件 */
+  devAllowDrafts?: boolean
+  /** 仅非打包开发态生效：本地预置 CommonLibs V2 工具池的额外开发公钥文件路径 */
+  devCommonLibsPublicKeysPath?: string
 }
 
 const credentialV1Methods = new Set([
@@ -580,13 +596,31 @@ export function authorizeIpcRequest(
   // 4. 参数伪造攻击防御
   assertNoPluginIdSpoofing(caller, request)
 
-  // 5. 特权方法严格安全隔离校验：第三方插件统一拦截
+  // 5. 特权方法严格安全隔离校验：第三方插件窗口、主窗口第三方声明式插件会话及失效会话统一拦截
   if (isPrivilegedMethod(request.method)) {
     if (caller.type === 'plugin' && !isInternalPlugin(caller.pluginId)) {
       throw new ZToolsError(
         errorCodes.permissionDenied,
         `Third-party plugins are not authorized to call privileged method: ${request.method}`
       )
+    }
+    if (caller.type === 'main') {
+      if (caller.stalePluginSession) {
+        throw new ZToolsError(
+          errorCodes.permissionDenied,
+          `Stale plugin session is not authorized to call privileged method: ${request.method}`
+        )
+      }
+      if (
+        caller.attributedPlugin &&
+        !isInternalPlugin(caller.attributedPlugin.pluginId) &&
+        !DECLARATIVE_SESSION_READONLY_SYSTEM_METHODS.has(request.method)
+      ) {
+        throw new ZToolsError(
+          errorCodes.permissionDenied,
+          `Third-party declarative plugins are not authorized to call privileged method: ${request.method}`
+        )
+      }
     }
   }
 }
@@ -719,6 +753,8 @@ export class IpcRouter {
   readonly #fileUnlock: FileUnlockService
   readonly #removeFileUnlockWindowListener: () => void
   readonly #dnsBenchmark: DnsBenchmarkService
+  readonly #toolRuntime: ToolRuntimeRegistry
+  readonly #removeToolRuntimeListener: () => void
   readonly #stopThemeEvents: () => void
   readonly #stopLocaleSettingListener: () => void
   #referenceRuntime: ReferenceRuntimeAttachment | undefined
@@ -1223,12 +1259,24 @@ export class IpcRouter {
       windows.closePlugin(pluginId)
       events.publishHostToMain('plugin_runtime_stopped', { pluginId })
     }
+    const effectiveDevAllowDrafts = !mainApp.isPackaged && options.devAllowDrafts === true
     this.#plugins = constructionScope.own(
       new PluginInstallService(services.dataRoot, events, {
         state: this.#pluginState,
         libraryMetadata: services.libraryMetadata,
+        ensureSignedCommonLib: async (toolId, signal, onProgress) => {
+          const commonLibs = this.#toolRuntime?.commonLibs
+          if (!commonLibs) {
+            throw new ZToolsError(
+              errorCodes.notSupported,
+              'CommonLibs manager is not configured for signed native plugin installation'
+            )
+          }
+          await commonLibs.ensureAndVerifyToolDir(toolId, signal, onProgress)
+        },
         appVersion: services.appVersion,
         runningUnderARM64Translation: mainApp.runningUnderARM64Translation ?? null,
+        allowDevDrafts: effectiveDevAllowDrafts,
         analytics: (event, pluginId, data) => {
           // 安装 / 更新 / 卸载完成：旧清单签发的会话立即失效（权限可能已变）
           stopDeclarativePlugin(pluginId)
@@ -1237,6 +1285,15 @@ export class IpcRouter {
         runtimeTarget: pluginRuntimeTarget,
         referenceRuntimeReady: () => this.#referenceRuntime !== undefined && !this.#stopping,
         ...(nativePlatform === 'darwin' ? { macNativeCatalogLookup } : {}),
+        ...(nativePlatform === 'win32'
+          ? {
+              nativeTrustVerifier: createWindowsNativeTrustInstallVerifier(
+                mainApp.isPackaged
+                  ? path.join(process.resourcesPath, 'native')
+                  : path.join(mainApp.getAppPath(), 'resources', 'native')
+              )
+            }
+          : {}),
         async preparePluginReplace(manifest, signal) {
           if (nativePlatform === 'darwin') {
             const selected = resolvePluginRuntimeTarget(manifest, pluginRuntimeTarget, {
@@ -1250,8 +1307,9 @@ export class IpcRouter {
             return release
           }
           if (!manifest.dllloader) return () => undefined
+          // ZToolsService 已通过 SYSTEM 独占 TrustedSnapshots 快照加载，不锁用户源插件目录，允许特权插件原地更新
           if (manifest.requireAdmin) {
-            throw new ZToolsError(errorCodes.notSupported, 'Administrator DLL updates require authenticated Service unload capability')
+            return () => undefined
           }
           if (!services.nativeHost) throw new ZToolsError(errorCodes.nativeHostUnavailable, 'NativeHost32 is not configured')
           const release = await services.nativeHost.acquirePluginMaintenance(manifest.id)
@@ -1267,11 +1325,74 @@ export class IpcRouter {
       (plugins) => plugins.stop()
     )
     const plugins = this.#plugins
+    const commonLibsResourcesDir = mainApp.isPackaged
+      ? path.join(process.resourcesPath, 'commonlibs')
+      : path.join(mainApp.getAppPath(), 'resources', 'commonlibs')
+    let devMergedCommonLibsTrustBundle: CommonLibsTrustBundle | undefined
+    if (!mainApp.isPackaged && options.devCommonLibsPublicKeysPath && fs.existsSync(options.devCommonLibsPublicKeysPath)) {
+      const rawDevKeysText = fs.readFileSync(options.devCommonLibsPublicKeysPath, 'utf8')
+      const parsedDevKeys = validateCommonLibsPublicKeysSchema(parseStrictCommonLibsJson(rawDevKeysText))
+      devMergedCommonLibsTrustBundle = loadCommonLibsTrustBundle(commonLibsResourcesDir, {
+        extraPublicKeys: parsedDevKeys
+      })
+    }
+    const toolRuntime = this.#toolRuntime = constructionScope.own(
+      new ToolRuntimeRegistry({
+        dataRoot: services.runtimePaths.businessDataRoot,
+        resourcesDir: commonLibsResourcesDir,
+        ...(devMergedCommonLibsTrustBundle ? { trustBundle: devMergedCommonLibsTrustBundle } : {}),
+        protectedRoots: [
+          options.systemPlatformAdapter.userDataPath,
+          services.runtimePaths.businessDataRoot,
+          services.runtimePaths.browserProfileRoot,
+          services.runtimePaths.installRoot
+        ],
+        platform: process.platform,
+        processArch: process.arch,
+        runningUnderARM64Translation: mainApp.runningUnderARM64Translation ?? null,
+        pathGrants: () => this.#referenceRuntime?.grants,
+        authorizeExplicitPath: (rawPath, caller, access, allowMissing) =>
+          files.resolveAuthorizedPath(rawPath, caller, access, allowMissing),
+        fetchImpl: ((url, init) =>
+          electronNet.fetch(typeof url === 'string' ? url : url.toString(), {
+            ...(init?.signal ? { signal: init.signal } : {}),
+            cache: init?.cache ?? 'no-store'
+          })) as typeof fetch,
+        manifests: plugins,
+        listInstalledManifests: async () => (await plugins.list()).data,
+        listSignedNativeCommonLibs: () => plugins.listSignedCommonLibDependencies(),
+        onProgress: (event, caller) => {
+          if (this.#stopping) return
+          try {
+            events.publishHostToOwner('tool_runtime_progress', event, caller)
+          } catch (error) {
+            console.warn('推送工具运行进度事件失败', error)
+          }
+        },
+        onAnalyticsEvent: (eventName, payload) => {
+          services.analytics.reportHost(eventName, payload.toolId, payload)
+        }
+      }),
+      (runtime) => runtime.stop()
+    )
+    this.#removeToolRuntimeListener = registry.onRemoved((id) => toolRuntime.closeOwner(id))
+    constructionScope.ownCleanup(this.#removeToolRuntimeListener)
     const readBundledManifest = createBundledManifestReader(options.pluginResources.webRoot)
+    const readInstalledManifest = (pluginId: string) => plugins.withPluginManifest(pluginId, async manifest => manifest)
     this.#attribution = constructionScope.own(
       new DeclarativePluginAttributionService(registry, {
-        readBundled: readBundledManifest,
-        readInstalled: (pluginId) => plugins.withPluginManifest(pluginId, async manifest => manifest),
+        readBundled: effectiveDevAllowDrafts
+          ? async (pluginId: string) => {
+              // 非打包开发态：若数据目录 Plugins/<id> 存在本地同步副本，优先走 readInstalled 对齐最新 plugin.json 权限
+              try {
+                await readInstalledManifest(pluginId)
+                return undefined
+              } catch {
+                return readBundledManifest(pluginId)
+              }
+            }
+          : readBundledManifest,
+        readInstalled: readInstalledManifest,
         isRevoked: (pluginId) => plugins.isRevoked(pluginId)
       }),
       attribution => attribution.stop()
@@ -1317,7 +1438,8 @@ export class IpcRouter {
         new NativeMediaPathPolicy(files),
         database,
         nativePlatform,
-        this.#capabilityAuthorization
+        this.#capabilityAuthorization,
+        toolRuntime.commonLibs
       ),
       (dllPlugins) => dllPlugins.stop()
     )
@@ -1652,6 +1774,7 @@ export class IpcRouter {
           if (!enabled) {
             stopDeclarativePlugin(manifest.id)
             system.releasePluginPowerSessions(manifest.id)
+            toolRuntime.clearPluginLeases(manifest.id)
             await pluginWindows.closePlugin(manifest.id)
           }
           return { success: true, pluginId: manifest.id, enabled }
@@ -1673,6 +1796,7 @@ export class IpcRouter {
         if (input.revoked) {
           stopDeclarativePlugin(input.pluginId)
           system.releasePluginPowerSessions(input.pluginId)
+          toolRuntime.clearPluginLeases(input.pluginId)
           await pluginWindows.closePlugin(input.pluginId)
           await dllPlugins.unloadPlugin(input.pluginId)
           await triggers.syncPluginEnabled(input.pluginId, false)
@@ -1732,6 +1856,7 @@ export class IpcRouter {
           async stopRuntime(pluginId) {
             stopDeclarativePlugin(pluginId)
             system.releasePluginPowerSessions(pluginId)
+            toolRuntime.clearPluginLeases(pluginId)
             await pluginWindows.closePlugin(pluginId)
             await dllPlugins.unloadPlugin(pluginId)
           },
@@ -2641,8 +2766,26 @@ export class IpcRouter {
         return services.snippets.exportSnippets()
       },
       async filesearch_query(params, caller) {
-        const input = params as { query: string; limit?: number }
-        const result = await services.fileSearch.search(input?.query, input?.limit)
+        const input = params as {
+          query: string
+          limit?: number
+          offset?: number
+          contentType?: number | string
+          typeFilter?: string
+          kind?: 'all' | 'file' | 'directory'
+          sortBy?: 'relevance' | 'name-asc' | 'name-desc' | 'size-desc' | 'size-asc' | 'mtime-desc' | 'mtime-asc'
+          includeHidden?: boolean
+          pathPrefix?: string
+        }
+        const rawContentType = input?.contentType !== undefined ? input.contentType : input?.typeFilter
+        const result = await services.fileSearch.search(input?.query, input?.limit, {
+          offset: input?.offset,
+          contentType: rawContentType as number | 'all' | 'folder' | 'document' | 'image' | 'video' | 'audio' | 'media' | 'archive' | 'code' | 'app' | 'other' | undefined,
+          kind: input?.kind,
+          sortBy: input?.sortBy,
+          includeHidden: input?.includeHidden,
+          pathPrefix: input?.pathPrefix
+        })
         await grantSearchResultsForCaller(input?.query ?? '', result, caller, files)
         return result
       },
@@ -3074,7 +3217,8 @@ export class IpcRouter {
         }
         return services.applications.searchApplications(input?.query, opts)
       },
-      async applications_uninstall(params) {
+      async applications_uninstall(params, caller) {
+        await requirePluginPermission(caller, 'system', plugins)
         const input = params as { command: string }
         return services.applications.launchUninstall(input?.command)
       },
@@ -3377,7 +3521,9 @@ export class IpcRouter {
       async script_commands_reload() {
         const commands = await services.scriptCommands.scanScripts()
         return { success: true, count: commands.length, items: services.scriptCommands.getSearchItems() }
-      }
+      },
+      // 第三方引擎工具池与主进程薄原语单点挂载（由 ToolRuntimeRegistry 派生全部 14 个 tool_* 处理器）
+      ...toolRuntime.getIpcHandlers()
     }
     this.#stopThemeEvents = constructionScope.ownCleanup(
       bindNativeThemeEvents(nativeTheme, this.#events)
@@ -3423,6 +3569,7 @@ export class IpcRouter {
     ipcMain.on(SDK_LANE_HANDSHAKE_CHANNEL, handshakeListener)
     this.#registered = true
     this.#permissionMonitor.start()
+    this.#toolRuntime.scheduleIdleGc()
     ipcMain.on('ztools:legacy-file-sync', this.#handleLegacyFile)
   }
 
@@ -3529,6 +3676,8 @@ export class IpcRouter {
         () => this.#removeHostsWindowListener(),
         () => this.#fileUnlock.stop(),
         () => this.#removeFileUnlockWindowListener(),
+        () => this.#toolRuntime.stop(),
+        () => this.#removeToolRuntimeListener(),
         async () => { await this.#clipboard.stop(); await this.#database.stop() }
       ])
       await settle([

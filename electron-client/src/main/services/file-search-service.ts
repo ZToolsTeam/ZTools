@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { shell } from 'electron'
 import type { SidecarManager, SearchFilesResult } from './sidecar-manager.js'
+import type { FileSearchOptions } from './file-search-query.js'
 
 export interface FileActionResult {
   success: boolean
@@ -32,11 +33,11 @@ export class FileSearchService {
   constructor(private readonly options: FileSearchServiceOptions) {}
 
   /**
-   * 检索文件 (调用 Rust 侧车、macOS Spotlight 或内存回退)
+   * 检索文件 (Win/Mac 优先走 C++20 原生索引侧车 ztools-indexer，支持多词/模糊/通配符/排除/拼音/引擎内类型过滤与分页；侧车未就绪时自动降级)
    */
-  public async search(query: string, limit = 50): Promise<SearchFilesResult> {
+  public async search(query: string, limit = 50, options: FileSearchOptions = {}): Promise<SearchFilesResult> {
     const cleanQuery = typeof query === 'string' ? query.trim() : ''
-    return this.options.sidecarManager.searchFiles(cleanQuery, limit)
+    return this.options.sidecarManager.searchFiles(cleanQuery, limit, options)
   }
 
   /**

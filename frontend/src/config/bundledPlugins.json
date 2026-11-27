@@ -29,7 +29,6 @@
     "super-markdown",
     "unit-converter",
     "uuid-generator",
-    "video-downloader",
     "wechat-multi",
     "world-clock"
   ],
@@ -110,6 +109,7 @@
     "table-converter",
     "text-formatter",
     "translator",
+    "video-downloader",
     "vscode-projects",
     "wechat-cleaner",
     "wifi-password-reveal",

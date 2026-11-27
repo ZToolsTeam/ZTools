@@ -10,7 +10,10 @@ add_executable(ztools-indexer
   main.cpp
   file_scanner.hpp
   flat_trie.hpp
+  index_cache.hpp
   pinyin.hpp
+  pinyin_table.hpp
+  query_engine.hpp
 )
 
 target_include_directories(ztools-indexer PRIVATE

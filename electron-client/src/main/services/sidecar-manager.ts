@@ -5,6 +5,13 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 import type { SystemSearchFilesScope } from '../../contracts/method-params.js'
 import {
+  extractSpotlightPrimaryTerm,
+  filterSortAndPaginateFileRecords,
+  hasAdvancedFileSearchSyntax,
+  resolveContentTypeMask,
+  type FileSearchOptions
+} from './file-search-query.js'
+import {
   listMacosApplications,
   scanDirectoryForSearch,
   scanLocalRecentFiles,
@@ -118,6 +125,8 @@ export interface SubdirStatRecord {
 export interface SearchFilesResult {
   query?: string | undefined
   limit?: number | undefined
+  offset?: number | undefined
+  has_more?: boolean | undefined
   files: FileRecord[]
   count: number
   total_matches: number
@@ -930,7 +939,7 @@ export class SidecarManager {
   // In-memory fallback dataset for degraded indexer mode
   private fallbackFiles: FileRecord[] = []
   private pastedHistory: string[] = []
-  private lastIndexRequest: { targetPath: string; scanner: 'auto' | 'usn' | 'directory' } | null = null
+  private lastIndexRequest: { targetPath: string; scanner: 'auto' | 'usn' | 'directory'; cachePath?: string | undefined } | null = null
 
   constructor(options: SidecarManagerOptions = {}) {
     this.uiaccessProcess = new ManagedSidecarProcess({
@@ -950,7 +959,7 @@ export class SidecarManager {
         // 索引侧车异常重启后内存索引已清空，自动按上次范围重建索引避免陷入永久空索引降级
         const req = this.lastIndexRequest
         if (req) {
-          void this.indexPath(req.targetPath, req.scanner).catch((err) => {
+          void this.indexPath(req.targetPath, req.scanner, req.cachePath).catch((err) => {
             console.warn('[SidecarManager] Auto re-index after crash recovery failed:', err)
           })
         }
@@ -1250,47 +1259,51 @@ export class SidecarManager {
   public async searchFiles(
     query: string,
     limit = 50,
-    options: { scope?: SystemSearchFilesScope } = {}
+    options: FileSearchOptions = {}
   ): Promise<SearchFilesResult> {
     const trimmed = String(query || '').trim()
     const safeLimit = Math.max(1, Math.min(500, Number(limit) || 50))
+    const safeOffset = Math.max(0, Math.min(4500, Math.trunc(Number(options.offset ?? 0) || 0)))
     const scope = options.scope ?? 'all'
+    const contentTypeMask = resolveContentTypeMask(options.contentType)
+    const kind = options.kind ?? 'all'
+    const sortBy = options.sortBy ?? 'relevance'
+    const includeHidden = options.includeHidden !== false
+    const pathPrefix = typeof options.pathPrefix === 'string' ? options.pathPrefix.trim() : ''
+    const hasEngineFilters = contentTypeMask !== 0 || kind !== 'all' || pathPrefix.length > 0
+
     if (scope === 'applications') {
       return await listLaunchableApplications()
     }
-    if (trimmed.toLowerCase().startsWith('dir:')) {
+    if (trimmed.toLowerCase().startsWith('dir:') && !hasAdvancedFileSearchSyntax(trimmed.slice(4))) {
       const targetDir = trimmed.slice(4).trim()
       if (targetDir) {
         return await scanDirectoryForSearch(targetDir, safeLimit, this.fallbackFiles)
       }
     }
 
-    // 1. 若外部单测注入了 fallbackFiles，优先匹配 fallbackFiles
+    // 1. 若外部单测注入了 fallbackFiles，优先用同一套查询引擎语义匹配 fallbackFiles
     if (this.fallbackFiles.length > 0) {
       const t0 = performance.now()
-      const qLower = trimmed.toLowerCase()
-      const matches: FileRecord[] = []
-
-      for (const f of this.fallbackFiles) {
-        if (
-          !qLower ||
-          f.name.toLowerCase().includes(qLower) ||
-          f.acronym.toLowerCase().includes(qLower) ||
-          f.path.toLowerCase().includes(qLower)
-        ) {
-          matches.push(f)
-          if (matches.length >= safeLimit) break
-        }
-      }
+      const filtered = filterSortAndPaginateFileRecords(this.fallbackFiles, trimmed, safeLimit, {
+        offset: safeOffset,
+        contentType: contentTypeMask,
+        kind,
+        sortBy,
+        includeHidden,
+        pathPrefix
+      })
       const elapsedMs = performance.now() - t0
-      const totalBytes = matches.reduce((acc, f) => acc + (f.size || 0), 0)
+      const totalBytes = filtered.files.reduce((acc, f) => acc + (f.size || 0), 0)
 
       return {
         query: trimmed,
         limit: safeLimit,
-        files: matches,
-        count: matches.length,
-        total_matches: matches.length,
+        offset: filtered.offset,
+        has_more: filtered.hasMore,
+        files: filtered.files,
+        count: filtered.files.length,
+        total_matches: filtered.totalMatches,
         total_bytes: totalBytes,
         elapsed_us: Math.round(elapsedMs * 1000),
         elapsed_ms: elapsedMs,
@@ -1300,26 +1313,27 @@ export class SidecarManager {
       }
     }
 
-    // 2. macOS 优先走原生应用缓存（含 InfoPlist.strings / mdls 本地化中文名称与双语拼音）+ 本地目录 / Spotlight 检索
-    if (process.platform === 'darwin') {
-      return await searchFilesOnMacos(trimmed, safeLimit, this.fallbackFiles, {
-        excludeApplications: scope === 'files'
-      })
-    }
-
-    // 3. 若 Windows Indexer 侧车运行中且有非空关键词，优先调用硬件级索引
+    // 2. Windows 与 macOS 统一优先走同源 C++20 原生索引侧车 ztools-indexer（多词/模糊/通配符/拼音/位掩码过滤/排序/分页全下推）
     let indexerWarming = false
     let indexedDrives: string[] | undefined
-    if (trimmed && this.indexerProcess.state === 'running') {
+    const shouldQueryIndexer = (Boolean(trimmed) || hasEngineFilters) && this.indexerProcess.state === 'running'
+    if (shouldQueryIndexer) {
       try {
         const rpcRes = await this.indexerProcess.sendRequest<SearchFilesResult>('search_files', {
           query: trimmed,
-          limit: safeLimit
+          limit: safeLimit,
+          offset: safeOffset,
+          content_type: contentTypeMask,
+          kind,
+          sort_by: sortBy,
+          include_hidden: includeHidden,
+          ...(pathPrefix ? { path_prefix: pathPrefix } : {})
         })
         if (rpcRes && Array.isArray(rpcRes.files) && (rpcRes.files.length > 0 || (rpcRes.total_indexed ?? 0) > 0)) {
           return {
             ...rpcRes,
             files: rpcRes.files.map(file => ({ ...file, mtime: indexerMtimeToMs(file.mtime) })),
+            source: 'ztools-indexer',
             ...(scope === 'files' ? { scope } : {})
           }
         }
@@ -1334,18 +1348,65 @@ export class SidecarManager {
       }
     }
 
-    // 4. 空查询或 Windows 侧车未返回有效全盘索引时，扫描本机真实用户目录（Downloads/Desktop/Documents）
+    // 3. macOS 侧车未就绪或空查询时，回退至原生应用缓存 + Spotlight / 本地目录，并用同一套查询/过滤/分页逻辑收口
+    if (process.platform === 'darwin') {
+      const needsPostFilter = hasAdvancedFileSearchSyntax(trimmed) || hasEngineFilters || sortBy !== 'relevance' || safeOffset > 0
+      const spotlightQuery = hasAdvancedFileSearchSyntax(trimmed) ? extractSpotlightPrimaryTerm(trimmed) : trimmed
+      const fetchLimit = needsPostFilter ? Math.min(500, Math.max(safeLimit * 4, safeOffset + safeLimit)) : safeLimit
+      const macRes = await searchFilesOnMacos(spotlightQuery, fetchLimit, this.fallbackFiles, {
+        excludeApplications: scope === 'files'
+      })
+      if (!needsPostFilter) {
+        return macRes
+      }
+      const filtered = filterSortAndPaginateFileRecords(macRes.files, trimmed, safeLimit, {
+        offset: safeOffset,
+        contentType: contentTypeMask,
+        kind,
+        sortBy,
+        includeHidden,
+        pathPrefix
+      })
+      const totalBytes = filtered.files.reduce((acc, f) => acc + (f.size || 0), 0)
+      return {
+        ...macRes,
+        query: trimmed,
+        limit: safeLimit,
+        offset: filtered.offset,
+        has_more: filtered.hasMore,
+        files: filtered.files,
+        count: filtered.files.length,
+        total_matches: filtered.totalMatches,
+        total_bytes: totalBytes
+      }
+    }
+
+    // 4. 空查询或 Windows 侧车未返回有效全盘索引时，扫描本机真实用户目录（Downloads/Desktop/Documents）并应用同一套查询过滤
     const t0 = performance.now()
-    const local = await scanLocalRecentFiles(trimmed, safeLimit)
+    const needsLocalFilter = hasAdvancedFileSearchSyntax(trimmed) || hasEngineFilters || sortBy !== 'relevance' || safeOffset > 0
+    const local = await scanLocalRecentFiles(needsLocalFilter ? '' : trimmed, needsLocalFilter ? 500 : safeLimit)
+    const finalFiles = needsLocalFilter
+      ? filterSortAndPaginateFileRecords(local.files, trimmed, safeLimit, {
+          offset: safeOffset,
+          contentType: contentTypeMask,
+          kind,
+          sortBy,
+          includeHidden,
+          pathPrefix
+        })
+      : { files: local.files, totalMatches: local.files.length, offset: 0, hasMore: false }
     const elapsedMs = performance.now() - t0
+    const totalBytes = finalFiles.files.reduce((acc, f) => acc + (f.size || 0), 0)
 
     return {
       query: trimmed,
       limit: safeLimit,
-      files: local.files,
-      count: local.files.length,
-      total_matches: local.files.length,
-      total_bytes: local.totalBytes,
+      offset: finalFiles.offset,
+      has_more: finalFiles.hasMore,
+      files: finalFiles.files,
+      count: finalFiles.files.length,
+      total_matches: finalFiles.totalMatches,
+      total_bytes: totalBytes,
       subdirs: local.subdirs,
       elapsed_us: Math.round(elapsedMs * 1000),
       elapsed_ms: elapsedMs,
@@ -1359,13 +1420,41 @@ export class SidecarManager {
     }
   }
 
-  public async indexPath(targetPath: string, scanner: 'auto' | 'usn' | 'directory' = 'auto'): Promise<IndexPathResult> {
-    this.lastIndexRequest = { targetPath, scanner }
+  public async loadIndexCache(cachePath: string): Promise<{ loaded: boolean; total_indexed: number; elapsed_ms: number; indexed_drives?: string[] }> {
+    if (!cachePath || this.indexerProcess.state !== 'running') {
+      return { loaded: false, total_indexed: 0, elapsed_ms: 0 }
+    }
+    try {
+      return await this.indexerProcess.sendRequest<{ loaded: boolean; total_indexed: number; elapsed_ms: number; indexed_drives?: string[] }>(
+        'load_cache',
+        { cache_path: cachePath },
+        15000
+      )
+    } catch (err) {
+      console.warn('[SidecarManager] loadIndexCache RPC failed:', err)
+      return { loaded: false, total_indexed: 0, elapsed_ms: 0 }
+    }
+  }
+
+  public async indexPath(
+    targetPath: string,
+    scanner: 'auto' | 'usn' | 'directory' = 'auto',
+    cachePath?: string
+  ): Promise<IndexPathResult> {
+    this.lastIndexRequest = { targetPath, scanner, cachePath }
     if (this.indexerProcess.state === 'running') {
       const isAllDrives = targetPath === '*' || targetPath === 'all'
       const timeoutMs = isAllDrives ? 600000 : 60000
       try {
-        return await this.indexerProcess.sendRequest<IndexPathResult>('index_path', { path: targetPath, scanner }, timeoutMs)
+        return await this.indexerProcess.sendRequest<IndexPathResult>(
+          'index_path',
+          {
+            path: targetPath,
+            scanner,
+            ...(cachePath ? { cache_path: cachePath } : {})
+          },
+          timeoutMs
+        )
       } catch (err) {
         console.warn('[SidecarManager] indexPath RPC failed, falling back:', err)
       }

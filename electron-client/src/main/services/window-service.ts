@@ -761,6 +761,9 @@ export class WindowService {
         }
       })
       tooltip.setAlwaysOnTop(true, 'floating')
+      tooltip.webContents.on('will-navigate', (event) => event.preventDefault())
+      tooltip.webContents.setWindowOpenHandler?.(() => ({ action: 'deny' }))
+      tooltip.webContents.on('will-attach-webview', (event) => event.preventDefault())
       tooltip.once('closed', () => {
         if (this.#tooltip === tooltip) {
           this.#tooltip = null
@@ -832,6 +835,8 @@ export class WindowService {
         this.#handleRecordBarAction(action, owner)
       }
     })
+    recordBar.webContents.setWindowOpenHandler?.(() => ({ action: 'deny' }))
+    recordBar.webContents.on('will-attach-webview', (event) => event.preventDefault())
 
     recordBar.on('page-title-updated', (event, title) => {
       event.preventDefault()

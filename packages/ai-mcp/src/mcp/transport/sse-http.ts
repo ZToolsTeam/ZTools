@@ -1,14 +1,23 @@
 import { JsonRpcMessage } from '../../types/mcp.js';
 import { McpTransport } from './transport.js';
+import { validateRemoteServiceUrl } from '../../security/url-guard.js';
+import { AiMcpError } from '../../i18n.js';
 
 export interface HttpSseTransportOptions {
   url: string;
   headers?: Record<string, string>;
   timeoutMs?: number;
+  /**
+   * 是否允许访问非回环私有内网地址（默认 false）
+   */
+  allowPrivateNetwork?: boolean;
 }
 
 export class HttpSseTransport implements McpTransport {
   private url: string;
+  private postUrl: string;
+  private readonly origin: string;
+  private readonly allowPrivateNetwork: boolean;
   private headers: Record<string, string>;
   private timeoutMs: number;
   private connected: boolean = false;
@@ -18,8 +27,14 @@ export class HttpSseTransport implements McpTransport {
   private abortController?: AbortController;
 
   constructor(options: HttpSseTransportOptions) {
-    this.url = options.url.replace(/\/+$/, '');
-    this.headers = options.headers || {};
+    this.allowPrivateNetwork = options.allowPrivateNetwork === true;
+    const parsed = validateRemoteServiceUrl(options.url, {
+      allowPrivateNetwork: this.allowPrivateNetwork
+    });
+    this.origin = parsed.origin;
+    this.url = parsed.toString().replace(/\/+$/, '');
+    this.postUrl = this.url;
+    this.headers = options.headers ? { ...options.headers } : {};
     this.timeoutMs = options.timeoutMs || 30000;
   }
 
@@ -28,14 +43,71 @@ export class HttpSseTransport implements McpTransport {
   }
 
   public async connect(): Promise<void> {
+    // 连接前再次校验 URL 安全策略
+    validateRemoteServiceUrl(this.url, {
+      allowPrivateNetwork: this.allowPrivateNetwork
+    });
+
     this.connected = true;
     this.abortController = new AbortController();
 
     // 启动后台 SSE 监听 (如果服务端提供 SSE 端点)
-    this.startSseListener().catch((err) => {
-      // 如果仅支持纯 HTTP POST，静默降级
+    this.startSseListener().catch((err: unknown) => {
       if (!this.connected) return;
+      if (err instanceof AiMcpError) {
+        this.emitError(err);
+      }
     });
+  }
+
+  /**
+   * 校验 SSE 服务端下发的 endpoint 地址：必须通过 URL 安全校验且与基准地址严格同源，严防跨源/SSRF 跳转
+   */
+  private applySseEndpoint(rawEndpoint: string): void {
+    let resolved: URL;
+    try {
+      resolved = new URL(rawEndpoint, `${this.url}/`);
+    } catch {
+      this.emitError(new AiMcpError('security.invalidUrl', { url: rawEndpoint }));
+      return;
+    }
+
+    try {
+      validateRemoteServiceUrl(resolved.toString(), {
+        allowPrivateNetwork: this.allowPrivateNetwork
+      });
+    } catch (err: unknown) {
+      this.emitError(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+
+    if (resolved.origin !== this.origin) {
+      this.emitError(
+        new AiMcpError('security.crossOriginRedirectBlocked', {
+          endpoint: resolved.toString(),
+          origin: this.origin
+        })
+      );
+      return;
+    }
+
+    this.postUrl = resolved.toString();
+  }
+
+  /**
+   * 校验响应最终 URL（如存在 HTTP 重定向），防止跨源/SSRF 跳转
+   */
+  private assertResponseOrigin(responseUrl: string): void {
+    if (!responseUrl) return;
+    const parsed = validateRemoteServiceUrl(responseUrl, {
+      allowPrivateNetwork: this.allowPrivateNetwork
+    });
+    if (parsed.origin !== this.origin) {
+      throw new AiMcpError('security.crossOriginRedirectBlocked', {
+        endpoint: parsed.toString(),
+        origin: this.origin
+      });
+    }
   }
 
   private async startSseListener(): Promise<void> {
@@ -49,11 +121,14 @@ export class HttpSseTransport implements McpTransport {
         signal: this.abortController?.signal
       });
 
+      this.assertResponseOrigin(res.url);
+
       if (!res.ok || !res.body) return;
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
+      let currentEvent = '';
 
       try {
         while (this.connected) {
@@ -64,14 +139,27 @@ export class HttpSseTransport implements McpTransport {
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.startsWith('data: ')) {
+          for (const rawLine of lines) {
+            const trimmed = rawLine.replace(/\r$/, '').trim();
+            if (!trimmed) {
+              currentEvent = '';
+              continue;
+            }
+            if (trimmed.startsWith('event:')) {
+              currentEvent = trimmed.slice(6).trim();
+              continue;
+            }
+            if (trimmed.startsWith('data:')) {
+              const payloadStr = trimmed.slice(5).trim();
+              if (currentEvent === 'endpoint') {
+                this.applySseEndpoint(payloadStr);
+                continue;
+              }
               try {
-                const parsed = JSON.parse(trimmed.slice(6)) as JsonRpcMessage;
+                const parsed = JSON.parse(payloadStr) as JsonRpcMessage;
                 this.emitMessage(parsed);
-              } catch {
-                // 忽略残缺或非 JSON 的 SSE 心跳数据帧
+              } catch (parseErr: unknown) {
+                void parseErr;
               }
             }
           }
@@ -92,11 +180,22 @@ export class HttpSseTransport implements McpTransport {
       throw new Error('HttpSseTransport is not connected');
     }
 
+    // 发送前再次确认目标地址合法且同源
+    const targetUrl = validateRemoteServiceUrl(this.postUrl, {
+      allowPrivateNetwork: this.allowPrivateNetwork
+    });
+    if (targetUrl.origin !== this.origin) {
+      throw new AiMcpError('security.crossOriginRedirectBlocked', {
+        endpoint: targetUrl.toString(),
+        origin: this.origin
+      });
+    }
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const res = await fetch(this.url, {
+      const res = await fetch(this.postUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -107,6 +206,7 @@ export class HttpSseTransport implements McpTransport {
       });
 
       clearTimeout(timer);
+      this.assertResponseOrigin(res.url);
 
       if (!res.ok) {
         throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
@@ -135,8 +235,8 @@ export class HttpSseTransport implements McpTransport {
     for (const handler of this.closeHandlers) {
       try {
         handler();
-      } catch {
-        // 忽略关闭回调异常
+      } catch (handlerErr: unknown) {
+        void handlerErr;
       }
     }
   }
@@ -167,8 +267,8 @@ export class HttpSseTransport implements McpTransport {
     for (const handler of this.errorHandlers) {
       try {
         handler(err);
-      } catch {
-        // 忽略错误监听器自身抛出的异常
+      } catch (handlerErr: unknown) {
+        void handlerErr;
       }
     }
   }

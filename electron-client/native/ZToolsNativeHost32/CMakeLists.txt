@@ -3,17 +3,16 @@ add_executable(ZToolsNativeHost32
   src/input_inject.cpp
   src/keyboard_hook.cpp
   src/dll_resolver.cpp
-  src/manifest.cpp
   src/main.cpp
   src/mouse_hook.cpp
   src/protocol.cpp
 )
 
-target_include_directories(ZToolsNativeHost32 PRIVATE include)
+target_include_directories(ZToolsNativeHost32 PRIVATE include "${ZTOOLS_NATIVE_TRUST_GENERATED_DIR}" ../shared)
 target_compile_definitions(ZToolsNativeHost32 PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(ZToolsNativeHost32 PRIVATE /W4 /WX /utf-8 /sdl /guard:cf)
 target_link_options(ZToolsNativeHost32 PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf)
-target_link_libraries(ZToolsNativeHost32 PRIVATE bcrypt ole32 shell32 shlwapi user32 xmllite)
+target_link_libraries(ZToolsNativeHost32 PRIVATE bcrypt ole32 shell32 user32)
 
 set_target_properties(ZToolsNativeHost32 PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${ZTOOLS_NATIVE_OUTPUT_DIR}"
@@ -26,6 +25,21 @@ if(ZTOOLS_BUILD_NATIVE_TEST_FIXTURE)
   if(NOT DEFINED ZTOOLS_NATIVE_TEST_OUTPUT_DIR)
     message(FATAL_ERROR "ZTOOLS_NATIVE_TEST_OUTPUT_DIR is required for the test fixture")
   endif()
+
+  target_compile_definitions(ZToolsNativeHost32 PRIVATE ZTOOLS_ENABLE_TEST_TRUST_KEY=1)
+
+  add_executable(ZToolsNativeTrustVectorTest tests/native_trust_vector_test.cpp)
+  target_include_directories(ZToolsNativeTrustVectorTest PRIVATE ../shared)
+  target_compile_definitions(ZToolsNativeTrustVectorTest PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX ZTOOLS_ENABLE_TEST_TRUST_KEY=1)
+  target_compile_options(ZToolsNativeTrustVectorTest PRIVATE /W4 /WX /utf-8 /sdl /guard:cf)
+  target_link_options(ZToolsNativeTrustVectorTest PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf)
+  target_link_libraries(ZToolsNativeTrustVectorTest PRIVATE bcrypt)
+  set_target_properties(ZToolsNativeTrustVectorTest PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${ZTOOLS_NATIVE_TEST_OUTPUT_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${ZTOOLS_NATIVE_TEST_OUTPUT_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${ZTOOLS_NATIVE_TEST_OUTPUT_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${ZTOOLS_NATIVE_TEST_OUTPUT_DIR}"
+  )
 
   add_library(ZToolsNativeTestPlugin SHARED tests/native_test_plugin.cpp)
   add_library(ZToolsNativeAbiRejectionFixture SHARED tests/native_abi_rejection_plugin.cpp)
@@ -60,6 +74,7 @@ if(ZTOOLS_BUILD_NATIVE_TEST_FIXTURE)
   target_compile_definitions(ZToolsNativeAbiRejectionFixture PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(ZToolsNativeAbiRejectionFixture PRIVATE /W4 /WX /utf-8 /sdl /guard:cf)
   target_link_options(ZToolsNativeAbiRejectionFixture PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf)
+  target_link_libraries(ZToolsNativeAbiRejectionFixture PRIVATE ole32)
   set_target_properties(ZToolsNativeAbiRejectionFixture PROPERTIES
     PREFIX ""
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${ZTOOLS_NATIVE_TEST_OUTPUT_DIR}"

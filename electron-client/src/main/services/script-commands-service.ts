@@ -1309,8 +1309,16 @@ export class ScriptCommandsService {
         } catch {
           confirmed = false
         }
-      } else if (path.resolve(scriptPath).toLowerCase().startsWith(this.#scriptsDir.toLowerCase())) {
-        confirmed = true
+      } else {
+        // 使用 path.relative 严格校验脚本是否位于托管脚本目录内，防止同前缀目录（如 scripts-evil）碰撞绕过
+        const resolvedScriptsDir = path.resolve(this.#scriptsDir)
+        const resolvedScriptPath = path.resolve(scriptPath)
+        const relativePath = process.platform === 'win32'
+          ? path.relative(resolvedScriptsDir.toLowerCase(), resolvedScriptPath.toLowerCase())
+          : path.relative(resolvedScriptsDir, resolvedScriptPath)
+        if (relativePath !== '' && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)) {
+          confirmed = true
+        }
       }
 
       if (!confirmed) {

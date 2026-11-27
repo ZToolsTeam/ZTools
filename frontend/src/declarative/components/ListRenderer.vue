@@ -222,18 +222,31 @@
             v-if="workbenchPanelData.previewCard"
             class="rounded-xl p-2.5 bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] space-y-2"
           >
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-semibold text-[var(--rc-text-primary)]">
+            <!-- 安全外链或 DataURL 封面预览图（固定 16:9 比例防 CLS，no-referrer 兼容防盗链） -->
+            <div
+              v-if="previewCardImageUrl"
+              class="w-full aspect-video rounded-lg overflow-hidden bg-[var(--rc-canvas)] border border-[var(--rc-border)] decl-preview-cover"
+            >
+              <img
+                :src="previewCardImageUrl"
+                :alt="cleanUiText(workbenchPanelData.previewCard.title)"
+                referrerpolicy="no-referrer"
+                class="w-full h-full object-cover"
+                @error="failedPreviewImageUrl = previewCardImageUrl"
+              />
+            </div>
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-semibold text-[var(--rc-text-primary)] line-clamp-2 break-words">
                 {{ cleanUiText(workbenchPanelData.previewCard.title) }}
               </span>
               <span
                 v-if="workbenchPanelData.previewCard.badge"
-                class="px-1.5 py-0.5 text-[length:var(--rc-fs-caption)] tabular-nums rounded bg-[var(--rc-surface-active)] text-[var(--rc-text-secondary)] border border-[var(--rc-border)]"
+                class="px-1.5 py-0.5 text-[length:var(--rc-fs-caption)] tabular-nums rounded bg-[var(--rc-surface-active)] text-[var(--rc-text-secondary)] border border-[var(--rc-border)] flex-shrink-0"
               >
                 {{ cleanUiText(workbenchPanelData.previewCard.badge) }}
               </span>
             </div>
-            <p v-if="workbenchPanelData.previewCard.subtitle" class="text-[length:var(--rc-fs-caption)] text-[var(--rc-text-muted)] leading-snug">
+            <p v-if="workbenchPanelData.previewCard.subtitle" class="text-[length:var(--rc-fs-caption)] text-[var(--rc-text-muted)] leading-snug break-words">
               {{ cleanUiText(workbenchPanelData.previewCard.subtitle) }}
             </p>
             <div
@@ -611,6 +624,25 @@ const workbenchPanelData = computed(() => {
   const wp = props.descriptor.props?.workbenchPanel;
   return wp ? (wp.props || wp) : null;
 });
+
+const failedPreviewImageUrl = ref("");
+const previewCardImageUrl = computed(() => {
+  const raw = workbenchPanelData.value?.previewCard?.imageUrl;
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === failedPreviewImageUrl.value) return "";
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("https://") || lower.startsWith("http://") || lower.startsWith("data:image/")) {
+    return trimmed;
+  }
+  return "";
+});
+watch(
+  () => workbenchPanelData.value?.previewCard?.imageUrl,
+  () => {
+    failedPreviewImageUrl.value = "";
+  }
+);
 
 // 范式二/三：右侧联动可操作文件/任务列表数据 (subList)
 const subListData = computed(() => {

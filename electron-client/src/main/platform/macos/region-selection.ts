@@ -136,6 +136,7 @@ export class MacRegionSelection implements RegionSelectionBackend {
             overlay.setMenu(null); overlay.setAlwaysOnTop(true, 'screen-saver')
             overlay.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
             overlay.webContents.on('will-navigate', (event, url) => { if (url !== REGION_SELECTION_URL) event.preventDefault() })
+            overlay.webContents.on('will-attach-webview', (event) => event.preventDefault())
           }
           if (finished) break
           void window.loadURL(REGION_SELECTION_URL).then(() => { if (!finished && !window.isDestroyed()) window.show() }).catch(() => { if (!finished) finish(undefined, failed()) })

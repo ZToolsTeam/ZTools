@@ -16,8 +16,16 @@ const userDialogMethods = new Set([
   'window_show_select_folder_dialog'
 ])
 
+const longRunningToolMethods = new Set([
+  'tool_runtime_ensure',
+  'tool_download_stream_probe',
+  'tool_download_stream_run',
+  'tool_media_transcode_run'
+])
+
 const infiniteTimeoutMethods = new Set([
   ...userDialogMethods,
+  ...longRunningToolMethods,
   'update_install_start',
   // 下载服务自行限制包大小和超时，不能被默认的 10 秒 IPC 截断。
   'update_download_start',
@@ -100,9 +108,9 @@ export function parseRequest(value: unknown): ZToolsRequest {
       (typeof pluginSession !== 'string' || !PLUGIN_SESSION_TOKEN_PATTERN.test(pluginSession))) {
     throw new ZToolsError(errorCodes.invalidRequest, 'Invalid pluginSession')
   }
-  // 系统文件对话框等待用户选择或取消，不能被普通 IPC 的 10 秒默认超时截断。
+  // 系统文件对话框与长耗时薄原语由主进程自行管控取消与超时，不能被普通 IPC 的 10 秒默认超时截断。
   // 调用方显式设置的时限仍按原规则校验并保留。
-  const timeoutMs = value.timeoutMs === undefined && userDialogMethods.has(value.method)
+  const timeoutMs = value.timeoutMs === undefined && (userDialogMethods.has(value.method) || longRunningToolMethods.has(value.method))
     ? INFINITE_TIMEOUT
     : value.timeoutMs === undefined && value.method === 'wifi_get_password'
       ? 35_000 // 留出 30 秒系统授权和结果传输时间。

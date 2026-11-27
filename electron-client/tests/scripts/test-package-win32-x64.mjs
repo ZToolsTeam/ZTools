@@ -90,19 +90,29 @@ test('exposes x64 Windows packaging commands and removes the former ia32 distrib
   assert.equal(packageJson.scripts['package:win32:ia32'], undefined)
 })
 
+const SAMPLE_NATIVE_TRUST = Object.freeze({
+  algorithm: 'ecdsa-p256-sha256',
+  keyIds: ['ztools-native-prod-2026a', 'ztools-native-priv-prod-2026a'],
+  usages: ['native', 'native-privileged'],
+  revocations: { keys: 0, manifests: 0, files: 0, minVersions: 0 },
+  legacyFrozenCount: 5,
+  bundleSha256: 'f'.repeat(64)
+})
+
 test('records x64 main-process support and keeps isolated native processes explicitly ia32', () => {
   const manifest = createWindowsApplicationManifest({
     appVersion: '1.1.7.1',
     gitCommit: 'abc123',
     gitDirty: false,
     buildQualifier: '',
-    privilegedManifestSha256: 'f'.repeat(64)
+    nativeTrust: SAMPLE_NATIVE_TRUST
   })
 
   assert.equal(manifest.platform, 'win32')
   assert.equal(manifest.arch, 'x64')
   assert.deepEqual(manifest.supportedNativeOsArch, ['x64'])
   assert.equal(manifest.wow64OnX64, false)
+  assert.deepEqual(manifest.nativeTrust, SAMPLE_NATIVE_TRUST)
   assert.deepEqual(manifest.nativeDependencies, [
     { name: 'classic-level', version: '3.0.0', arch: 'x64' },
     { name: 'ZToolsNativeHost32', protocolVersion: 1, arch: 'ia32' },
@@ -122,7 +132,7 @@ test('records and verifies optional PathAccessBroker status, SHA-256 and x64 PE 
   try {
     const unavailableManifest = createWindowsApplicationManifest({
       appVersion: '1.1.7.1', gitCommit: 'abc123', gitDirty: false, buildQualifier: '',
-      privilegedManifestSha256: 'f'.repeat(64)
+      nativeTrust: SAMPLE_NATIVE_TRUST
     })
     assert.equal(unavailableManifest.sdkContractVersion, 1)
     assert.deepEqual(verifyWindowsPathAccessBrokerDependency({
@@ -148,7 +158,7 @@ test('records and verifies optional PathAccessBroker status, SHA-256 and x64 PE 
     const brokerSha256 = createHash('sha256').update(fs.readFileSync(brokerPath)).digest('hex')
     const availableManifest = createWindowsApplicationManifest({
       appVersion: '1.1.7.1', gitCommit: 'abc123', gitDirty: false, buildQualifier: '',
-      privilegedManifestSha256: 'f'.repeat(64), pathAccessBrokerSha256: brokerSha256
+      nativeTrust: SAMPLE_NATIVE_TRUST, pathAccessBrokerSha256: brokerSha256
     })
     const dependency = availableManifest.nativeDependencies[3]
     assert.deepEqual(dependency, {

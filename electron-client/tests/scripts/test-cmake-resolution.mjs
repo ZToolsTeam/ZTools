@@ -140,7 +140,12 @@ test('CMake 查找覆盖路径优先级、标准安装目录、VS Build Tools �
       assert.ifError(result.error)
       assert.equal(result.status, 9, result.stdout + result.stderr)
       assert.match(result.stderr, /bad option: -S/)
-      for (const output of ['win32-ia32/ZToolsNativeHost32.exe', 'service-win32-ia32/ZToolsService.exe']) {
+      for (const output of [
+        'win32-ia32/ZToolsNativeHost32.exe',
+        'service-win32-ia32/ZToolsService.exe',
+        'test-win32-ia32/ZToolsNativeHost32.exe',
+        'test-win32-ia32/ZToolsService.exe'
+      ]) {
         assert.equal(fs.existsSync(path.join(f.root, 'client', 'out', 'native', output)), false)
       }
     })

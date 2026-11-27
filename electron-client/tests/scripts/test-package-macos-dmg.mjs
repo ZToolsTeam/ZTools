@@ -209,6 +209,31 @@ test('公证成功：签名 → 提交公证 → staple → Gatekeeper 验证，
   } finally { s.cleanup() }
 })
 
+test('DMG stapler 遇 CloudKit 票据传播延迟（退出码 65）自动重试并成功写入票据', () => {
+  const s = sandbox()
+  try {
+    const app = fixtureApp(s.root)
+    const output = path.join(s.root, 'ZTools.dmg')
+    const base = notaryExec()
+    const sleeps = []
+    let stapleAttempts = 0
+    const exec = (cmd, args) => {
+      if (path.basename(cmd) === 'xcrun' && args[0] === 'stapler' && args[1] === 'staple' && ++stapleAttempts === 1) {
+        throw Object.assign(new Error('CloudKit record not found'), { status: 65 })
+      }
+      return base.exec(cmd, args)
+    }
+    const result = createMacDmg(
+      { app, output, signIdentity: IDENTITY, notaryProfile: 'ztools-notary' },
+      { platform: 'darwin', exec, tmpdir: () => s.tmp, log: () => {}, sleep: (ms) => sleeps.push(ms), stapleMaxAttempts: 3, stapleRetryDelayMs: 3000 }
+    )
+    assert.equal(result.dmgNotarized, true)
+    assert.equal(stapleAttempts, 2)
+    assert.deepEqual(sleeps, [3000])
+    assert.equal(fs.readFileSync(output, 'utf8'), 'fake-dmg+ticket')
+  } finally { s.cleanup() }
+})
+
 test('[破坏性] 公证未通过、notarytool 非 0 退出、返回畸形、staple 或 Gatekeeper 失败：删除半成品，不写校验文件', () => {
   const cases = [
     [{ status: 'Invalid' }, /NOTARY_NOT_ACCEPTED[\s\S]*Invalid[\s\S]*secure timestamp/],

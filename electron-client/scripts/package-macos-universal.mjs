@@ -11,6 +11,7 @@ import { validateMacBundleVersions } from './macos-bundle-version.mjs'
 import { buildMacClipboard } from './build-macos-clipboard.mjs'
 import { buildMacVision } from './build-macos-vision.mjs'
 import { buildMacPathAccess } from './build-macos-path-access.mjs'
+import { buildMacosIndexerSidecar } from './build-sidecars.mjs'
 import { compareOsVersions } from './macos-minimum-os.mjs'
 import { extractFile, uncache } from '@electron/asar'
 import { packager } from '@electron/packager'
@@ -409,6 +410,10 @@ export async function stageMacUniversal({
   buildDisplayNative = buildMacDisplay,
   buildNetworkNative = buildMacNetwork,
   buildHotkeysNative = buildMacHotkeys,
+  buildIndexerNative = ({ outputRoot: indexerOutRoot, minimumOs: minOs }) => buildMacosIndexerSidecar(
+    path.join(root, 'native', 'ztools-indexer'),
+    { outputDir: path.join(indexerOutRoot, 'native'), minimumOs: minOs, universal: true }
+  ),
   platform = process.platform,
   sourceRoot = root,
   sourcePackage = packageJson,
@@ -458,6 +463,7 @@ export async function stageMacUniversal({
   const startupNative = await buildStartupNative({ outputRoot: path.join(outputRoot, 'startup-native-build'), minimumOs })
   const displayNative = await buildDisplayNative({ outputRoot: path.join(outputRoot, 'display-native-build'), minimumOs })
   const networkNative = await buildNetworkNative({ outputRoot: path.join(outputRoot, 'network-native-build'), minimumOs })
+  const indexerNative = await buildIndexerNative({ outputRoot: path.join(outputRoot, 'indexer-native-build'), minimumOs })
 
   const options = createMacUniversalPackagerOptions({
     sourceRoot,
@@ -530,11 +536,17 @@ export async function stageMacUniversal({
   fsApi.copyFileSync(displayNative.executable, displayHelperPath, fs.constants.COPYFILE_EXCL)
   fsApi.chmodSync(displayHelperPath, 0o755)
   fsApi.copyFileSync(displayNative.notice, path.join(nativeDestination, 'ZToolsMacDisplay.NOTICE.md'), fs.constants.COPYFILE_EXCL)
+  const indexerExecutable = indexerNative?.executable || indexerNative?.exePath
+  const indexerStats = fsApi.lstatSync(indexerExecutable)
+  if (!indexerStats.isFile() || indexerStats.isSymbolicLink()) throw new Error('INVALID_MAC_INDEXER_HELPER')
+  const indexerHelperPath = path.join(nativeDestination, 'ztools-indexer')
+  fsApi.copyFileSync(indexerExecutable, indexerHelperPath, fs.constants.COPYFILE_EXCL)
+  fsApi.chmodSync(indexerHelperPath, 0o755)
   createNetworkBundle({ executable: networkNative.executable, bundlePath: path.join(appBundlePath, NETWORK_HELPER_BUNDLE),
     bundleId: networkBundleId(validatedBundleId), minimumOs, fsApi })
   const verification = verifyBundle({ bundlePath: appBundlePath, minimumOs })
   if (!verification?.machoFiles?.includes(NETWORK_HELPER_EXECUTABLE)) throw new Error('REQUIRED_MAC_HELPER_MACHO_MISSING')
-  for (const helper of ['ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision', 'ZToolsMacAudio', 'ZToolsMacInputLock', 'ZToolsMacDns', 'ZToolsMacHosts', 'ZToolsMacHotkeys', 'ZToolsMacStartup', 'ZToolsMacDisplay']) {
+  for (const helper of ['ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision', 'ZToolsMacAudio', 'ZToolsMacInputLock', 'ZToolsMacDns', 'ZToolsMacHosts', 'ZToolsMacHotkeys', 'ZToolsMacStartup', 'ZToolsMacDisplay', 'ztools-indexer']) {
     if (!Array.isArray(verification?.machoFiles) || !verification.machoFiles.includes(`Contents/Resources/native/${helper}`)) {
       throw new Error('REQUIRED_MAC_HELPER_MACHO_MISSING')
     }

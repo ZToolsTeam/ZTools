@@ -1,4 +1,5 @@
 import { SniffedLocalProvider, SniffResult, ModelProviderConfig, SniffOptions } from '../types/ai.js';
+import { validateLoopbackUrl } from '../security/url-guard.js';
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
@@ -14,13 +15,28 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
 }
 
 /**
- * 自动嗅探本地运行的 Ollama 服务
+ * 自动嗅探本地运行的 Ollama 服务（严格限制仅限回环地址，防止 SSRF）
  */
 export async function sniffOllama(
   baseUrl: string = 'http://127.0.0.1:11434',
   timeoutMs: number = 1500
 ): Promise<SniffedLocalProvider> {
   const normalizedUrl = baseUrl.replace(/\/+$/, '');
+
+  // 发起网络探测前先执行严格的回环地址校验，非回环地址直接拒绝且不发任何网络请求
+  try {
+    validateLoopbackUrl(normalizedUrl);
+  } catch (err: unknown) {
+    return {
+      type: 'ollama',
+      url: normalizedUrl,
+      online: false,
+      latencyMs: 0,
+      models: [],
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
+
   const startTime = Date.now();
 
   try {
@@ -55,8 +71,8 @@ export async function sniffOllama(
         const vData = await vRes.json() as { version?: string };
         version = vData.version;
       }
-    } catch {
-      // 忽略版本探测次要异常
+    } catch (versionErr: unknown) {
+      void versionErr;
     }
 
     return {
@@ -67,7 +83,7 @@ export async function sniffOllama(
       latencyMs,
       models
     };
-  } catch (err) {
+  } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
     const errorMsg = err instanceof Error ? err.message : String(err);
     return {
@@ -82,13 +98,28 @@ export async function sniffOllama(
 }
 
 /**
- * 自动嗅探本地运行的 LM Studio 服务 (OpenAI 兼容端点)
+ * 自动嗅探本地运行的 LM Studio 服务 (OpenAI 兼容端点，严格限制仅限回环地址)
  */
 export async function sniffLMStudio(
   baseUrl: string = 'http://127.0.0.1:1234',
   timeoutMs: number = 1500
 ): Promise<SniffedLocalProvider> {
   const normalizedUrl = baseUrl.replace(/\/+$/, '');
+
+  // 发起网络探测前先执行严格的回环地址校验，非回环地址直接拒绝且不发任何网络请求
+  try {
+    validateLoopbackUrl(normalizedUrl);
+  } catch (err: unknown) {
+    return {
+      type: 'lmstudio',
+      url: normalizedUrl,
+      online: false,
+      latencyMs: 0,
+      models: [],
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
+
   const startTime = Date.now();
 
   try {
@@ -121,7 +152,7 @@ export async function sniffLMStudio(
       latencyMs,
       models
     };
-  } catch (err) {
+  } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
     const errorMsg = err instanceof Error ? err.message : String(err);
     return {

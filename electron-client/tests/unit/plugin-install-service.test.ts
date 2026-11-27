@@ -172,6 +172,14 @@ function nativePluginZip(version: string): Buffer {
   ])
 }
 
+// 仅用于测试 ZIP 事务、备份回滚与锁生命周期（与签名验签正交）的测试替身；
+// 生产环境与签名安全测试严禁绕过原生信任根校验。
+const stubNativeTrustVerifier = {
+  verifyInstallDirectory() {
+    return { verified: true as const, mode: 'legacy-frozen' as const, matchedEntries: [] }
+  }
+}
+
 function createPublisher(events: PublishedEvent[]): {
   publishHostToMain(type: string, payload: unknown): { success: true; delivered: number }
 } {
@@ -254,7 +262,8 @@ for (const failure of ['none', 'hash', 'host-hash', 'machine', 'unknown-machine'
     const root = runtimeRoot('payload-zip-' + failure), events: PublishedEvent[] = []
     let archive = pluginZip('1.0.0', [], { targets: [{ id: 'win-x64', platform: 'windows', runtime: 'electron', arch: 'x64' }], nativeComponents: [] })
     const service = new PluginInstallService(root, createPublisher(events), {
-      runtimeTarget: windowsX64Electron, fetchImpl: (async () => response(archive)) as typeof fetch
+      runtimeTarget: windowsX64Electron, fetchImpl: (async () => response(archive)) as typeof fetch,
+      nativeTrustVerifier: stubNativeTrustVerifier
     })
     context.after(async () => { await service.stop() })
     await service.startInstall(installParams(archive, '1.0.0'), false); await service.waitForIdle()
@@ -334,6 +343,7 @@ test(`Windows payload staging ${tamper} after backup restores the old installati
   let tampered = false
   const service = new PluginInstallService(root, createPublisher(events), {
     runtimeTarget: windowsX64Electron, fetchImpl: (async () => response(archive)) as typeof fetch,
+    nativeTrustVerifier: stubNativeTrustVerifier,
     async renameImpl(source, destination) {
       await fs.rename(source, destination)
       if (String(destination).includes('.plugin.test.backup-')) {
@@ -367,7 +377,8 @@ test(`Windows payload staging ${tamper} after backup restores the old installati
 test('Windows payload runtime admission does not rehash model contents on each manifest lookup', async context => {
   const root = runtimeRoot('payload-runtime-lightweight'), events: PublishedEvent[] = [], archive = payloadPackage('1.0.0')
   const service = new PluginInstallService(root, createPublisher(events), {
-    runtimeTarget: windowsX64Electron, fetchImpl: (async () => response(archive)) as typeof fetch
+    runtimeTarget: windowsX64Electron, fetchImpl: (async () => response(archive)) as typeof fetch,
+    nativeTrustVerifier: stubNativeTrustVerifier
   })
   context.after(async () => { await service.stop() })
   await service.startInstall(installParams(archive, '1.0.0'), false); await service.waitForIdle()
@@ -640,7 +651,8 @@ test('installs and updates a legacy Windows DLL package after verifying its arch
   let body = nativePluginZip('1.0.0')
   const service = new PluginInstallService(root, createPublisher([]), {
     fetchImpl: (async () => response(body)) as typeof fetch,
-    runtimeTarget: windowsIa32Electron
+    runtimeTarget: windowsIa32Electron,
+    nativeTrustVerifier: stubNativeTrustVerifier
   })
   context.after(async () => {
     await service.stop()
@@ -812,7 +824,8 @@ test('manifest readers overlap while maintenance waits for every reader to finis
   const archive = nativePluginZip('1.0.0')
   const service = new PluginInstallService(root, createPublisher([]), {
     fetchImpl: (async () => response(archive)) as typeof fetch,
-    runtimeTarget: windowsIa32Electron
+    runtimeTarget: windowsIa32Electron,
+    nativeTrustVerifier: stubNativeTrustVerifier
   })
   context.after(async () => {
     await service.stop()
@@ -1437,6 +1450,7 @@ test('install terminal is correlated and native replacement is released before n
   }, {
     runtimeTarget: windowsIa32Electron,
     fetchImpl: (async () => response(archive)) as typeof fetch,
+    nativeTrustVerifier: stubNativeTrustVerifier,
     preparePluginReplace: async () => () => { released = true }
   })
   context.after(async () => { await service.stop() })
@@ -1659,4 +1673,130 @@ test('list() normalizes legacy Chinese category labels to canonical categoryId s
   const explicitItem = listed.data.find((item) => item.id === 'explicit.cat')
   assert.deepEqual(legacyItem?.categoryId, ['system', 'files'])
   assert.equal(explicitItem?.categoryId, 'developer')
+})
+
+test('installs signed native plugin by prefetching signedCommonLibs concurrently with library progress and fails atomically on prefetch error', async (context) => {
+  const root = runtimeRoot('plugin-signed-commonlibs-prefetch')
+  const dllBytes = fixturePe('ia32', true)
+  const manifest = {
+    id: 'video-downloader',
+    name: '视频下载',
+    version: '2.1.0',
+    entry: 'index.html',
+    dllloader: 'lib/VideoDownloaderPlugin.dll',
+    requireAdmin: false,
+    commonLibs: [],
+    targets: [{ id: 'windows-electron-x64', platform: 'windows', runtime: 'electron', arch: 'x64' }],
+    nativeComponents: [{
+      id: 'video-downloader-plugin',
+      kind: 'dll',
+      targetId: 'windows-electron-x64',
+      arch: 'ia32',
+      abi: 'ztools-native-host/v1',
+      entry: 'lib/VideoDownloaderPlugin.dll',
+      protocolVersion: 1,
+      sha256: sha256(dllBytes),
+      payloadFiles: []
+    }]
+  }
+  const archive = createZip([
+    { name: 'plugin.json', data: JSON.stringify(manifest) },
+    { name: 'index.html', data: '<h1>video</h1>' },
+    { name: 'lib/VideoDownloaderPlugin.dll', data: dllBytes }
+  ])
+
+  const events: PublishedEvent[] = []
+  const startedTools: string[] = []
+  let activeCount = 0
+  let maxConcurrency = 0
+  let shouldFailPrefetch = false
+
+  const releaseGates: Array<() => void> = []
+  const service = new PluginInstallService(root, createPublisher(events), {
+    runtimeTarget: windowsX64Electron,
+    fetchImpl: (async () => response(archive)) as typeof fetch,
+    nativeTrustVerifier: {
+      verifyInstallDirectory: () => ({ mode: 'signed-v1', pluginId: 'video-downloader' }) as never,
+      resolveVerifiedCommonLibs: () => ['stream-downloader-2026.1.0', 'media-toolkit-7.1.0']
+    },
+    ensureSignedCommonLib: async (toolId, _signal, onProgress) => {
+      startedTools.push(toolId)
+      activeCount += 1
+      maxConcurrency = Math.max(maxConcurrency, activeCount)
+      onProgress?.({ toolId, stage: 'fetching-catalog', percent: 0 })
+      onProgress?.({ toolId, stage: 'downloading', percent: 50 })
+      await new Promise<void>((resolve) => {
+        releaseGates.push(resolve)
+        if (releaseGates.length >= 2) {
+          for (const gate of releaseGates.splice(0)) gate()
+        }
+      })
+      activeCount -= 1
+      if (shouldFailPrefetch && toolId === 'media-toolkit-7.1.0') {
+        throw new ZToolsError(errorCodes.networkError, 'CDN unreachable for media-toolkit-7.1.0')
+      }
+      onProgress?.({ toolId, stage: 'verifying', percent: 99 })
+    }
+  })
+
+  context.after(async () => {
+    await service.stop()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  // 1. 正常安装：并发预拉取两个 signedCommonLibs 并上报 library 进度
+  await service.startInstall({
+    pluginId: 'video-downloader',
+    url: 'https://cdn.example/video-downloader-2.1.0.zip',
+    version: '2.1.0',
+    checksum: sha256(archive),
+    fileSize: archive.length
+  }, false)
+  await service.waitForIdle()
+
+  assert.deepEqual([...startedTools].sort(), ['media-toolkit-7.1.0', 'stream-downloader-2026.1.0'])
+  assert.equal(maxConcurrency, 2, '安装期多个 signedCommonLibs 应并发预拉取')
+  const libProgressEvents = events.filter((e) => e.type === 'plugin_download_progress' && e.payload.phase === 'library')
+  assert.ok(libProgressEvents.length >= 2, '应推送 phase=library 的预拉取进度事件')
+  assert.equal(libProgressEvents[0]?.payload.libTotal, 2)
+  assert.equal(libProgressEvents.at(-1)?.payload.percent, 100)
+  const completeEvent = events.find((e) => e.type === 'plugin_install_complete')
+  assert.equal(completeEvent?.payload.success, true)
+
+  // 2. 预拉取失败时事务必须回滚且不落盘新目录
+  const rootFail = runtimeRoot('plugin-signed-commonlibs-prefetch-fail')
+  const failEvents: PublishedEvent[] = []
+  shouldFailPrefetch = true
+  const failService = new PluginInstallService(rootFail, createPublisher(failEvents), {
+    runtimeTarget: windowsX64Electron,
+    fetchImpl: (async () => response(archive)) as typeof fetch,
+    nativeTrustVerifier: {
+      verifyInstallDirectory: () => ({ mode: 'signed-v1', pluginId: 'video-downloader' }) as never,
+      resolveVerifiedCommonLibs: () => ['stream-downloader-2026.1.0', 'media-toolkit-7.1.0']
+    },
+    ensureSignedCommonLib: async (toolId, _signal, onProgress) => {
+      onProgress?.({ toolId, stage: 'downloading', percent: 40 })
+      if (toolId === 'media-toolkit-7.1.0') {
+        throw new ZToolsError(errorCodes.networkError, 'CDN unreachable for media-toolkit-7.1.0')
+      }
+    }
+  })
+  context.after(async () => {
+    await failService.stop()
+    await fs.rm(rootFail, { recursive: true, force: true })
+  })
+
+  await failService.startInstall({
+    pluginId: 'video-downloader',
+    url: 'https://cdn.example/video-downloader-2.1.0.zip',
+    version: '2.1.0',
+    checksum: sha256(archive),
+    fileSize: archive.length
+  }, false)
+  await failService.waitForIdle()
+
+  const failComplete = failEvents.find((e) => e.type === 'plugin_install_complete')
+  assert.equal(failComplete?.payload.success, false)
+  assert.equal(failComplete?.payload.errorCode, errorCodes.networkError)
+  await assert.rejects(() => fs.access(path.join(rootFail, 'Plugins', 'video-downloader')))
 })

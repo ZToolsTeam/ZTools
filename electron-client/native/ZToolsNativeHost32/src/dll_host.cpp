@@ -2,6 +2,7 @@
 
 #include "protocol.hpp"
 #include "../../shared/dll_cancel.hpp"
+#include "../../shared/dll_paths.hpp"
 
 #include <Windows.h>
 #include <objbase.h>
@@ -159,21 +160,6 @@ bool IsValidUtf8(std::string_view value) {
     nullptr, 0) > 0;
 }
 
-bool IsSafeFunctionName(std::string_view value) {
-  if (value.empty() || value.size() > kMaxFunctionNameBytes) return false;
-  for (std::size_t index = 0; index < value.size(); ++index) {
-    const unsigned char character = static_cast<unsigned char>(value[index]);
-    const bool alpha = (character >= 'a' && character <= 'z') ||
-      (character >= 'A' && character <= 'Z');
-    const bool digit = character >= '0' && character <= '9';
-    if (!(alpha || digit || character == '_' || character == '-' || character == '.') ||
-        (index == 0 && !alpha && character != '_')) {
-      return false;
-    }
-  }
-  return true;
-}
-
 bool CopyRequiredUtf8(const char* value, std::size_t maximum, std::string& output) {
   if (value == nullptr) return false;
   const std::size_t length = strnlen_s(value, maximum + 1);
@@ -202,7 +188,7 @@ bool CopyPluginInfo(const DllPluginInfo* source, PluginInfoCopy& output) {
     if (index == kMaxFunctionCount) return false;
     std::string name;
     if (!CopyRequiredUtf8(function, kMaxFunctionNameBytes, name) ||
-        !IsSafeFunctionName(name) || !unique_functions.insert(name).second) {
+        !dll_paths::IsSafeIdentifier(name, true) || !unique_functions.insert(name).second) {
       return false;
     }
     output.function_names.push_back(std::move(name));
@@ -904,7 +890,11 @@ struct DllHost::Session : std::enable_shared_from_this<DllHost::Session> {
   std::string plugin_id;
   std::string dll_id;
   std::wstring path;
-  HANDLE validation_handle = INVALID_HANDLE_VALUE;
+  bool restrict_functions = true;
+  std::set<std::string> allowed_functions;
+  // 会话期间锁定的全部 PE 文件句柄（main / dependency / helper，不含 .json / .sig）
+  std::mutex locked_handles_mutex_;
+  std::vector<HANDLE> locked_handles;
   HMODULE module = nullptr;
   bool initialized = false;
   InitFunction init = nullptr;
@@ -924,7 +914,22 @@ struct DllHost::Session : std::enable_shared_from_this<DllHost::Session> {
 
   ~Session() { Reset(); }
 
+  void CloseLockedHandles() noexcept {
+    // 先在锁内交换出句柄列表，再于锁外逐个 CloseHandle，杜绝并发数据竞争与双重关闭
+    std::vector<HANDLE> to_close;
+    {
+      std::lock_guard lock(locked_handles_mutex_);
+      to_close.swap(locked_handles);
+    }
+    for (HANDLE handle : to_close) {
+      if (handle != INVALID_HANDLE_VALUE && handle != nullptr) {
+        CloseHandle(handle);
+      }
+    }
+  }
+
   void Reset() noexcept {
+    bool skip_destroy = false;
     {
       std::lock_guard lock(lifecycle_mutex);
       if (unload_state != SessionUnloadState::Loaded &&
@@ -932,12 +937,12 @@ struct DllHost::Session : std::enable_shared_from_this<DllHost::Session> {
         // Keep a failed or unfinished plugin mapped until process teardown.
         initialized = false;
         module = nullptr;
-        if (validation_handle != INVALID_HANDLE_VALUE && validation_handle != nullptr) {
-          CloseHandle(validation_handle);
-          validation_handle = INVALID_HANDLE_VALUE;
-        }
-        return;
+        skip_destroy = true;
       }
+    }
+    if (skip_destroy) {
+      CloseLockedHandles();
+      return;
     }
     if (initialized && destroy != nullptr) {
       try {
@@ -951,10 +956,7 @@ struct DllHost::Session : std::enable_shared_from_this<DllHost::Session> {
       FreeLibrary(module);
       module = nullptr;
     }
-    if (validation_handle != INVALID_HANDLE_VALUE && validation_handle != nullptr) {
-      CloseHandle(validation_handle);
-      validation_handle = INVALID_HANDLE_VALUE;
-    }
+    CloseLockedHandles();
   }
 
   SessionUnloadState State() const {
@@ -963,15 +965,14 @@ struct DllHost::Session : std::enable_shared_from_this<DllHost::Session> {
   }
 
   void AbandonUnsafe() noexcept {
-    std::lock_guard lock(lifecycle_mutex);
-    if (unload_state == SessionUnloadState::Unloaded) return;
-    unload_state = SessionUnloadState::FailedPermanent;
-    initialized = false;
-    module = nullptr;
-    if (validation_handle != INVALID_HANDLE_VALUE && validation_handle != nullptr) {
-      CloseHandle(validation_handle);
-      validation_handle = INVALID_HANDLE_VALUE;
+    {
+      std::lock_guard lock(lifecycle_mutex);
+      if (unload_state == SessionUnloadState::Unloaded) return;
+      unload_state = SessionUnloadState::FailedPermanent;
+      initialized = false;
+      module = nullptr;
     }
+    CloseLockedHandles();
   }
 
   SessionUnloadState WaitUntil(std::chrono::steady_clock::time_point deadline) {
@@ -1053,11 +1054,7 @@ struct DllHost::Session : std::enable_shared_from_this<DllHost::Session> {
           }
           session->module = nullptr;
         }
-        if (session->validation_handle != INVALID_HANDLE_VALUE &&
-            session->validation_handle != nullptr) {
-          CloseHandle(session->validation_handle);
-          session->validation_handle = INVALID_HANDLE_VALUE;
-        }
+        session->CloseLockedHandles();
         finish(SessionUnloadState::Unloaded);
       }).detach();
     } catch (...) {
@@ -1369,33 +1366,66 @@ DllHostResult DllHost::ResolveSession(
   if (stopping_.load(std::memory_order_acquire)) {
     return Failure("HOST_STOPPING", "native dll host is stopping");
   }
-  DllResolveResult resolution = manifest_.Resolve(plugin_id, dll_id, function_name);
-  if (!resolution.success) return Failure(resolution.code, resolution.message);
 
+  // 会话已建立时复用已缓存的解析结果与函数白名单，不再重复计算全文件哈希（§3.7）
   const std::string key = SessionKey(plugin_id, dll_id);
   const auto existing = sessions_.find(key);
   if (existing != sessions_.end()) {
-    if (!SamePath(existing->second->path, resolution.path)) {
-      return Failure("DLL_IDENTITY_CHANGED", "loaded dll path no longer matches the trusted manifest");
-    }
     if (existing->second->State() != SessionUnloadState::Loaded) {
       return Failure("DLL_BUSY", "dll is stopping or unloading");
+    }
+    if (function_name.has_value()) {
+      if (!dll_paths::IsSafeIdentifier(*function_name, true)) {
+        return Failure("INVALID_REQUEST", "function identifier is invalid");
+      }
+      if (existing->second->restrict_functions &&
+          !existing->second->allowed_functions.contains(*function_name)) {
+        return Failure("FUNCTION_NOT_ALLOWED", "requested function is not in session allowlist");
+      }
     }
     session = existing->second.get();
     return Success({});
   }
 
+  DllResolveResult resolution = manifest_.Resolve(plugin_id, dll_id, function_name);
+  if (!resolution.success) return Failure(resolution.code, resolution.message);
+
   auto candidate = std::make_shared<Session>();
   candidate->plugin_id = plugin_id;
   candidate->dll_id = dll_id;
   candidate->path = std::move(resolution.path);
-  candidate->validation_handle = resolution.validation_handle;
-  resolution.validation_handle = INVALID_HANDLE_VALUE;
+  candidate->restrict_functions = resolution.restrict_functions;
+  candidate->allowed_functions = std::move(resolution.allowed_functions);
+  {
+    std::lock_guard lock(candidate->locked_handles_mutex_);
+    candidate->locked_handles = std::move(resolution.locked_handles);
+  }
+  resolution.locked_handles.clear();
   candidate->module = LoadLibraryExW(
     candidate->path.c_str(), nullptr,
     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
   if (candidate->module == nullptr) {
     return Failure("DLL_LOAD_FAILED", "trusted dll could not be loaded");
+  }
+
+  // 加载后执行 GetModuleFileNameW 回读比对，与服务端保持一致（§3.7）
+  std::vector<wchar_t> module_buf(512);
+  std::wstring loaded_path;
+  bool read_ok = false;
+  while (module_buf.size() <= 32768) {
+    SetLastError(ERROR_SUCCESS);
+    const DWORD length = GetModuleFileNameW(
+      candidate->module, module_buf.data(), static_cast<DWORD>(module_buf.size()));
+    if (length == 0) break;
+    if (length < module_buf.size() - 1 || GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+      loaded_path.assign(module_buf.data(), length);
+      read_ok = true;
+      break;
+    }
+    module_buf.resize(module_buf.size() * 2);
+  }
+  if (!read_ok || !SamePath(candidate->path, loaded_path)) {
+    return Failure("DLL_IDENTITY_CHANGED", "loaded module path differs from validated path");
   }
 
   candidate->init = reinterpret_cast<InitFunction>(
@@ -1457,7 +1487,7 @@ DllHostResult DllHost::Call(
   const std::string& function_name,
   const std::vector<std::uint8_t>& params_json) {
   try {
-    if (!IsSafeFunctionName(function_name) || params_json.empty() ||
+    if (!dll_paths::IsSafeIdentifier(function_name, true) || params_json.empty() ||
         params_json.size() > kMaxPayloadBytes - kAbiEnvelopeBytes ||
         std::find(params_json.begin(), params_json.end(), 0) != params_json.end()) {
       return Failure("INVALID_REQUEST", "dll call function or JSON payload is invalid");
@@ -1513,7 +1543,7 @@ DllHostResult DllHost::StartTask(
   const std::vector<std::uint8_t>& params_json,
   bool callback_mode) {
   try {
-    if (!IsSafeTaskId(task_id) || !IsSafeFunctionName(function_name) ||
+    if (!IsSafeTaskId(task_id) || !dll_paths::IsSafeIdentifier(function_name, true) ||
         params_json.empty() || params_json.size() > kMaxPayloadBytes - kAbiEnvelopeBytes ||
         std::find(params_json.begin(), params_json.end(), 0) != params_json.end()) {
       return Failure("INVALID_REQUEST", "dll task identifier, function, or JSON payload is invalid");

@@ -27,6 +27,8 @@ export interface TrayControllerState {
 
 export interface TrayControllerOptions extends TrayControllerState {
   icon: Electron.NativeImage
+  /** 托盘悬停提示文案（默认 ZTools，开发隔离态可传 ZTools [DEV]） */
+  toolTip?: string
   /** 打开主工作台窗口 (Dashboard) */
   showMainWindow(): void
   /** 左键单击托盘时的切换动作（未传则回退到 showMainWindow） */
@@ -178,7 +180,7 @@ export class TrayController {
     this.#stopped = false
     const createTray = this.options.deps?.createTray ?? ((img) => new Tray(img))
     const tray = createTray(icon)
-    tray.setToolTip('ZTools')
+    tray.setToolTip(this.options.toolTip?.trim() || 'ZTools')
     this.#tray = tray
     this.#rebuildContextMenu()
 

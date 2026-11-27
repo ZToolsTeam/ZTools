@@ -1,5 +1,4 @@
 import { packager } from '@electron/packager'
-import { nativeDllSourceRoot, readNativeHostManifest } from './native-host-manifest.mjs'
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -9,13 +8,17 @@ import {
   createWindowsApplicationManifest,
   createWindowsPackagerOptions,
   getWindowsArtifactRoot,
+  loadWindowsNativeTrustBundle,
+  NATIVE_TRUST_RESOURCE_FILES,
   OCR_MODEL_RESOURCE_DIRECTORY,
   resolveWindowsNativeSidecarSources,
+  REVOKED_DEV_NATIVE_TRUST_KEY_IDS,
   stageWindowsNativeSidecars,
   WINDOWS_CLASSIC_LEVEL_VERSION,
   WINDOWS_ELECTRON_VERSION,
   WINDOWS_ONNXRUNTIME_WEB_VERSION
 } from './windows-package-contract.mjs'
+import { hasCommercialMainSource } from './edition-output.mjs'
 import { ensureOcrModels } from './fetch-ocr-models.mjs'
 import { stageWindowsPathAccessBroker } from './windows-path-access-broker.mjs'
 import { assertWindowsExecutableBranding } from './windows-executable-branding.mjs'
@@ -32,55 +35,11 @@ const outputRoot = getWindowsArtifactRoot(root, artifactVersion)
 const nativeHostSource = path.join(root, 'out', 'native', 'win32-ia32', 'ZToolsNativeHost32.exe')
 const serviceSource = path.join(root, 'out', 'native', 'service-win32-ia32', 'ZToolsService.exe')
 const pathAccessBrokerSource = path.join(root, 'out', 'native', 'win32-x64', 'bin', 'ZToolsPathAccessBroker.exe')
-// 特权 DLL 与 NativeHost32 受信 DLL 共用唯一构建来源（DLLPlugins/outputs），不读取旧版运行时目录 bin/Data/Plugins
-const pluginSourceRoot = nativeDllSourceRoot(root)
-const privilegedManifestSource = path.join(
-  root,
-  'resources',
-  'service',
-  'privileged-dlls-v1.xml'
-)
+const nativeTrustSourceDir = path.join(root, 'resources', 'native')
 // 应用图标随客户端仓库维护（resources/app/brand 为 SVG 源文件），不再依赖未纳入版本管理的旧 framework 目录
 const applicationIcon = path.join(root, 'resources', 'app', 'LOGO.ico')
 const retainedLocales = new Set(['en-US.pak', 'zh-CN.pak'])
-
-// 公开源码没有 DLLPlugins/outputs（商业 DLL 只在内部仓库）：只打包宿主，特权清单为空，ZToolsService 不加载任何特权 DLL
-const hostOnly = !fs.existsSync(pluginSourceRoot)
-
-function createEmptyPrivilegedManifest() {
-  return [
-    '<?xml version="1.0" encoding="utf-8"?>',
-    '<privilegedDllManifest version="1">',
-    '</privilegedDllManifest>',
-    ''
-  ].join('\n')
-}
-
-async function createPrivilegedManifest() {
-  if (hostOnly) return createEmptyPrivilegedManifest()
-  const { PRIVILEGED_DLL: privilegedDll } = await import('./privileged-dll-declaration.mjs')
-  const dllPath = path.join(
-    pluginSourceRoot,
-    privilegedDll.pluginId,
-    ...privilegedDll.path.split('/')
-  )
-  const stats = fs.lstatSync(dllPath)
-  if (!stats.isFile() || stats.isSymbolicLink()) {
-    throw new Error(`ZToolsService DLL 不是普通文件: ${dllPath}`)
-  }
-  const sha256 = createHash('sha256').update(fs.readFileSync(dllPath)).digest('hex')
-  return [
-    '<?xml version="1.0" encoding="utf-8"?>',
-    '<privilegedDllManifest version="1">',
-    `  <plugin id="${privilegedDll.pluginId}">`,
-    `    <dll id="${privilegedDll.dllId}" path="${privilegedDll.path}" sha256="${sha256}" arch="x86">`,
-    ...privilegedDll.functions.map((name) => `      <function name="${name}"/>`),
-    '    </dll>',
-    '  </plugin>',
-    '</privilegedDllManifest>',
-    ''
-  ].join('\n')
-}
+const isCommercialBuild = hasCommercialMainSource(root)
 
 function prunePackagedApplication(applicationPath) {
   const localesDirectory = path.join(applicationPath, 'locales')
@@ -117,22 +76,21 @@ if (!fs.existsSync(nativeHostSource)) throw new Error(`NativeHost32 产物不存
 if (!fs.existsSync(serviceSource)) throw new Error(`ZToolsService 产物不存在: ${serviceSource}`)
 if (!fs.existsSync(pathAccessBrokerSource)) throw new Error(`ZToolsPathAccessBroker 产物不存在: ${pathAccessBrokerSource}`)
 resolveWindowsNativeSidecarSources(root)
-if (!hostOnly && !fs.existsSync(privilegedManifestSource)) {
-  throw new Error(`ZToolsService 生产特权清单不存在: ${privilegedManifestSource}`)
-}
 if (!fs.existsSync(applicationIcon)) throw new Error(`应用图标不存在: ${applicationIcon}`)
-const nativeHostManifest = readNativeHostManifest(root)
+const nativeTrustBundle = loadWindowsNativeTrustBundle(nativeTrustSourceDir)
+for (const revokedId of REVOKED_DEV_NATIVE_TRUST_KEY_IDS) {
+  if (nativeTrustBundle.publicKeys.some((entry) => entry.keyId === revokedId)) {
+    throw new Error(`原生信任公钥表包含已作废开发密钥: ${revokedId}`)
+  }
+}
+if (
+  isCommercialBuild &&
+  !nativeTrustBundle.publicKeys.some((entry) => entry.usages.includes('native'))
+) {
+  throw new Error('商业构建必须至少包含一把 usage="native" 的原生信任公钥')
+}
 // 文字识别模型（约 21 MB）：下载并按固定 SHA-256 校验，缺失或不一致直接失败
 const ocrModelDirectory = await ensureOcrModels()
-const privilegedManifest = await createPrivilegedManifest()
-if (hostOnly) {
-  console.warn(`未找到商业 DLL 目录 ${pluginSourceRoot}，只打包宿主：特权 DLL 清单为空`)
-} else if (fs.readFileSync(privilegedManifestSource, 'utf8') !== privilegedManifest) {
-  throw new Error('ZToolsService 生产特权清单与当前 DLL 哈希或函数白名单不一致')
-}
-const privilegedManifestSha256 = createHash('sha256')
-  .update(Buffer.from(privilegedManifest, 'utf8'))
-  .digest('hex')
 
 const applicationPaths = await packager(createWindowsPackagerOptions({
   clientRoot: root,
@@ -174,26 +132,24 @@ for (const applicationPath of applicationPaths) {
   })
   console.log(`已打包原生侧车 (${stagedSidecars.length}): ${stagedSidecars.map((file) => path.basename(file)).join(', ')}`)
   const pathAccessBrokerSha256 = createHash('sha256').update(fs.readFileSync(pathAccessBroker)).digest('hex')
-  fs.writeFileSync(
-    path.join(nativeDirectory, '.ztools-native-host.xml'),
-    nativeHostManifest,
-    'utf8'
-  )
+  for (const trustFileName of NATIVE_TRUST_RESOURCE_FILES) {
+    const sourceEntry = nativeTrustBundle.files[trustFileName]
+    const destPath = path.join(nativeDirectory, trustFileName)
+    if (sourceEntry.exists) {
+      fs.copyFileSync(sourceEntry.filePath, destPath)
+    } else {
+      fs.writeFileSync(destPath, `${sourceEntry.text}\n`, 'utf8')
+    }
+  }
   const ocrDirectory = path.join(applicationPath, ...OCR_MODEL_RESOURCE_DIRECTORY.split('/'))
   fs.cpSync(ocrModelDirectory, ocrDirectory, { recursive: true })
-  const serviceDirectory = path.join(applicationPath, 'resources', 'service')
-  fs.mkdirSync(serviceDirectory, { recursive: true })
-  const packagedPrivilegedManifest = path.join(serviceDirectory, 'privileged-dlls-v1.xml')
-  // 只打包宿主时写入空清单（与 privilegedManifestSha256 对应），否则照旧复制已校验的源清单
-  if (hostOnly) fs.writeFileSync(packagedPrivilegedManifest, privilegedManifest, 'utf8')
-  else fs.copyFileSync(privilegedManifestSource, packagedPrivilegedManifest)
   fs.copyFileSync(serviceSource, path.join(applicationPath, 'ZToolsService.exe'))
   const manifest = createWindowsApplicationManifest({
     appVersion: packageJson.version,
     gitCommit,
     gitDirty,
     buildQualifier,
-    privilegedManifestSha256,
+    nativeTrust: nativeTrustBundle.metadata,
     pathAccessBrokerSha256
   })
   fs.writeFileSync(path.join(applicationPath, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')

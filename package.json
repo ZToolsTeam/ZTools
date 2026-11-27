@@ -1,12 +1,14 @@
 {
   "name": "ztools",
-  "version": "1.2.0.0",
+  "version": "1.3.0.0",
   "private": true,
   "description": "ZTools - 纯粹开源、免费极客、轻量宿主、极致性能的现代化双端效率中枢平台",
   "type": "module",
   "scripts": {
     "postinstall": "node scripts/dev-bootstrap.mjs --install-only",
     "dev": "node scripts/dev-bootstrap.mjs",
+    "dev:sync": "node scripts/dev-sandbox-sync.mjs",
+    "dev:reset": "node scripts/dev-sandbox-sync.mjs --reset",
     "start": "node scripts/dev-bootstrap.mjs",
     "start:rebuild": "node scripts/dev-bootstrap.mjs --force-build",
     "pretest": "node packages/declarative-ui/scripts/ensure-dist.mjs && node frontend/scripts/sync-bundled-plugins.mjs --ensure && npm --prefix packages/ai-mcp run build && npm --prefix packages/sync-crypto run build && node electron-client/node_modules/typescript/bin/tsc -p electron-client/tsconfig.json && node electron-client/scripts/build-sandbox-preload.mjs",

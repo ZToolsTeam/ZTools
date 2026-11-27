@@ -35,7 +35,11 @@ class UniqueHandle {
   }
   HANDLE Get() const { return value_; }
   bool Valid() const { return value_ != INVALID_HANDLE_VALUE && value_ != nullptr; }
-  HANDLE Release() {
+  void Reset(HANDLE value = INVALID_HANDLE_VALUE) noexcept {
+    if (value_ != INVALID_HANDLE_VALUE && value_ != nullptr) CloseHandle(value_);
+    value_ = value;
+  }
+  HANDLE Release() noexcept {
     const HANDLE value = value_;
     value_ = INVALID_HANDLE_VALUE;
     return value;
@@ -59,6 +63,65 @@ inline std::wstring LowerWide(std::wstring value) {
   return value;
 }
 
+inline bool SamePathOrdinal(std::wstring_view left, std::wstring_view right) noexcept {
+  return left.size() == right.size() &&
+    CompareStringOrdinal(
+      left.data(), static_cast<int>(left.size()),
+      right.data(), static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
+}
+
+inline bool ParseHexAscii(std::string_view value, std::span<std::uint8_t> output) noexcept {
+  if (value.size() != output.size() * 2) return false;
+  auto nibble = [](char character, std::uint8_t& result) noexcept {
+    if (character >= '0' && character <= '9') {
+      result = static_cast<std::uint8_t>(character - '0');
+      return true;
+    }
+    if (character >= 'a' && character <= 'f') {
+      result = static_cast<std::uint8_t>(character - 'a' + 10);
+      return true;
+    }
+    if (character >= 'A' && character <= 'F') {
+      result = static_cast<std::uint8_t>(character - 'A' + 10);
+      return true;
+    }
+    return false;
+  };
+  for (std::size_t index = 0; index < output.size(); ++index) {
+    std::uint8_t high = 0;
+    std::uint8_t low = 0;
+    if (!nibble(value[index * 2], high) || !nibble(value[index * 2 + 1], low)) return false;
+    output[index] = static_cast<std::uint8_t>((high << 4U) | low);
+  }
+  return true;
+}
+
+inline bool ParseHex(std::wstring_view value, std::span<std::uint8_t> output) noexcept {
+  if (value.size() != output.size() * 2) return false;
+  auto nibble = [](wchar_t character, std::uint8_t& result) noexcept {
+    if (character >= L'0' && character <= L'9') {
+      result = static_cast<std::uint8_t>(character - L'0');
+      return true;
+    }
+    if (character >= L'a' && character <= L'f') {
+      result = static_cast<std::uint8_t>(character - L'a' + 10);
+      return true;
+    }
+    if (character >= L'A' && character <= L'F') {
+      result = static_cast<std::uint8_t>(character - L'A' + 10);
+      return true;
+    }
+    return false;
+  };
+  for (std::size_t index = 0; index < output.size(); ++index) {
+    std::uint8_t high = 0;
+    std::uint8_t low = 0;
+    if (!nibble(value[index * 2], high) || !nibble(value[index * 2 + 1], low)) return false;
+    output[index] = static_cast<std::uint8_t>((high << 4U) | low);
+  }
+  return true;
+}
+
 inline bool NormalizeLocalRoot(std::wstring value, std::wstring& output) {
   std::replace(value.begin(), value.end(), L'/', L'\\');
   if (value.size() < 3 || value.size() > 32000 ||
@@ -74,6 +137,17 @@ inline bool NormalizeLocalRoot(std::wstring value, std::wstring& output) {
   output.assign(buffer.data(), length);
   while (output.size() > 3 && output.back() == L'\\') output.pop_back();
   return output.size() >= 3 && output[1] == L':' && output[2] == L'\\';
+}
+
+inline bool IsReservedSegment(std::wstring_view segment) {
+  const std::size_t dot = segment.find(L'.');
+  const std::wstring base = LowerWide(std::wstring(segment.substr(0, dot)));
+  if (base == L"con" || base == L"prn" || base == L"aux" || base == L"nul") return true;
+  if (base.size() == 4 && (base.starts_with(L"com") || base.starts_with(L"lpt")) &&
+      base[3] >= L'1' && base[3] <= L'9') {
+    return true;
+  }
+  return false;
 }
 
 inline bool IsSafeIdentifier(std::string_view value, bool function_name = false) {
@@ -112,11 +186,82 @@ inline bool Utf8ToWide(std::string_view value, std::wstring& output) {
     output.data(), length) == length;
 }
 
+inline bool WideToUtf8(std::wstring_view value, std::string& output) {
+  if (value.empty() || value.size() > static_cast<std::size_t>(INT_MAX)) return false;
+  const int length = WideCharToMultiByte(
+    CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()),
+    nullptr, 0, nullptr, nullptr);
+  if (length <= 0) return false;
+  output.resize(static_cast<std::size_t>(length));
+  return WideCharToMultiByte(
+    CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()),
+    output.data(), length, nullptr, nullptr) == length;
+}
+
 inline bool IsWithinRoot(const std::wstring& root, const std::wstring& target) {
   return target.size() > root.size() && target[root.size()] == L'\\' &&
     CompareStringOrdinal(
       root.data(), static_cast<int>(root.size()),
       target.data(), static_cast<int>(root.size()), TRUE) == CSTR_EQUAL;
+}
+
+// 校验插件内相对路径（支持 main/dependency 的 .dll 限制及 helper 的任意合法扩展名，并区分特权 lib/ 前缀）
+inline bool ValidateRelativePath(
+  const std::wstring& root,
+  const std::string& plugin_id,
+  const std::string& relative_path,
+  bool require_lib_prefix,
+  bool require_dll_extension,
+  std::wstring& target) {
+  if (!IsSafeIdentifier(plugin_id) || relative_path.empty() || relative_path.size() > 4096 ||
+      relative_path.front() == '/' || relative_path.find('\\') != std::string::npos ||
+      relative_path.find(':') != std::string::npos) {
+    return false;
+  }
+  for (const unsigned char ch : relative_path) {
+    if (ch < 0x20U || ch == 0x7fU || ch == '*' || ch == '?' || ch == '"' ||
+        ch == '<' || ch == '>' || ch == '|') {
+      return false;
+    }
+  }
+  std::wstring wide_path;
+  if (!Utf8ToWide(relative_path, wide_path)) return false;
+  std::vector<std::wstring> segments;
+  std::size_t offset = 0;
+  while (offset <= wide_path.size()) {
+    const std::size_t separator = wide_path.find(L'/', offset);
+    const std::wstring segment = wide_path.substr(
+      offset, separator == std::wstring::npos ? std::wstring::npos : separator - offset);
+    if (segment.empty() || segment == L"." || segment == L".." ||
+        segment.back() == L'.' || segment.back() == L' ' || IsReservedSegment(segment)) {
+      return false;
+    }
+    segments.push_back(segment);
+    if (separator == std::wstring::npos) break;
+    offset = separator + 1;
+  }
+  if (segments.empty()) return false;
+  if (require_lib_prefix) {
+    if (segments.size() < 2 || LowerWide(segments.front()) != L"lib") return false;
+  }
+  if (require_dll_extension) {
+    const std::wstring lower_file = LowerWide(segments.back());
+    if (!lower_file.ends_with(L".dll")) return false;
+  }
+
+  std::wstring wide_plugin;
+  if (!Utf8ToWide(plugin_id, wide_plugin)) return false;
+  std::wstring plugin_root = root + L"\\" + wide_plugin;
+  std::wstring combined = plugin_root;
+  for (const auto& segment : segments) combined += L"\\" + segment;
+  const DWORD required = GetFullPathNameW(combined.c_str(), 0, nullptr, nullptr);
+  if (required == 0 || required > 32767) return false;
+  std::vector<wchar_t> buffer(static_cast<std::size_t>(required) + 1);
+  const DWORD length = GetFullPathNameW(
+    combined.c_str(), static_cast<DWORD>(buffer.size()), buffer.data(), nullptr);
+  if (length == 0 || length >= buffer.size()) return false;
+  target.assign(buffer.data(), length);
+  return IsWithinRoot(plugin_root, target);
 }
 
 inline bool FinalHandleIsWithinRoot(HANDLE handle, const std::wstring& root) {
@@ -174,19 +319,26 @@ inline bool ReadExactAt(HANDLE file, std::uint64_t offset, std::span<std::uint8_
   return true;
 }
 
-inline std::uint16_t ReadU16(const std::uint8_t* value) {
+inline std::uint16_t ReadU16(const std::uint8_t* value) noexcept {
   return static_cast<std::uint16_t>(value[0]) |
     static_cast<std::uint16_t>(static_cast<std::uint16_t>(value[1]) << 8U);
 }
 
-inline std::uint32_t ReadU32(const std::uint8_t* value) {
+inline std::uint32_t ReadU32(const std::uint8_t* value) noexcept {
   return static_cast<std::uint32_t>(value[0]) |
     (static_cast<std::uint32_t>(value[1]) << 8U) |
     (static_cast<std::uint32_t>(value[2]) << 16U) |
     (static_cast<std::uint32_t>(value[3]) << 24U);
 }
 
-inline bool IsX86Pe(HANDLE file, std::uint64_t file_size) {
+// 解析 PE 架构与 DLL 标志，支持 I386 / AMD64 的 EXE、DLL 与 .sys 内核驱动
+inline bool PeMachineOf(
+  HANDLE file,
+  std::uint64_t file_size,
+  std::uint16_t& machine_out,
+  bool& is_dll_out) {
+  machine_out = 0;
+  is_dll_out = false;
   std::array<std::uint8_t, 64> dos{};
   if (file_size < dos.size() || !ReadExactAt(file, 0, dos) || ReadU16(dos.data()) != 0x5a4dU) return false;
   const std::uint32_t pe_offset = ReadU32(dos.data() + 0x3c);
@@ -200,10 +352,25 @@ inline bool IsX86Pe(HANDLE file, std::uint64_t file_size) {
   const std::uint16_t optional_magic = ReadU16(header.data() + 24);
   const std::uint64_t section_table_end = static_cast<std::uint64_t>(pe_offset) + 24U +
     optional_size + static_cast<std::uint64_t>(sections) * 40U;
-  return machine == IMAGE_FILE_MACHINE_I386 && sections > 0 && sections <= 96 &&
-    optional_size >= 96 && optional_magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC &&
-    (characteristics & IMAGE_FILE_EXECUTABLE_IMAGE) != 0 &&
-    (characteristics & IMAGE_FILE_DLL) != 0 && section_table_end <= file_size;
+  if (sections == 0 || sections > 96 || section_table_end > file_size) return false;
+  if ((characteristics & IMAGE_FILE_EXECUTABLE_IMAGE) == 0) return false;
+  if (machine == IMAGE_FILE_MACHINE_I386) {
+    if (optional_size < 96 || optional_magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) return false;
+  } else if (machine == IMAGE_FILE_MACHINE_AMD64) {
+    if (optional_size < 112 || optional_magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) return false;
+  } else {
+    return false;
+  }
+  machine_out = machine;
+  is_dll_out = (characteristics & IMAGE_FILE_DLL) != 0;
+  return true;
+}
+
+inline bool IsX86Pe(HANDLE file, std::uint64_t file_size) {
+  std::uint16_t machine = 0;
+  bool is_dll = false;
+  return PeMachineOf(file, file_size, machine, is_dll) &&
+    machine == IMAGE_FILE_MACHINE_I386 && is_dll;
 }
 
 inline bool OpenOrdinaryFile(
@@ -229,8 +396,21 @@ inline bool OpenOrdinaryFile(
   return true;
 }
 
+inline bool ReadFileBytes(
+  const std::wstring& path,
+  std::uint64_t maximum,
+  std::vector<std::uint8_t>& bytes,
+  UniqueHandle& handle) {
+  std::uint64_t size = 0;
+  if (!OpenOrdinaryFile(path, maximum, handle, size) ||
+      size > std::numeric_limits<std::size_t>::max()) {
+    return false;
+  }
+  bytes.resize(static_cast<std::size_t>(size));
+  return ReadExactAt(handle.Get(), 0, bytes);
+}
 
-// Resolve installed DLLs directly. There is no trust manifest or function allowlist.
+// 递归唯一性路径检查（第二道路径闸门，用于普通宿主双闸复核与冻结表兜底）
 template<class Result>
 Result Resolve(const std::wstring& configured_root, const std::string& plugin_id,
                const std::string& dll_id, const std::optional<std::string>& function_name) {

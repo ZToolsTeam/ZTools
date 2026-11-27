@@ -202,7 +202,49 @@ int CheckCurrentProcessPseudoHandle() {
   return 2;
 }
 
+class ScopedDisableDebugPrivilege final {
+ public:
+  ScopedDisableDebugPrivilege() {
+    HANDLE raw_token = nullptr;
+    if (OpenProcessToken(
+            GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &raw_token) == FALSE) {
+      return;
+    }
+    token_.reset(raw_token);
+    LUID luid{};
+    if (LookupPrivilegeValueW(nullptr, SE_DEBUG_NAME, &luid) == FALSE) {
+      return;
+    }
+    TOKEN_PRIVILEGES disable{};
+    disable.PrivilegeCount = 1;
+    disable.Privileges[0].Luid = luid;
+    disable.Privileges[0].Attributes = 0;
+    DWORD previous_size = sizeof(previous_);
+    if (AdjustTokenPrivileges(
+            token_.get(), FALSE, &disable, sizeof(disable), &previous_, &previous_size) != FALSE &&
+        GetLastError() == ERROR_SUCCESS &&
+        previous_.PrivilegeCount == 1 &&
+        (previous_.Privileges[0].Attributes & SE_PRIVILEGE_ENABLED) != 0) {
+      restore_ = true;
+    }
+  }
+  ~ScopedDisableDebugPrivilege() {
+    if (restore_ && token_.get() != nullptr) {
+      AdjustTokenPrivileges(token_.get(), FALSE, &previous_, 0, nullptr, nullptr);
+    }
+  }
+  ScopedDisableDebugPrivilege(const ScopedDisableDebugPrivilege&) = delete;
+  ScopedDisableDebugPrivilege& operator=(const ScopedDisableDebugPrivilege&) = delete;
+
+ private:
+  UniqueHandle token_;
+  TOKEN_PRIVILEGES previous_{};
+  bool restore_ = false;
+};
+
 int CheckServiceProcessAccess() {
+  // 在持有 SeDebugPrivilege 的提权终端下临时禁用调试特权，确保 OpenProcess 真实接受进程 DACL 校验。
+  ScopedDisableDebugPrivilege disable_debug_privilege;
   int cases = 0;
   auto user = CurrentUserSid();
   OwnedProcessFixture child;
@@ -372,7 +414,9 @@ void CheckRelayShutdown(const std::wstring& suffix, const int mode) {
   server.echo = mode == 0;
   thread.reset(CreateThread(nullptr, 0, FakeServerMain, &server, 0, nullptr));
   Require(thread.get() != nullptr, "Create relay fixture thread failed");
-  client_pipe.reset(CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr));
+  client_pipe.reset(CreateFileW(
+      name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED,
+      nullptr));
   if (client_pipe.get() == INVALID_HANDLE_VALUE) {
     JoinFakeServer(thread.get());
     Require(false, "Connect relay fixture failed");

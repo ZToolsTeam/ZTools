@@ -11,6 +11,31 @@ import { NETWORK_HELPER_BUNDLE, NETWORK_HELPER_EXECUTABLE, NETWORK_ENTITLEMENT, 
 import { loadNetworkProfile, embedNetworkProfile, verifyNetworkEntitlements } from './macos-network-profile.mjs'
 
 const MAC_NATIVE_LOAD_PROOF_UNAVAILABLE = 'MAC_NATIVE_SAME_OBJECT_PROOF_UNAVAILABLE'
+const STAPLER_MAX_ATTEMPTS = 6
+const STAPLER_RETRY_DELAY_MS = 10_000
+const RETRYABLE_STAPLER_PATTERN = /cloudkit|error 65|record not found|could not find base64 encoded ticket|network|timed?\s*out/i
+
+function defaultSleep(ms) {
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+export function isRetryableStaplerError(error) {
+  if (!error || typeof error !== 'object') return false
+  if (error.status === 65) return true
+  const combined = `${error.stderr ?? ''}\n${error.stdout ?? ''}\n${error.message ?? ''}`
+  return RETRYABLE_STAPLER_PATTERN.test(combined)
+}
+
+function stapleWithRetry(runStaple, { maxAttempts = STAPLER_MAX_ATTEMPTS, retryDelayMs = STAPLER_RETRY_DELAY_MS, sleep = defaultSleep } = {}) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return runStaple()
+    } catch (error) {
+      if (attempt >= maxAttempts || !isRetryableStaplerError(error)) throw error
+      sleep(retryDelayMs)
+    }
+  }
+}
 
 function requestsNativeHostGroup(options) {
   if (!options || typeof options !== 'object') return false
@@ -40,7 +65,8 @@ export function macSigningOrder(bundlePath, machoFiles) {
 
 export function signMacosRelease(options, {
   platform = process.platform, fsApi = fs, exec = execFileSync,
-  preflight = inspectMacApp, verify = verifyMacosUniversalBundle
+  preflight = inspectMacApp, verify = verifyMacosUniversalBundle,
+  sleep = defaultSleep, stapleMaxAttempts = STAPLER_MAX_ATTEMPTS, stapleRetryDelayMs = STAPLER_RETRY_DELAY_MS
 } = {}) {
   if (platform !== 'darwin') return { status: 'NOT_RUN', phase: 2, stage: 'preflight', code: 'DARWIN_REQUIRED' }
   let stage = 'preflight'
@@ -126,7 +152,10 @@ export function signMacosRelease(options, {
         !/^[a-f0-9-]{36}$/i.test(notarization.id)) throw new Error('NOTARY_NOT_ACCEPTED')
     completedStages.push(stage)
     stage = 'staple'
-    tool('/usr/bin/xcrun', ['stapler', 'staple', appRoot])
+    stapleWithRetry(
+      () => tool('/usr/bin/xcrun', ['stapler', 'staple', appRoot]),
+      { maxAttempts: stapleMaxAttempts, retryDelayMs: stapleRetryDelayMs, sleep }
+    )
     tool('/usr/bin/xcrun', ['stapler', 'validate', appRoot])
     completedStages.push(stage)
     stage = 'gatekeeper'

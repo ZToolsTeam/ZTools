@@ -1,174 +1,242 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { createNativeHostManifest, readNativeHostManifest } from '../../scripts/native-host-manifest.mjs'
+import {
+  generateNativeTrustKeyPair,
+  signPluginDirectory
+} from '../../../scripts/sign-native-trust.mjs'
+import {
+  computeNativeTrustBundleSha256,
+  loadWindowsNativeTrustBundle,
+  verifyWindowsNativeTrustMetadata
+} from '../../scripts/windows-package-contract.mjs'
+import {
+  loadNativeTrustBundle,
+  verifyPluginInstallDirectory
+} from '../../out/main/services/native-trust-verifier.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-// 商业 DLL 与评审证据只在内部仓库（DLLPlugins/outputs）；公开源码里这些用例记为跳过（NOT_RUN），不算失败
-const internalDllRootsPresent = fs.existsSync(path.resolve(root, '..', 'DLLPlugins', 'outputs'))
-const internalOnly = internalDllRootsPresent ? {} : { skip: 'NOT_RUN: 缺少内部商业 DLL 目录（公开源码）' }
-const declaration = {
-  pluginId: 'batch-audio', dllId: 'BatchAudioPlugin', source: 'dll-plugins',
-  path: 'lib/BatchAudioPlugin.dll', functions: ['GetFileInfo']
+const repoRoot = path.resolve(root, '..')
+
+function makeMinimalPe({ arch = 'x86', isDll = true } = {}) {
+  const peOffset = 0x80
+  const is64 = arch === 'x64'
+  const optionalSize = is64 ? 0xf0 : 0xe0
+  const buf = Buffer.alloc(Math.max(peOffset + 24 + optionalSize + 104, 512), 0)
+  buf.writeUInt16LE(0x5a4d, 0)
+  buf.writeUInt32LE(peOffset, 0x3c)
+  buf.writeUInt32LE(0x00004550, peOffset)
+  buf.writeUInt16LE(is64 ? 0x8664 : 0x014c, peOffset + 4)
+  buf.writeUInt16LE(1, peOffset + 6)
+  buf.writeUInt16LE(optionalSize, peOffset + 20)
+  buf.writeUInt16LE(0x0002 | (isDll ? 0x2000 : 0), peOffset + 22)
+  buf.writeUInt16LE(is64 ? 0x020b : 0x010b, peOffset + 24)
+  return buf
 }
 
-test('build trust only names approved plugins with fixed hashes and explicit functions', internalOnly, () => {
-  const manifest = readNativeHostManifest(root)
-  assert.match(manifest, /plugin id="clipboard-manager"/)
-  assert.match(manifest, /plugin id="batch-audio"/)
-  assert.match(manifest, /plugin id="batch-video"/)
-  assert.match(manifest, /plugin id="record"/)
-  assert.match(manifest, /plugin id="screenshot"/)
-  assert.match(manifest, /plugin id="screen-color-picker"/)
-  assert.equal((manifest.match(/<plugin /g) ?? []).length, 6)
-  assert.equal((manifest.match(/sha256="[a-f0-9]{64}" arch="x86"/g) ?? []).length, 6)
-  const record = manifest.match(/<plugin id="record">[\s\S]*?<\/plugin>/)?.[0]
-  assert.ok(record)
-  assert.match(record, /dll id="RecordPlugin" path="lib\/RecordPlugin\.dll"/)
-  assert.equal((record.match(/<function /g) ?? []).length, 10)
-  for (const name of ['StartRecord', 'StopRecord', 'GetRecordingProgress', 'GetMediaInfo', 'ConvertMedia',
-    'GetConvertTaskStatus', 'CancelConvertTask', 'ExtractFrame', 'ConvertToGif', '__setLocale']) {
-    assert.ok(record.includes(`<function name="${name}"/>`), `record 缺少函数白名单 ${name}`)
+test('内置信任根 JSON 满足 D5 定稿（5 条冻结表带 functions）且 bundleSha256 跨模块一致', () => {
+  const resourcesNative = path.join(root, 'resources', 'native')
+  const hasPublicKeys = fs.existsSync(path.join(resourcesNative, 'native-trust-public-keys.json'))
+  if (!hasPublicKeys) {
+    // 公开源码仓不含内部 JSON：空信任态加载必须成功且 Fail-Closed
+    const emptyBundle = loadNativeTrustBundle(resourcesNative)
+    assert.deepEqual(emptyBundle.publicKeys, [])
+    assert.deepEqual(emptyBundle.legacyFrozen, [])
+    return
   }
-  const screenshot = manifest.match(/<plugin id="screenshot">[\s\S]*?<\/plugin>/)?.[0]
-  assert.ok(screenshot)
-  assert.match(screenshot, /dll id="ScreenCapturePlugin" path="lib\/ScreenCapturePlugin\.dll"/)
-  assert.ok(screenshot.includes('<function name="__setLocale"/>'), 'screenshot 缺少 __setLocale 白名单')
-  const colorPicker = manifest.match(/<plugin id="screen-color-picker">[\s\S]*?<\/plugin>/)?.[0]
-  assert.ok(colorPicker)
-  assert.match(colorPicker, /dll id="ScreenColorPickerPlugin" path="lib\/ScreenColorPickerPlugin\.dll"/)
-  assert.ok(colorPicker.includes('<function name="__setLocale"/>'), 'screen-color-picker 缺少 __setLocale 白名单')
-  // clipboard-manager 必须取自 DLLPlugins/outputs 的 DLL，而不是旧版运行时目录 bin/Data/Plugins 中的旧文件
-  const clipboardDll = path.resolve(root, '..', 'DLLPlugins', 'outputs',
-    'clipboard-manager', 'lib', 'ClipboardManagerPlugin.dll')
-  const clipboardDigest = createHash('sha256').update(fs.readFileSync(clipboardDll)).digest('hex')
-  const clipboard = manifest.match(/<plugin id="clipboard-manager">[\s\S]*?<\/plugin>/)?.[0]
-  assert.ok(clipboard?.includes(`sha256="${clipboardDigest}"`), 'clipboard-manager 哈希必须来自 DLLPlugins/outputs')
-  assert.ok(!manifest.includes('name="*"'))
-  const audio = createNativeHostManifest(root, [declaration])
-  assert.equal((audio.match(/<function /g) ?? []).length, 1)
-  assert.match(audio, /function name="GetFileInfo"/)
-})
 
-test('untrusted declarations cannot escape, inject XML, duplicate identities, or grant all functions', () => {
-  for (const value of [
-    { ...declaration, pluginId: '../batch-audio' },
-    { ...declaration, path: 'lib/../../outside.dll' },
-    { ...declaration, source: 'user-input' },
-    { ...declaration, source: 'plugins' },
-    { ...declaration, source: 'bin' },
-    { ...declaration, source: undefined },
-    { ...declaration, functions: ['*'] },
-    { ...declaration, functions: ['GetFileInfo', 'GetFileInfo'] },
-    { ...declaration, dllId: 'x" allow="all' }
-  ]) assert.throws(() => createNativeHostManifest(root, [value]), /信任声明无效/)
-  assert.throws(() => createNativeHostManifest(root, [declaration, declaration]), /信任声明无效/)
-})
-
-test('build inputs agree with current reviewed DLL hashes and preserve the historical C24 baseline', internalOnly, () => {
-  const evidenceRoot = path.resolve(root, '..', 'docs', 'native-trust-evidence')
-  const freeze = JSON.parse(fs.readFileSync(path.join(evidenceRoot, 'C24-frozen-inputs-v1.json'), 'utf8'))
-  const videoReview = JSON.parse(fs.readFileSync(path.join(evidenceRoot, 'C18-final-acceptance.json'), 'utf8'))
-  const audioReview = JSON.parse(fs.readFileSync(path.join(evidenceRoot, 'native-trust-review-20261008-preflight.json'), 'utf8'))
-  const frozenAudio = freeze.files.find(file => file.path.includes('/batch-audio/lib/') && /BatchAudioPlugin\.dll$/.test(file.path))
-  assert.equal(audioReview.pluginId, 'batch-audio')
-  assert.equal(audioReview.dll.arch, 'ia32')
-  assert.equal(audioReview.dll.previousBaselineSha256, frozenAudio?.sha256)
-  assert.equal(audioReview.releaseAcceptance, false)
-  const manifest = readNativeHostManifest(root)
-  for (const pluginId of ['batch-audio', 'batch-video']) {
-    const reviewed = pluginId === 'batch-video'
-      ? { sha256: videoReview.dllSha256 }
-      : audioReview.dll
-    assert.ok(reviewed, pluginId + ' reviewed DLL missing')
-    const block = manifest.match(new RegExp('<plugin id="' + pluginId + '">[\\s\\S]*?<\\/plugin>'))?.[0]
-    assert.ok(block?.includes('sha256="' + reviewed.sha256 + '"'), pluginId + ' reviewed hash changed')
+  const pkgBundle = loadWindowsNativeTrustBundle(resourcesNative)
+  const tsBundle = loadNativeTrustBundle(resourcesNative)
+  assert.equal(
+    pkgBundle.metadata.bundleSha256,
+    computeNativeTrustBundleSha256({
+      publicKeysText: pkgBundle.files['native-trust-public-keys.json'].text,
+      revocationsText: pkgBundle.files['native-trust-revocations.json'].text,
+      legacyFrozenText: pkgBundle.files['legacy-frozen-dlls.json'].text
+    })
+  )
+  assert.equal(tsBundle.bundleSha256, pkgBundle.metadata.bundleSha256)
+  assert.ok(pkgBundle.metadata.keyIds.includes('ztools-native-prod-2026a'))
+  assert.ok(pkgBundle.metadata.keyIds.includes('ztools-native-priv-prod-2026a'))
+  assert.equal(pkgBundle.metadata.keyIds.includes('ztools-native-2026-v1'), false, '已作废开发 keyId 严禁存在')
+  assert.equal(pkgBundle.metadata.legacyFrozenCount, 5, '冻结表必须恰好 5 条（D5）')
+  const frozenIds = tsBundle.legacyFrozen.map((item) => item.pluginId).sort()
+  assert.deepEqual(frozenIds, [
+    'clipboard-manager',
+    'record',
+    'screen-color-picker',
+    'screenshot',
+    'video-downloader'
+  ])
+  for (const item of tsBundle.legacyFrozen) {
+    assert.ok(Array.isArray(item.functions) && item.functions.length > 0, `${item.pluginId} 必须带函数白名单`)
   }
+  const verifiedMeta = verifyWindowsNativeTrustMetadata(pkgBundle.metadata)
+  assert.equal(verifiedMeta.bundleSha256, pkgBundle.metadata.bundleSha256)
 })
 
-// 构造只含 PE 头的最小假 DLL（machine 字段决定架构），用于隔离工作区测试
-function fakePe(machine) {
-  const buffer = Buffer.alloc(128)
-  buffer.write('MZ', 0, 'ascii')
-  buffer.writeUInt32LE(64, 0x3c)
-  buffer.write('PE\0\0', 64, 'ascii')
-  buffer.writeUInt16LE(machine, 68)
-  return buffer
-}
+test('签名、吊销、回滚、冻结表与空信任态完整状态机校验', (t) => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-trust-manifest-'))
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }))
 
-function makeWorkspace(t) {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-native-manifest-'))
-  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }))
-  const clientRoot = path.join(workspace, 'electron-client')
-  fs.mkdirSync(clientRoot)
-  return { workspace, clientRoot }
-}
+  const kp = generateNativeTrustKeyPair('test-manifest-key', ['native'])
+  const pluginDir = path.join(work, 'demo-plugin')
+  const libDir = path.join(pluginDir, 'lib')
+  fs.mkdirSync(libDir, { recursive: true })
+  const mainBytes = makeMinimalPe({ arch: 'x86', isDll: true })
+  const helperBytes = makeMinimalPe({ arch: 'x64', isDll: false })
+  fs.writeFileSync(path.join(libDir, 'DemoPlugin.dll'), mainBytes)
+  fs.writeFileSync(path.join(libDir, 'helper.exe'), helperBytes)
+  const mainSha = crypto.createHash('sha256').update(mainBytes).digest('hex')
 
-const clipboardDeclaration = {
-  pluginId: 'clipboard-manager', dllId: 'ClipboardManagerPlugin', source: 'dll-plugins',
-  path: 'lib/ClipboardManagerPlugin.dll', functions: ['GetStatus']
-}
-
-test('public checkout without commercial DLL roots builds an empty but valid trust manifest', (t) => {
-  const { clientRoot } = makeWorkspace(t)
-  const warnings = []
-  const manifest = createNativeHostManifest(clientRoot, [declaration, clipboardDeclaration], {
-    warn: (message) => warnings.push(message)
+  // 1. 合法签名放行
+  const signed = signPluginDirectory({
+    pluginDir,
+    pluginId: 'demo-plugin',
+    pluginVersion: '1.2.0',
+    requireAdmin: false,
+    keyId: kp.keyId,
+    mainEntries: [{ path: 'lib/DemoPlugin.dll', dllId: 'DemoPlugin', functions: ['Ping'] }],
+    privateKeyPem: kp.privateKeyPem,
+    keyUsages: kp.usages
   })
-  assert.equal(manifest, '<?xml version="1.0" encoding="utf-8"?>\n<nativeHostManifest version="1">\n</nativeHostManifest>\n')
-  assert.equal(warnings.length, 2)
-  assert.ok(warnings.every((message) => message.includes('跳过')))
-  // 声明本身不合法时，即使源目录缺失也必须拒绝（跳过不能绕过校验）
-  assert.throws(() => createNativeHostManifest(clientRoot, [{ ...declaration, functions: ['*'] }], { warn() {} }), /信任声明无效/)
+
+  const bundle = {
+    publicKeys: [{ keyId: kp.keyId, publicKeyHex: kp.publicKeyHex, usages: ['native'] }],
+    revocations: {
+      schemaVersion: 1,
+      revokedKeyIds: [],
+      revokedManifestSha256: [],
+      revokedFileSha256: [],
+      minPluginVersions: {}
+    },
+    legacyFrozen: [],
+    bundleSha256: '0'.repeat(64)
+  }
+
+  const ok = verifyPluginInstallDirectory({
+    pluginDir,
+    expectedPluginId: 'demo-plugin',
+    expectedPluginVersion: '1.2.0',
+    expectedRequireAdmin: false,
+    bundle
+  })
+  assert.equal(ok.verified, true)
+  assert.equal(ok.mode, 'signed')
+
+  const expectRejected = (fn, hostCode) => {
+    assert.throws(fn, (err) => err?.details?.hostCode === hostCode)
+  }
+
+  // 2. 空信任态（开源仓无公钥且无冻结表）必须返回 MANIFEST_UNTRUSTED
+  expectRejected(
+    () => verifyPluginInstallDirectory({
+      pluginDir,
+      expectedPluginId: 'demo-plugin',
+      expectedPluginVersion: '1.2.0',
+      expectedRequireAdmin: false,
+      bundle: { ...bundle, publicKeys: [] }
+    }),
+    'MANIFEST_UNTRUSTED'
+  )
+
+  // 3. 吊销清单（keyId / manifestSha256 / fileSha256）与最低版本回滚
+  expectRejected(
+    () => verifyPluginInstallDirectory({
+      pluginDir,
+      expectedPluginId: 'demo-plugin',
+      expectedPluginVersion: '1.2.0',
+      expectedRequireAdmin: false,
+      bundle: { ...bundle, revocations: { ...bundle.revocations, revokedKeyIds: [kp.keyId] } }
+    }),
+    'MANIFEST_REVOKED'
+  )
+
+  const manifestSha = crypto.createHash('sha256').update(Buffer.from(signed.manifestText, 'utf8')).digest('hex')
+  expectRejected(
+    () => verifyPluginInstallDirectory({
+      pluginDir,
+      expectedPluginId: 'demo-plugin',
+      expectedPluginVersion: '1.2.0',
+      expectedRequireAdmin: false,
+      bundle: { ...bundle, revocations: { ...bundle.revocations, revokedManifestSha256: [manifestSha] } }
+    }),
+    'MANIFEST_REVOKED'
+  )
+
+  expectRejected(
+    () => verifyPluginInstallDirectory({
+      pluginDir,
+      expectedPluginId: 'demo-plugin',
+      expectedPluginVersion: '1.2.0',
+      expectedRequireAdmin: false,
+      bundle: { ...bundle, revocations: { ...bundle.revocations, minPluginVersions: { 'demo-plugin': '1.3.0' } } }
+    }),
+    'MANIFEST_ROLLBACK'
+  )
+
+  // 4. 无签名冻结表兜底（且受 fileSha256 吊销约束；batch-audio 未收录一律拒绝）
+  fs.rmSync(path.join(pluginDir, 'native-trust.json'))
+  fs.rmSync(path.join(pluginDir, 'native-trust.sig'))
+  fs.rmSync(path.join(libDir, 'helper.exe'))
+  const frozenBundle = {
+    ...bundle,
+    legacyFrozen: [{ pluginId: 'demo-plugin', dllId: 'DemoPlugin', sha256: mainSha, functions: ['Ping'] }]
+  }
+  const frozenOk = verifyPluginInstallDirectory({
+    pluginDir,
+    expectedPluginId: 'demo-plugin',
+    expectedPluginVersion: '1.2.0',
+    expectedRequireAdmin: false,
+    declaredMainEntries: ['lib/DemoPlugin.dll'],
+    bundle: frozenBundle
+  })
+  assert.equal(frozenOk.verified, true)
+  assert.equal(frozenOk.mode, 'legacy-frozen')
+
+  expectRejected(
+    () => verifyPluginInstallDirectory({
+      pluginDir,
+      expectedPluginId: 'demo-plugin',
+      expectedPluginVersion: '1.2.0',
+      expectedRequireAdmin: false,
+      declaredMainEntries: ['lib/DemoPlugin.dll'],
+      bundle: { ...frozenBundle, revocations: { ...bundle.revocations, revokedFileSha256: [mainSha] } }
+    }),
+    'MANIFEST_REVOKED'
+  )
+
+  // 无签名旧版特权插件兼容放行（返回 legacy-unsigned），但被吊销文件仍严格拒绝
+  const legacyPrivOk = verifyPluginInstallDirectory({
+    pluginDir,
+    expectedPluginId: 'demo-plugin',
+    expectedPluginVersion: '1.2.0',
+    expectedRequireAdmin: true,
+    declaredMainEntries: ['lib/DemoPlugin.dll'],
+    bundle: frozenBundle
+  })
+  assert.equal(legacyPrivOk.verified, true)
+  assert.equal(legacyPrivOk.mode, 'legacy-unsigned')
+
+  expectRejected(
+    () => verifyPluginInstallDirectory({
+      pluginDir,
+      expectedPluginId: 'demo-plugin',
+      expectedPluginVersion: '1.2.0',
+      expectedRequireAdmin: true,
+      declaredMainEntries: ['lib/DemoPlugin.dll'],
+      bundle: { ...frozenBundle, revocations: { ...bundle.revocations, revokedFileSha256: [mainSha] } }
+    }),
+    'MANIFEST_REVOKED'
+  )
 })
 
-test('existing DLL root keeps strict checks: missing DLL, wrong arch and symlink are rejected', (t) => {
-  const { workspace, clientRoot } = makeWorkspace(t)
-  const libRoot = path.join(workspace, 'DLLPlugins', 'outputs', 'batch-audio', 'lib')
-  fs.mkdirSync(libRoot, { recursive: true })
-  // 源目录存在但 DLL 缺失：内部构建照旧报错，不能被当成公开源码悄悄跳过
-  assert.throws(() => createNativeHostManifest(clientRoot, [declaration], { warn() {} }), /ENOENT/)
-  fs.writeFileSync(path.join(libRoot, 'BatchAudioPlugin.dll'), fakePe(0x8664))
-  assert.throws(() => createNativeHostManifest(clientRoot, [declaration], { warn() {} }), /x86/)
-  fs.rmSync(path.join(libRoot, 'BatchAudioPlugin.dll'))
-  const outside = path.join(workspace, 'outside.dll')
-  fs.writeFileSync(outside, fakePe(0x014c))
-  fs.symlinkSync(outside, path.join(libRoot, 'BatchAudioPlugin.dll'))
-  assert.throws(() => createNativeHostManifest(clientRoot, [declaration], { warn() {} }), /普通文件/)
-})
-
-test('legacy runtime directory bin/Data/Plugins is never a trust source, even when it holds a valid DLL', (t) => {
-  const { workspace, clientRoot } = makeWorkspace(t)
-  // 旧版运行时目录里放一个合法 x86 DLL，DLLPlugins/outputs 里放另一个：清单只能采信 DLLPlugins/outputs
-  const legacyLib = path.join(workspace, 'bin', 'Data', 'Plugins', 'clipboard-manager', 'lib')
-  const pluginsLib = path.join(workspace, 'DLLPlugins', 'outputs', 'clipboard-manager', 'lib')
-  fs.mkdirSync(legacyLib, { recursive: true })
-  fs.mkdirSync(pluginsLib, { recursive: true })
-  const legacyBytes = Buffer.concat([fakePe(0x014c), Buffer.from('legacy')])
-  const currentBytes = Buffer.concat([fakePe(0x014c), Buffer.from('current')])
-  fs.writeFileSync(path.join(legacyLib, 'ClipboardManagerPlugin.dll'), legacyBytes)
-  fs.writeFileSync(path.join(pluginsLib, 'ClipboardManagerPlugin.dll'), currentBytes)
-  assert.throws(() => createNativeHostManifest(clientRoot, [{ ...clipboardDeclaration, source: 'bin' }], { warn() {} }),
-    /信任声明无效/)
-  const manifest = createNativeHostManifest(clientRoot, [clipboardDeclaration], { warn() {} })
-  assert.ok(manifest.includes(`sha256="${createHash('sha256').update(currentBytes).digest('hex')}"`))
-  assert.ok(!manifest.includes(createHash('sha256').update(legacyBytes).digest('hex')))
-})
-
-test('readNativeHostManifest builds an empty manifest when declaration file is absent in public checkout, and rejects empty array when present', (t) => {
-  const { clientRoot } = makeWorkspace(t)
-  const warnings = []
-  const emptyManifest = readNativeHostManifest(clientRoot, { warn: (message) => warnings.push(message) })
-  assert.equal(emptyManifest, '<?xml version="1.0" encoding="utf-8"?>\n<nativeHostManifest version="1">\n</nativeHostManifest>\n')
-  assert.equal(warnings.length, 1)
-  assert.match(warnings[0], /生成空信任清单/)
-
-  const manifestFile = path.join(clientRoot, 'resources', 'native', 'native-host-dlls.json')
-  fs.mkdirSync(path.dirname(manifestFile), { recursive: true })
-  fs.writeFileSync(manifestFile, '[]\n', 'utf8')
-  assert.throws(() => readNativeHostManifest(clientRoot, { warn() {} }), /构建信任声明不能为空/)
+test('docs/native-trust-evidence 历史归档目录保持可读（仅作为历史审计基线）', () => {
+  const evidenceRoot = path.join(repoRoot, 'docs', 'native-trust-evidence')
+  if (!fs.existsSync(evidenceRoot)) return
+  assert.equal(fs.existsSync(path.join(evidenceRoot, 'C24-frozen-inputs-v1.json')), true)
 })

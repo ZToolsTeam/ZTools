@@ -11,7 +11,6 @@ import { buildDevelopmentInputLock } from './build-macos-input-lock.mjs'
 import { buildDevelopmentClipboard } from './build-macos-clipboard.mjs'
 import { buildDevelopmentWindowsSidecars } from './build-sidecars.mjs'
 import { spawnSync } from 'node:child_process'
-import { readNativeHostManifest } from './native-host-manifest.mjs'
 import { buildRuntimeCapabilityPromptPreload, buildSandboxPreload } from './build-sandbox-preload.mjs'
 import { hasCommercialMainSource, removeStaleEditionOutputs } from './edition-output.mjs'
 import fs from 'node:fs'
@@ -120,10 +119,3 @@ fs.writeFileSync(
 console.log(resolvedApiBase.apiBase === ''
   ? '构建配置：未配置官方后台地址（不连接任何后台）'
   : `构建配置：官方后台地址已注入（来源 ${resolvedApiBase.source}）`)
-
-// Generate the same bounded trust anchor for development and packaging.
-if (process.platform === 'win32') {
-  const nativeRoot = path.join(root, 'out', 'native')
-  fs.mkdirSync(nativeRoot, { recursive: true })
-  fs.writeFileSync(path.join(nativeRoot, '.ztools-native-host.xml'), readNativeHostManifest(root), 'utf8')
-}

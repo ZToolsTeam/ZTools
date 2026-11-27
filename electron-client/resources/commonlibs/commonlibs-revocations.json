@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "revokedKeyIds": [],
+  "revokedToolIds": [],
+  "revokedArchiveSha256": [],
+  "revokedFileSha256": [],
+  "minToolVersions": {}
+}

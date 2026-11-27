@@ -99,10 +99,10 @@ describe('开源版插件市场：只读 CDN 静态插件目录', () => {
     expect(await plugins.getCategories()).toEqual([
       { id: 'system', name: '系统工具', slug: 'system', labelKey: 'categories.system', pluginsCount: 2 }
     ])
-    // 浏览共用缓存，安装前再读取一次目录；全程不访问后台接口
+    // 浏览共用缓存，安装前再读取一次目录；全程不访问后台接口，也不拉取商业原生附加目录
     expect(fetchMock).toHaveBeenCalledTimes(2)
     for (const url of requestedUrls(fetchMock)) {
-      expect(url.startsWith('https://cdn.ztools.cn/plugins-v2/')).toBe(true)
+      expect(url).toBe('https://cdn.ztools.cn/plugins-v2/catalog.json')
       expect(url).not.toMatch(/\/api\//)
     }
   })
